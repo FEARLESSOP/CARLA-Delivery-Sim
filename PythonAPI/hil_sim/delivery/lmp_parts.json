@@ -1,0 +1,672 @@
+{
+ "LMPBattery": {
+  "instances": {
+   "Battery_A": [
+    -0.8,
+    -0.204,
+    2.2433
+   ],
+   "Battery_B": [
+    -0.61,
+    0.308,
+    2.2433
+   ]
+  },
+  "materials": 4,
+  "size": [
+   0.152,
+   0.158,
+   0.061
+  ]
+ },
+ "LMPBatteryMagazine": {
+  "instances": {
+   "Battery_Magazine": [
+    -0.705,
+    0.298,
+    1.905
+   ]
+  },
+  "materials": 6,
+  "size": [
+   0.78,
+   0.184,
+   0.3688
+  ]
+ },
+ "LMPDrone": {
+  "instances": {
+   "LMPDrone": [
+    0.0,
+    -0.0,
+    0.0
+   ]
+  },
+  "materials": 13,
+  "size": [
+   0.5386,
+   0.5491,
+   0.352
+  ]
+ },
+ "LMPDroneHook": {
+  "instances": {
+   "Drone_D1_Hook": [
+    0.0,
+    -0.0,
+    0.16808
+   ]
+  },
+  "materials": 2,
+  "size": [
+   0.044,
+   0.0264,
+   0.0343
+  ]
+ },
+ "LMPDroneProp": {
+  "instances": {
+   "Drone_D1_Prop1": [
+    0.2376,
+    0.2376,
+    0.3036
+   ],
+   "Drone_D1_Prop2": [
+    0.2376,
+    -0.2376,
+    0.3036
+   ],
+   "Drone_D1_Prop3": [
+    -0.2376,
+    0.2376,
+    0.3036
+   ],
+   "Drone_D1_Prop4": [
+    -0.2376,
+    -0.2376,
+    0.3036
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.2992,
+   0.0249,
+   0.0064
+  ]
+ },
+ "LMPHatchFront": {
+  "instances": {
+   "Roof_HatchDoor_Front": [
+    -0.505,
+    -0.3,
+    3.2275
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.61,
+   1.26,
+   0.0385
+  ]
+ },
+ "LMPHatchRear": {
+  "instances": {
+   "Roof_HatchDoor_Rear": [
+    -1.095,
+    -0.3,
+    3.2275
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.61,
+   1.26,
+   0.0385
+  ]
+ },
+ "LMPHoistBridge": {
+  "instances": {
+   "Hoist_Bridge": [
+    1.62,
+    -0.33,
+    2.85
+   ]
+  },
+  "materials": 7,
+  "size": [
+   0.26,
+   1.08,
+   0.213
+  ]
+ },
+ "LMPHoistGripper": {
+  "instances": {
+   "Hoist_Gripper": [
+    1.6022,
+    -0.3,
+    2.77123
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.1064,
+   0.103,
+   0.0788
+  ]
+ },
+ "LMPJack": {
+  "instances": {
+   "Jack_FrontLeft": [
+    1.97,
+    -0.72,
+    -0.0
+   ],
+   "Jack_FrontRight": [
+    1.97,
+    0.72,
+    0.0
+   ],
+   "Jack_RearLeft": [
+    -1.97,
+    -0.72,
+    -0.0
+   ],
+   "Jack_RearRight": [
+    -1.97,
+    0.72,
+    0.0
+   ]
+  },
+  "materials": 2,
+  "size": [
+   0.2,
+   0.2,
+   0.345
+  ]
+ },
+ "LMPLiftPad": {
+  "instances": {
+   "Lift_Pad": [
+    -0.8,
+    -0.3,
+    1.97
+   ]
+  },
+  "materials": 7,
+  "size": [
+   0.8,
+   0.8,
+   0.081
+  ]
+ },
+ "LMPLiftPin": {
+  "instances": {
+   "Lift_Pin_0": [
+    -0.8,
+    -0.64,
+    1.90333
+   ],
+   "Lift_Pin_1": [
+    -0.8,
+    0.04,
+    1.90333
+   ],
+   "Lift_Pin_2": [
+    -0.8,
+    -0.64,
+    1.93
+   ],
+   "Lift_Pin_3": [
+    -0.8,
+    0.04,
+    1.93
+   ],
+   "Lift_Pin_4": [
+    -0.8,
+    -0.64,
+    1.95667
+   ],
+   "Lift_Pin_5": [
+    -0.8,
+    0.04,
+    1.95667
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.0266,
+   0.07,
+   0.028
+  ]
+ },
+ "LMPParcelM": {
+  "instances": {
+   "Parcel_F-0.2-1.19_M": [
+    0.2,
+    -0.3,
+    1.215
+   ]
+  },
+  "materials": 4,
+  "size": [
+   0.202,
+   0.152,
+   0.134
+  ]
+ },
+ "LMPParcelXL": {
+  "instances": {
+   "Parcel_F-0.7-0.86_XL": [
+    0.7,
+    -0.3,
+    0.885
+   ]
+  },
+  "materials": 2,
+  "size": [
+   0.262,
+   0.212,
+   0.2
+  ]
+ },
+ "LMPPortCarrier": {
+  "instances": {
+   "SidePort_Carrier": [
+    -1.8,
+    -0.3,
+    1.171
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.268,
+   0.5,
+   0.038
+  ]
+ },
+ "LMPPortDoor": {
+  "instances": {
+   "SidePort_Door": [
+    -1.8,
+    -1.045,
+    1.05
+   ]
+  },
+  "materials": 2,
+  "size": [
+   0.36,
+   0.022,
+   0.46
+  ]
+ },
+ "LMPPortStage1": {
+  "instances": {
+   "SidePort_Stage1": [
+    -1.8,
+    -0.3,
+    1.153
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.3,
+   0.5,
+   0.014
+  ]
+ },
+ "LMPPortStage2": {
+  "instances": {
+   "SidePort_Stage2": [
+    -1.8,
+    -0.3,
+    1.159
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.288,
+   0.5,
+   0.014
+  ]
+ },
+ "LMPPortStage3": {
+  "instances": {
+   "SidePort_Stage3": [
+    -1.8,
+    -0.3,
+    1.165
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.276,
+   0.5,
+   0.014
+  ]
+ },
+ "LMPPresenterTable": {
+  "instances": {
+   "Presenter_Table": [
+    -0.8,
+    -0.298,
+    1.14
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.29,
+   0.294,
+   0.056
+  ]
+ },
+ "LMPScissorA": {
+  "instances": {
+   "Lift_ScissorA_0": [
+    -0.8,
+    -0.64,
+    1.90333
+   ],
+   "Lift_ScissorA_1": [
+    -0.8,
+    0.04,
+    1.90333
+   ],
+   "Lift_ScissorA_2": [
+    -0.8,
+    -0.64,
+    1.93
+   ],
+   "Lift_ScissorA_3": [
+    -0.8,
+    0.04,
+    1.93
+   ],
+   "Lift_ScissorA_4": [
+    -0.8,
+    -0.64,
+    1.95667
+   ],
+   "Lift_ScissorA_5": [
+    -0.8,
+    0.04,
+    1.95667
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.7606,
+   0.02,
+   0.0566
+  ]
+ },
+ "LMPScissorB": {
+  "instances": {
+   "Lift_ScissorB_0": [
+    -0.8,
+    -0.662,
+    1.90333
+   ],
+   "Lift_ScissorB_1": [
+    -0.8,
+    0.062,
+    1.90333
+   ],
+   "Lift_ScissorB_2": [
+    -0.8,
+    -0.662,
+    1.93
+   ],
+   "Lift_ScissorB_3": [
+    -0.8,
+    0.062,
+    1.93
+   ],
+   "Lift_ScissorB_4": [
+    -0.8,
+    -0.662,
+    1.95667
+   ],
+   "Lift_ScissorB_5": [
+    -0.8,
+    0.062,
+    1.95667
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.7606,
+   0.02,
+   0.0566
+  ]
+ },
+ "LMPShell": {
+  "instances": {
+   "LMPShell": [
+    0.0,
+    -0.0,
+    0.0
+   ]
+  },
+  "materials": 4,
+  "shell_materials": [
+   "M_Standard_e4e8ec",
+   "M_Standard_c9cfd5",
+   "M_Printed_1"
+  ],
+  "size": [
+   4.282,
+   2.034,
+   2.4
+  ]
+ },
+ "LMPShellStreet": {
+  "instances": {
+   "LMPShellStreet": [
+    0.0,
+    -0.0,
+    0.0
+   ]
+  },
+  "materials": 7,
+  "size": [
+   4.285,
+   1.024,
+   2.4
+  ]
+ },
+ "LMPShuttleCarriage": {
+  "instances": {
+   "Shuttle_Carriage": [
+    1.2,
+    0.4,
+    0.93
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.36,
+   0.3,
+   0.095
+  ]
+ },
+ "LMPShuttleFork1": {
+  "instances": {
+   "Shuttle_Fork1": [
+    1.2,
+    0.4,
+    0.982
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.22,
+   0.32,
+   0.012
+  ]
+ },
+ "LMPShuttleFork2": {
+  "instances": {
+   "Shuttle_Fork2": [
+    1.2,
+    0.4,
+    0.994
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.214,
+   0.3,
+   0.012
+  ]
+ },
+ "LMPShuttleMast": {
+  "instances": {
+   "Shuttle_Mast": [
+    1.2,
+    0.4,
+    0.825
+   ]
+  },
+  "materials": 6,
+  "size": [
+   0.4,
+   0.42,
+   0.945
+  ]
+ },
+ "LMPStation": {
+  "instances": {
+   "LMPStation": [
+    0.0,
+    -0.0,
+    0.0
+   ]
+  },
+  "materials": 9,
+  "size": [
+   2.155,
+   0.95,
+   2.11
+  ]
+ },
+ "LMPStationDoor": {
+  "instances": {
+   "BoxStation_Door_C08": [
+    -0.245,
+    -0.324,
+    1.18
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.49,
+   0.046,
+   0.38
+  ]
+ },
+ "LMPStationFlap": {
+  "instances": {
+   "BoxStation_IntakeFlap": [
+    0.0,
+    0.305,
+    1.38
+   ]
+  },
+  "materials": 2,
+  "size": [
+   0.38,
+   0.022,
+   0.44
+  ]
+ },
+ "LMPSwapperBoom": {
+  "instances": {
+   "Swapper_Boom": [
+    -0.8,
+    0.52,
+    2.3638
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.04,
+   0.015,
+   0.03
+  ]
+ },
+ "LMPSwapperCarrier": {
+  "instances": {
+   "Swapper_Carrier": [
+    -0.8,
+    0.52,
+    2.3638
+   ]
+  },
+  "materials": 1,
+  "size": [
+   0.1,
+   0.08,
+   0.05
+  ]
+ },
+ "LMPSwapperJaw": {
+  "instances": {
+   "Swapper_Jaw": [
+    -0.8,
+    0.5195,
+    2.3698
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.08,
+   0.031,
+   0.109
+  ]
+ },
+ "LMPTray": {
+  "instances": {
+   "Tray_F-0.2-1.19": [
+    0.2,
+    -0.2985,
+    1.19
+   ],
+   "Tray_F-0.7-0.86": [
+    0.7,
+    -0.2985,
+    0.86
+   ]
+  },
+  "materials": 3,
+  "size": [
+   0.28,
+   0.243,
+   0.045
+  ]
+ },
+ "LMPVehicle": {
+  "materials": 68,
+  "wheels": {
+   "Wheel_Front_Left": [
+    1.45,
+    -0.7825,
+    0.3
+   ],
+   "Wheel_Front_Right": [
+    1.45,
+    0.7825,
+    0.3
+   ],
+   "Wheel_Rear_Left": [
+    -1.45,
+    -0.7825,
+    0.3
+   ],
+   "Wheel_Rear_Right": [
+    -1.45,
+    0.7825,
+    0.3
+   ]
+  }
+ }
+}

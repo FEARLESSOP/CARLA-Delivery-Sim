@@ -1,0 +1,65 @@
+{
+    "props": [
+        {
+            "name": "DeliveryPod",
+            "path": "/Game/DeliveryModels/Static/Car/DeliveryPod/Pod_Pod.Pod_Pod",
+            "size": "big"
+        },
+        {
+            "name": "PodJack",
+            "path": "/Game/DeliveryModels/Static/Car/PodJack/PodJack_PodJack.PodJack_PodJack",
+            "size": "tiny"
+        },
+        {
+            "name": "PodHatchFront",
+            "path": "/Game/DeliveryModels/Static/Car/PodHatchFront/PodHatchFront_PodHatchFront.PodHatchFront_PodHatchFront",
+            "size": "small"
+        },
+        {
+            "name": "PodHatchRear",
+            "path": "/Game/DeliveryModels/Static/Car/PodHatchRear/PodHatchRear_PodHatchRear.PodHatchRear_PodHatchRear",
+            "size": "small"
+        },
+        {
+            "name": "DeliveryDrone",
+            "path": "/Game/DeliveryModels/Static/Dynamic/DeliveryDrone/Drone_Drone.Drone_Drone",
+            "size": "small"
+        },
+        {
+            "name": "DroneRotor",
+            "path": "/Game/DeliveryModels/Static/Dynamic/DroneRotor/DroneRotor_DroneRotor.DroneRotor_DroneRotor",
+            "size": "tiny"
+        },
+        {
+            "name": "Parcel",
+            "path": "/Game/DeliveryModels/Static/Dynamic/Parcel/Parcel_Parcel.Parcel_Parcel",
+            "size": "tiny"
+        },
+        {
+            "name": "PodSideDoor",
+            "path": "/Game/DeliveryModels/Static/Car/PodSideDoor/PodSideDoor_PodSideDoor.PodSideDoor_PodSideDoor",
+            "size": "tiny"
+        },
+        {
+            "name": "PodSlideStage1",
+            "path": "/Game/DeliveryModels/Static/Car/PodSlideStage1/PodSlideStage1_PodSlideStage1.PodSlideStage1_PodSlideStage1",
+            "size": "tiny"
+        },
+        {
+            "name": "PodSlideStage2",
+            "path": "/Game/DeliveryModels/Static/Car/PodSlideStage2/PodSlideStage2_PodSlideStage2.PodSlideStage2_PodSlideStage2",
+            "size": "tiny"
+        },
+        {
+            "name": "PodSlideStage3",
+            "path": "/Game/DeliveryModels/Static/Car/PodSlideStage3/PodSlideStage3_PodSlideStage3.PodSlideStage3_PodSlideStage3",
+            "size": "tiny"
+        },
+        {
+            "name": "PodSlideCarrier",
+            "path": "/Game/DeliveryModels/Static/Car/PodSlideCarrier/PodSlideCarrier_PodSlideCarrier.PodSlideCarrier_PodSlideCarrier",
+            "size": "tiny"
+        }
+    ],
+    "maps": []
+}

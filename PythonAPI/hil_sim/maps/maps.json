@@ -1,0 +1,147 @@
+{
+  "_doc": "Your own maps (maps/build_map.sh). source: the model; track_material: the racing surface (its centreline gives the road logic); road_materials: asphalt used for the width; drop: materials removed (sky backdrop); tags: CARLA semantic groups by material; start: where the hero spawns (CARLA coordinates, set from the start line). / \u81ea\u4f5c\u30de\u30c3\u30d7\u306e\u8a2d\u5b9a",
+  "marina_bay": {
+    "name": "MarinaBay",
+    "package": "Circuits",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/sources/marina-bay/source/singapore.glb",
+    "track_material": "151Mtl",
+    "road_materials": [
+      "151Mtl",
+      "11861Mtl"
+    ],
+    "start_line": [
+      -614.6,
+      -136.0
+    ],
+    "pole": [
+      -613.7,
+      -147.1
+    ],
+    "drop": [
+      "12151Mtl"
+    ],
+    "tags": {
+      "Road_Road": [
+        "151Mtl",
+        "11861Mtl",
+        "181Mtl"
+      ],
+      "Road_Marking": [
+        "11851Mtl"
+      ],
+      "Road_Grass": [
+        "191Mtl"
+      ]
+    },
+    "lanes": 3,
+    "speed_kmh": 70,
+    "start": {
+      "x": -704.31,
+      "y": -27.02,
+      "z": 0.5,
+      "yaw": -98.0
+    }
+  },
+  "spa_francorchamps": {
+    "name": "SpaFrancorchamps",
+    "package": "Circuits",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/sources/spa-francorchamps/source/spa1998.glb",
+    "track_material": [
+      "ROAD1X",
+      "ROAD2X",
+      "ROAD3X",
+      "ROADGRDX",
+      "ROADJX"
+    ],
+    "road_materials": [
+      "ROAD1X",
+      "ROAD2X",
+      "ROAD3X",
+      "ROADB",
+      "ROADGRDX",
+      "ROADJ",
+      "ROADJX",
+      "ROADL",
+      "ROADPIT",
+      "ROADPITE",
+      "ROADPITF",
+      "ROADROLD",
+      "ROADROLD2",
+      "SEGWIDE1",
+      "SEGWIDE3"
+    ],
+    "start_line": [
+      15.0,
+      10.0
+    ],
+    "pole": [
+      9.25,
+      10.27
+    ],
+    "drop": [
+      "BKA",
+      "BKB",
+      "BKC",
+      "BKD"
+    ],
+    "tags": {
+      "Road_Road": [
+        "ROAD1X",
+        "ROAD2X",
+        "ROAD3X",
+        "ROADB",
+        "ROADGRDX",
+        "ROADJ",
+        "ROADJX",
+        "ROADL",
+        "ROADPIT",
+        "ROADPITE",
+        "ROADPITF",
+        "ROADROLD",
+        "ROADROLD2",
+        "SEGWIDE1",
+        "SEGWIDE3"
+      ],
+      "Road_Marking": [
+        "ROADGRDX",
+        "ROADJ",
+        "ROADJX",
+        "ROADL"
+      ],
+      "Road_Curb": [
+        "RMBLB",
+        "RMBLC",
+        "RMBLD",
+        "RMBLG",
+        "RMBLH"
+      ],
+      "Road_Grass": [
+        "GRASS10",
+        "GRASSX2",
+        "FLDGRASS",
+        "RDGRASS"
+      ]
+    },
+    "lanes": 3,
+    "speed_kmh": 250,
+    "start": {
+      "x": 807.27,
+      "y": 491.42,
+      "z": 0.32,
+      "yaw": -3.2
+    }
+  },
+  "oita_station": {
+    "name": "OitaStation",
+    "package": "Japan",
+    "source": "/home/inouelab/Downloads/oita_station_map_v8/oita_station_map_v8/FBX_Maya_Unreal/oita_station_map_v2.fbx",
+    "osm": "/home/inouelab/Downloads/oita_station_map_v8/oita_station_map_v8/traffic_sumo/oita_station.osm",
+    "speed_kmh": 50,
+    "start": {
+      "x": -11.49,
+      "y": -113.77,
+      "z": 0.5,
+      "yaw": 166.5
+    }
+  }
+}

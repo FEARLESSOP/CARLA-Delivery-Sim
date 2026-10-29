@@ -1,0 +1,230 @@
+{
+  "_doc": "Your own cars (cars/build_cars.sh). Per car: source model, which objects are the wheels and the steering wheel, and the vehicle's specs. forward = the model's axis the car's nose points along. Lengths in metres, mass in kg. / \u81ea\u4f5c\u8eca\u4e21\u306e\u8a2d\u5b9a glass = window material names made invisible (make_glass.py); glass_objects = objects given their own window material first (when windows or lamp lenses share a material with something else).",
+  "rx7": {
+    "name": "MazdaRX7",
+    "make": "mazda",
+    "model": "rx7",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/rx7/source/2002 Mazda RX-7 Spirit-R.glb",
+    "forward": "-y",
+    "scale": 1.0,
+    "wheels": {
+      "name": "BRAKE_CALIPER"
+    },
+    "steering_wheel": {
+      "name": "STEERING_WHEEL"
+    },
+    "mass": 1280,
+    "tyre_width_m": 0.235,
+    "drive_side": "right",
+    "glass_objects": [
+      "LOD_A_GLASS_",
+      "_LENS_"
+    ]
+  },
+  "supra": {
+    "name": "ToyotaSupraA70",
+    "make": "toyota",
+    "model": "supra_a70",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/supra/source/unzipped/1988 Toyota Supra 2.obj",
+    "split_groups": true,
+    "forward": "-y",
+    "length_m": 4.62,
+    "wheels": {
+      "name": "RimRef"
+    },
+    "steering_wheel": {
+      "objects": [
+        "SteeringWheel1"
+      ]
+    },
+    "mass": 1510,
+    "tyre_width_m": 0.225,
+    "drive_side": "right",
+    "glass": [
+      "glass1",
+      "cpillarwindow"
+    ]
+  },
+  "imiev": {
+    "name": "MitsubishiIMiev",
+    "make": "mitsubishi",
+    "model": "i_miev",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/imiev/source/FINAL_MODEL_10.fbx",
+    "forward": "-x",
+    "length_m": 3.395,
+    "wheels": {
+      "materials": [
+        "tyre"
+      ]
+    },
+    "steering_wheel": {
+      "objects": [
+        "Mesh89"
+      ]
+    },
+    "mass": 1100,
+    "tyre_width_m": 0.175,
+    "drive_side": "right",
+    "glass": [
+      "glass_window",
+      "glass_surr"
+    ]
+  },
+  "csl": {
+    "name": "BMW30CSL",
+    "make": "bmw",
+    "model": "csl_e9",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/csl/source/unzipped/FINAL_MODEL_30.fbx",
+    "forward": "-y",
+    "length_m": 4.63,
+    "wheels": {
+      "name": "polySurface"
+    },
+    "steering_wheel": {
+      "auto_in": [
+        "SM_Interior"
+      ]
+    },
+    "glass": [
+      "bmw_mat_glass1"
+    ],
+    "mass": 1270,
+    "tyre_width_m": 0.195,
+    "drive_side": "left"
+  },
+  "nsx": {
+    "name": "HondaNSXR",
+    "make": "honda",
+    "model": "nsx_r",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/nsx/source/unzipped/2002 Honda NSX-R.obj",
+    "split_groups": true,
+    "forward": "+y",
+    "length_m": 4.43,
+    "wheels": {
+      "name": "Tire"
+    },
+    "steering_wheel": {
+      "objects": [
+        "Meshpart1"
+      ]
+    },
+    "glass": [
+      "meshpart7mtl"
+    ],
+    "mass": 1270,
+    "tyre_width_m": 0.235,
+    "drive_side": "right"
+  },
+  "soarer": {
+    "name": "ToyotaSoarer",
+    "make": "toyota",
+    "model": "soarer",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/soarer/source/unzipped/1998 Toyota Soarer.obj",
+    "split_groups": true,
+    "forward": "-y",
+    "length_m": 4.9,
+    "wheels": {
+      "name": "Tire"
+    },
+    "steering_wheel": {
+      "objects": [
+        "Meshesdropedstikliukai0631"
+      ]
+    },
+    "glass": [
+      "mesheslwindow1"
+    ],
+    "mass": 1580,
+    "tyre_width_m": 0.225,
+    "drive_side": "right"
+  },
+  "sileighty": {
+    "name": "NissanSileighty",
+    "make": "nissan",
+    "model": "sileighty",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/sileighty/source/unzipped/1996 Nissan Sileighty.obj",
+    "split_groups": true,
+    "forward": "+y",
+    "length_m": 4.52,
+    "wheels": {
+      "name": "Meshesexportcircle029"
+    },
+    "steering_wheel": {
+      "name": "exportcube166beziercircle"
+    },
+    "glass": [
+      "mesheshatchfrontwindowcube169cube055material16631",
+      "meshesexportcube202cube1431",
+      "mesheshatchmissingpartss13ref006s13ref008none1"
+    ],
+    "mass": 1200,
+    "tyre_width_m": 0.205,
+    "drive_side": "right"
+  },
+  "rb16": {
+    "name": "RedBullRB16",
+    "make": "redbull",
+    "model": "rb16",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/rb16/source/2020 F1 Red Bull RB16.glb",
+    "forward": "-y",
+    "scale": 1.0,
+    "wheels": {
+      "name": "TYRE"
+    },
+    "steering_wheel": {
+      "name": "STEERING_WHEEL_mm_cab"
+    },
+    "mass": 746,
+    "tyre_width_m": 0.35,
+    "drive_side": "center",
+    "glass": [
+      "car_windows"
+    ],
+    "cameras": [
+      {
+        "name": "Cockpit",
+        "loc": [
+          0.14,
+          0.0,
+          0.88
+        ],
+        "rot": [
+          -6.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "T-Cam",
+        "loc": [
+          -0.15,
+          0.0,
+          1.25
+        ],
+        "rot": [
+          -7.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "name": "Chase",
+        "loc": [
+          -5.0,
+          0.0,
+          1.7
+        ],
+        "rot": [
+          -9.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "driver_eye": [
+      0.14,
+      0.0,
+      0.88
+    ]
+  }
+}

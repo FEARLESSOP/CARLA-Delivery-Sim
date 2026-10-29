@@ -1,0 +1,190 @@
+{
+    "props": [
+        {
+            "name": "LMPBattery",
+            "path": "/Game/LastMileModels/Static/Car/LMPBattery/LMPBattery_LMPBattery.LMPBattery_LMPBattery",
+            "size": "small"
+        },
+        {
+            "name": "LMPBatteryMagazine",
+            "path": "/Game/LastMileModels/Static/Car/LMPBatteryMagazine/LMPBatteryMagazine_LMPBatteryMagazine.LMPBatteryMagazine_LMPBatteryMagazine",
+            "size": "big"
+        },
+        {
+            "name": "LMPDrone",
+            "path": "/Game/LastMileModels/Static/Car/LMPDrone/LMPDrone_LMPDrone.LMPDrone_LMPDrone",
+            "size": "small"
+        },
+        {
+            "name": "LMPDroneHook",
+            "path": "/Game/LastMileModels/Static/Car/LMPDroneHook/LMPDroneHook_LMPDroneHook.LMPDroneHook_LMPDroneHook",
+            "size": "small"
+        },
+        {
+            "name": "LMPDroneProp",
+            "path": "/Game/LastMileModels/Static/Car/LMPDroneProp/LMPDroneProp_LMPDroneProp.LMPDroneProp_LMPDroneProp",
+            "size": "small"
+        },
+        {
+            "name": "LMPHatchFront",
+            "path": "/Game/LastMileModels/Static/Car/LMPHatchFront/LMPHatchFront_LMPHatchFront.LMPHatchFront_LMPHatchFront",
+            "size": "small"
+        },
+        {
+            "name": "LMPHatchRear",
+            "path": "/Game/LastMileModels/Static/Car/LMPHatchRear/LMPHatchRear_LMPHatchRear.LMPHatchRear_LMPHatchRear",
+            "size": "small"
+        },
+        {
+            "name": "LMPHoistBridge",
+            "path": "/Game/LastMileModels/Static/Car/LMPHoistBridge/LMPHoistBridge_LMPHoistBridge.LMPHoistBridge_LMPHoistBridge",
+            "size": "big"
+        },
+        {
+            "name": "LMPHoistGripper",
+            "path": "/Game/LastMileModels/Static/Car/LMPHoistGripper/LMPHoistGripper_LMPHoistGripper.LMPHoistGripper_LMPHoistGripper",
+            "size": "small"
+        },
+        {
+            "name": "LMPJack",
+            "path": "/Game/LastMileModels/Static/Car/LMPJack/LMPJack_LMPJack.LMPJack_LMPJack",
+            "size": "small"
+        },
+        {
+            "name": "LMPLiftPad",
+            "path": "/Game/LastMileModels/Static/Car/LMPLiftPad/LMPLiftPad_LMPLiftPad.LMPLiftPad_LMPLiftPad",
+            "size": "big"
+        },
+        {
+            "name": "LMPLiftPin",
+            "path": "/Game/LastMileModels/Static/Car/LMPLiftPin/LMPLiftPin_LMPLiftPin.LMPLiftPin_LMPLiftPin",
+            "size": "small"
+        },
+        {
+            "name": "LMPParcelM",
+            "path": "/Game/LastMileModels/Static/Car/LMPParcelM/LMPParcelM_LMPParcelM.LMPParcelM_LMPParcelM",
+            "size": "small"
+        },
+        {
+            "name": "LMPParcelXL",
+            "path": "/Game/LastMileModels/Static/Car/LMPParcelXL/LMPParcelXL_LMPParcelXL.LMPParcelXL_LMPParcelXL",
+            "size": "small"
+        },
+        {
+            "name": "LMPPortCarrier",
+            "path": "/Game/LastMileModels/Static/Car/LMPPortCarrier/LMPPortCarrier_LMPPortCarrier.LMPPortCarrier_LMPPortCarrier",
+            "size": "small"
+        },
+        {
+            "name": "LMPPortDoor",
+            "path": "/Game/LastMileModels/Static/Car/LMPPortDoor/LMPPortDoor_LMPPortDoor.LMPPortDoor_LMPPortDoor",
+            "size": "small"
+        },
+        {
+            "name": "LMPPortStage1",
+            "path": "/Game/LastMileModels/Static/Car/LMPPortStage1/LMPPortStage1_LMPPortStage1.LMPPortStage1_LMPPortStage1",
+            "size": "small"
+        },
+        {
+            "name": "LMPPortStage2",
+            "path": "/Game/LastMileModels/Static/Car/LMPPortStage2/LMPPortStage2_LMPPortStage2.LMPPortStage2_LMPPortStage2",
+            "size": "small"
+        },
+        {
+            "name": "LMPPortStage3",
+            "path": "/Game/LastMileModels/Static/Car/LMPPortStage3/LMPPortStage3_LMPPortStage3.LMPPortStage3_LMPPortStage3",
+            "size": "small"
+        },
+        {
+            "name": "LMPPresenterTable",
+            "path": "/Game/LastMileModels/Static/Car/LMPPresenterTable/LMPPresenterTable_LMPPresenterTable.LMPPresenterTable_LMPPresenterTable",
+            "size": "small"
+        },
+        {
+            "name": "LMPScissorA",
+            "path": "/Game/LastMileModels/Static/Car/LMPScissorA/LMPScissorA_LMPScissorA.LMPScissorA_LMPScissorA",
+            "size": "small"
+        },
+        {
+            "name": "LMPScissorB",
+            "path": "/Game/LastMileModels/Static/Car/LMPScissorB/LMPScissorB_LMPScissorB.LMPScissorB_LMPScissorB",
+            "size": "small"
+        },
+        {
+            "name": "LMPShell",
+            "path": "/Game/LastMileModels/Static/Car/LMPShell/LMPShell_LMPShell.LMPShell_LMPShell",
+            "size": "big"
+        },
+        {
+            "name": "LMPShellStreet",
+            "path": "/Game/LastMileModels/Static/Car/LMPShellStreet/LMPShellStreet_LMPShellStreet.LMPShellStreet_LMPShellStreet",
+            "size": "big"
+        },
+        {
+            "name": "LMPShuttleCarriage",
+            "path": "/Game/LastMileModels/Static/Car/LMPShuttleCarriage/LMPShuttleCarriage_LMPShuttleCarriage.LMPShuttleCarriage_LMPShuttleCarriage",
+            "size": "small"
+        },
+        {
+            "name": "LMPShuttleFork1",
+            "path": "/Game/LastMileModels/Static/Car/LMPShuttleFork1/LMPShuttleFork1_LMPShuttleFork1.LMPShuttleFork1_LMPShuttleFork1",
+            "size": "small"
+        },
+        {
+            "name": "LMPShuttleFork2",
+            "path": "/Game/LastMileModels/Static/Car/LMPShuttleFork2/LMPShuttleFork2_LMPShuttleFork2.LMPShuttleFork2_LMPShuttleFork2",
+            "size": "small"
+        },
+        {
+            "name": "LMPShuttleMast",
+            "path": "/Game/LastMileModels/Static/Car/LMPShuttleMast/LMPShuttleMast_LMPShuttleMast.LMPShuttleMast_LMPShuttleMast",
+            "size": "big"
+        },
+        {
+            "name": "LMPStation",
+            "path": "/Game/LastMileModels/Static/Car/LMPStation/LMPStation_LMPStation.LMPStation_LMPStation",
+            "size": "big"
+        },
+        {
+            "name": "LMPStationDoor",
+            "path": "/Game/LastMileModels/Static/Car/LMPStationDoor/LMPStationDoor_LMPStationDoor.LMPStationDoor_LMPStationDoor",
+            "size": "small"
+        },
+        {
+            "name": "LMPStationFlap",
+            "path": "/Game/LastMileModels/Static/Car/LMPStationFlap/LMPStationFlap_LMPStationFlap.LMPStationFlap_LMPStationFlap",
+            "size": "small"
+        },
+        {
+            "name": "LMPSwapperBoom",
+            "path": "/Game/LastMileModels/Static/Car/LMPSwapperBoom/LMPSwapperBoom_LMPSwapperBoom.LMPSwapperBoom_LMPSwapperBoom",
+            "size": "small"
+        },
+        {
+            "name": "LMPSwapperCarrier",
+            "path": "/Game/LastMileModels/Static/Car/LMPSwapperCarrier/LMPSwapperCarrier_LMPSwapperCarrier.LMPSwapperCarrier_LMPSwapperCarrier",
+            "size": "small"
+        },
+        {
+            "name": "LMPSwapperJaw",
+            "path": "/Game/LastMileModels/Static/Car/LMPSwapperJaw/LMPSwapperJaw_LMPSwapperJaw.LMPSwapperJaw_LMPSwapperJaw",
+            "size": "small"
+        },
+        {
+            "name": "LMPTray",
+            "path": "/Game/LastMileModels/Static/Car/LMPTray/LMPTray_LMPTray.LMPTray_LMPTray",
+            "size": "small"
+        },
+        {
+            "name": "LMPShellX",
+            "path": "/Game/LastMileModels/Static/Car/LMPShellX/LMPShellX.LMPShellX",
+            "size": "big"
+        },
+        {
+            "name": "LMPShellStreetX",
+            "path": "/Game/LastMileModels/Static/Car/LMPShellStreetX/LMPShellStreetX.LMPShellStreetX",
+            "size": "big"
+        }
+    ],
+    "maps": []
+}

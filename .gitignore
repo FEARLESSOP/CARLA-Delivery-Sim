@@ -1,0 +1,122 @@
+# ============================================================
+# .gitignore for CARLA Custom Simulator
+# Only track custom/added files: new maps, custom vehicles,
+# Python scripts & simulation code.
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Base CARLA 0.9.16 Engine & Distribution Binaries
+# ------------------------------------------------------------
+/Engine/
+/HDMaps/
+/Tools/
+/Co-Simulation/
+/Unreal/
+/CarlaUE4/Binaries/
+/CarlaUE4/Intermediate/
+/CarlaUE4/DerivedDataCache/
+/CarlaUE4/Saved/
+/CarlaUE4/Plugins/
+/CarlaUE4/AssetRegistry.bin
+/CarlaUE4/CarlaUE4.uproject
+/CarlaUE4/Config/
+/CarlaUE4.sh
+/ImportAssets.sh
+/Dockerfile
+/Manifest_DebugFiles_Linux.txt
+/CHANGELOG
+/VERSION
+/README
+
+# ------------------------------------------------------------
+# 2. Stock CARLA Assets (keep modified VehicleFactory)
+# ------------------------------------------------------------
+/CarlaUE4/Content/Carla/*
+!/CarlaUE4/Content/Carla/Blueprints
+/CarlaUE4/Content/Carla/Blueprints/*
+!/CarlaUE4/Content/Carla/Blueprints/Vehicles
+/CarlaUE4/Content/Carla/Blueprints/Vehicles/*
+!/CarlaUE4/Content/Carla/Blueprints/Vehicles/VehicleFactory.uasset
+!/CarlaUE4/Content/Carla/Blueprints/Vehicles/VehicleFactory.uexp
+
+# ------------------------------------------------------------
+# 3. Stock CARLA PythonAPI (only hil_sim is custom)
+# ------------------------------------------------------------
+/PythonAPI/carla/
+/PythonAPI/examples/
+/PythonAPI/util/
+/PythonAPI/test/
+/PythonAPI/python_api.md
+
+# ------------------------------------------------------------
+# 4. Python Virtual Environments, Cache & Build Artifacts
+# ------------------------------------------------------------
+carla-venv/
+venv/
+.venv/
+env/
+.env/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.dist-info/
+.eggs/
+
+# ------------------------------------------------------------
+# 5. Simulation Output, Datasets, Recordings & Temp Files
+# ------------------------------------------------------------
+**/_out/
+**/_out/**
+PythonAPI/hil_sim/_out/
+PythonAPI/hil_sim/data/
+PythonAPI/hil_sim/maps/.venv/
+PythonAPI/hil_sim/cars/sources/
+PythonAPI/hil_sim/maps/sources/
+PythonAPI/hil_sim/delivery/assets/backup/
+PythonAPI/hil_sim/rl/results/*
+!PythonAPI/hil_sim/rl/results/README.md
+
+# Build logs and temporary files
+*.log
+*.log.*
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rec
+output/
+results/
+data/recordings/
+screenshots/
+delivery/assets/*.log
+cars/*.log
+
+# ------------------------------------------------------------
+# 6. Runtime Local State & Tuning Files
+# ------------------------------------------------------------
+pedal_tuning.json
+turn_signal.json
+traffic_heartbeat.json
+ffb_tuning.json
+ffb_presets.json
+vehicle_tuning.json
+history
+history.txt
+
+# ------------------------------------------------------------
+# 7. OS & IDE Metadata
+# ------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/settings.local.json

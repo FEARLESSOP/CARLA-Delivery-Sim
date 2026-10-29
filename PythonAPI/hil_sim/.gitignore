@@ -1,0 +1,44 @@
+__pycache__/
+*.pyc
+
+# session/run data & logs (generated at runtime)
+data/
+
+# runtime-generated local state (regenerated on first run / while driving)
+pedal_tuning.json
+turn_signal.json
+
+# RL results (models, tensorboard, eval CSV, figures, logs) -- rl/paths.py
+# 学習成果物一式。README.md だけ追跡する
+rl/results/*
+!rl/results/README.md
+
+# local Claude Code permissions (machine-specific)
+.claude/settings.local.json
+
+# runtime liveness file for the freeze watchdog
+traffic_heartbeat.json
+
+# live settings written by the dashboard (defaults live in ffb_settings.py /
+# vehicle_tuning.py) / ダッシュボードが書く設定。既定値はコード内
+ffb_tuning.json
+ffb_presets.json
+vehicle_tuning.json
+
+# delivery model build: log and this machine's backup of CARLA's VehicleFactory
+# (build_models.sh --restore-factory) / ビルドログと VehicleFactory のバックアップ
+delivery/assets/build_vehicle.log
+delivery/assets/backup/
+
+# test reference data (the line "data/" above would hide it) / 試験用データ
+!tests/data/
+# LastMile build logs / LastMile ビルドログ
+delivery/assets/build_lastmile_vehicle.log
+delivery/assets/make_xray.log
+# own-car build logs / 自作車両のビルドログ
+delivery/assets/build_car_*.log
+cars/make_glass*.log
+
+# imported 3D car and map source models / 取り込み用の車両・マップ 3D モデル
+cars/sources/
+maps/sources/

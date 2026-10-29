@@ -1,0 +1,15 @@
+{
+    "props": [],
+    "maps": [
+        {
+            "name": "MarinaBay",
+            "path": "/Game/Circuits/Maps/MarinaBay",
+            "use_carla_materials": false
+        },
+        {
+            "name": "SpaFrancorchamps",
+            "path": "/Game/Circuits/Maps/SpaFrancorchamps",
+            "use_carla_materials": false
+        }
+    ]
+}

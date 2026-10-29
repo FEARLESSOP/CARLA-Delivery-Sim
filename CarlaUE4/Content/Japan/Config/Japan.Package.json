@@ -1,0 +1,10 @@
+{
+    "props": [],
+    "maps": [
+        {
+            "name": "OitaStation",
+            "path": "/Game/Japan/Maps/OitaStation",
+            "use_carla_materials": false
+        }
+    ]
+}

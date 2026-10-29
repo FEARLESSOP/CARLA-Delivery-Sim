@@ -1,0 +1,45 @@
+{
+    "props": [
+        {
+            "name": "BMW30CSLSteer",
+            "path": "/Game/UserCars/Static/Car/BMW30CSLSteer/BMW30CSLSteer_BMW30CSLSteer.BMW30CSLSteer_BMW30CSLSteer",
+            "size": "small"
+        },
+        {
+            "name": "HondaNSXRSteer",
+            "path": "/Game/UserCars/Static/Car/HondaNSXRSteer/HondaNSXRSteer_HondaNSXRSteer.HondaNSXRSteer_HondaNSXRSteer",
+            "size": "small"
+        },
+        {
+            "name": "MazdaRX7Steer",
+            "path": "/Game/UserCars/Static/Car/MazdaRX7Steer/MazdaRX7Steer_MazdaRX7Steer.MazdaRX7Steer_MazdaRX7Steer",
+            "size": "small"
+        },
+        {
+            "name": "MitsubishiIMievSteer",
+            "path": "/Game/UserCars/Static/Car/MitsubishiIMievSteer/MitsubishiIMievSteer_MitsubishiIMievSteer.MitsubishiIMievSteer_MitsubishiIMievSteer",
+            "size": "small"
+        },
+        {
+            "name": "NissanSileightySteer",
+            "path": "/Game/UserCars/Static/Car/NissanSileightySteer/NissanSileightySteer_NissanSileightySteer.NissanSileightySteer_NissanSileightySteer",
+            "size": "small"
+        },
+        {
+            "name": "RedBullRB16Steer",
+            "path": "/Game/UserCars/Static/Car/RedBullRB16Steer/RedBullRB16Steer_RedBullRB16Steer.RedBullRB16Steer_RedBullRB16Steer",
+            "size": "small"
+        },
+        {
+            "name": "ToyotaSoarerSteer",
+            "path": "/Game/UserCars/Static/Car/ToyotaSoarerSteer/ToyotaSoarerSteer_ToyotaSoarerSteer.ToyotaSoarerSteer_ToyotaSoarerSteer",
+            "size": "small"
+        },
+        {
+            "name": "ToyotaSupraA70Steer",
+            "path": "/Game/UserCars/Static/Car/ToyotaSupraA70Steer/ToyotaSupraA70Steer_ToyotaSupraA70Steer.ToyotaSupraA70Steer_ToyotaSupraA70Steer",
+            "size": "small"
+        }
+    ],
+    "maps": []
+}
