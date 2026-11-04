@@ -1354,29 +1354,31 @@ only what was added: `hil_sim`, `Import/Japan`, the VehicleFactory, and
 It ignores the stock engine and content, the venvs, `data/`, `_out/`,
 `maps/sources/`, `cars/sources/`, `build/`, and the runtime JSON files.
 
-**What the repo does NOT have** (`git status` on 2026-11-04 shows about
-2350 changed or untracked paths):
+**Update 2026-11-04, second commit `afa41d3`:** all rig code, docs and the
+small configs are now pushed. That covers `maps/osm_city/`, `seasons.py`,
+`signal_timing.py`, `lane_spawns.py`, `cars/make_lights.py`, `Import/Japan`,
+the current VehicleFactory, every `Config/*.Package.json` and this file.
 
-- All of Oita Kosen (`Content/Japan/Maps/OitaKosen/`), the re-imported Oita
-  Station assets, and **`Content/Singapore/`** (never committed).
-- The new code: `maps/osm_city/`, `make_osm_city.sh`, `ue_foliage.py`,
-  `add_ring_road.py`, `fix_xodr_signals.py`, `seasons.py`, `signal_timing.py`,
-  `lane_spawns.py`, `delivery/boxes.py`, `delivery/route.py`,
-  `cars/make_lights.py`, `maps/queue/`, plus edits to about 20 tracked files.
-  - The working-copy `generate_traffic.py` imports `lane_spawns`, which is
-    untracked.
-- Everything git-ignored that is still needed at run time: the seasonal
-  textures and `buildings.csv` in `maps/build/<Map>/`,
-  `data/signal_timing_oita.json`, `data/vehicle_factory.json` (regenerated),
-  the model sources, `ffb_tuning.json` / `ffb_presets.json` /
-  `vehicle_tuning.json` (your tuned values).
-- **`Content/Japan/Maps/OitaKosen/OitaKosen.uexp` is 114 MB.** GitHub
-  refuses files over 100 MB without Git LFS.
+**What the repo still does NOT have**, by the user's choice (2026-11-04):
 
-So **cloning the repo today gives you the 2026-10-29 state.** To move the
-current rig, either commit and push first (with LFS for large `.uexp`), or
-copy the folders directly (8.2). Commit only when you decide to; this file
-changes nothing.
+- The cooked map and car content changed since 10-29: about 4.2 GB in 8000
+  files under `CarlaUE4/Content/`. That is all of Oita Kosen, the
+  re-imported Oita Station assets, `Content/Singapore/` and the rebuilt
+  `UserCars`. `OitaKosen.uexp` is 114 MB, over GitHub's 100 MB limit, and
+  Git LFS on a free account is only 1 GB.
+  - Rebuild it with the scripts (`maps/build_map.sh`, `cars/build_cars.sh`;
+    they need the sources in 6.3), or copy the folder from the old PC (8.2).
+- Everything git-ignored that is still needed at run time:
+  - the seasonal textures and `buildings.csv` in `maps/build/<Map>/`
+  - `data/signal_timing_oita.json`
+  - `data/vehicle_factory.json` (regenerated)
+  - the model sources
+  - your tuned values: `ffb_tuning.json`, `ffb_presets.json`, `vehicle_tuning.json`
+- The traffic unstick watchdog (`unstick_watchdog.py`, `watchdog_loop.sh`).
+  It still lives only in a Claude scratch folder.
+
+So **cloning the repo gives you the current code but not the current cooked
+content.** For a full copy of today's rig, copy the folders directly (8.2).
 
 ### 6.3 What else lives outside CARLA and must come along
 
@@ -1513,7 +1515,7 @@ rsync -a $OLD:Downloads/CARLA_0.9.16/CarlaUE4/Content/Carla/Blueprints/Vehicles/
       ~/Downloads/CARLA_0.9.16/CarlaUE4/Content/Carla/Blueprints/Vehicles/
 rsync -a $OLD:Downloads/CARLA_0.9.16/.git $OLD:Downloads/CARLA_0.9.16/.gitignore ~/Downloads/CARLA_0.9.16/
 
-# 6b. OR from GitHub (only the 2026-10-29 state; Singapore/OitaKosen/new code missing, see 6.2):
+# 6b. OR from GitHub (current code; cooked maps/cars since 10-29 missing, rebuild them, see 6.2):
 cd ~/Downloads/CARLA_0.9.16
 git init && git remote add origin https://github.com/FEARLESSOP/CARLA-Delivery-Sim.git
 git fetch origin && git checkout -f -B master origin/master
