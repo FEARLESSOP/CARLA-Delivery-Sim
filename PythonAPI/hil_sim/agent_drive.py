@@ -43,6 +43,8 @@ sys.path.append('../carla')
 
 import carla  # noqa: E402
 
+from lane_spawns import lane_spawn_points
+
 from rl.rules import step_reward  # noqa: E402
 
 
@@ -55,7 +57,7 @@ def spawn_ego(world, vehicle_filter, rolename='ego', retries=20):
     bps = bp_lib.filter(vehicle_filter) or bp_lib.filter('vehicle.*')
     bp = random.choice(list(bps))
     bp.set_attribute('role_name', rolename)
-    spawn_points = world.get_map().get_spawn_points()
+    spawn_points = lane_spawn_points(world.get_map())   # on today's lanes / 現在の車線上
     random.shuffle(spawn_points)
     for sp in spawn_points[:retries]:
         ego = world.try_spawn_actor(bp, sp)
@@ -93,7 +95,7 @@ def run_model(world, ego, model_path, score_cb):
               'pip install stable-baselines3 / 未インストールです')
         return 1
     from rl.carla_env import EgoSensing
-    from agents.navigation.global_route_planner import GlobalRoutePlanner
+    from delivery.route import SafeRoutePlanner as GlobalRoutePlanner  # bounded on imported maps
 
     loader = SAC if 'sac' in os.path.basename(model_path).lower() else PPO
     model = loader.load(model_path)
@@ -109,7 +111,7 @@ def run_model(world, ego, model_path, score_cb):
                                and sensing.route_idx >= len(sensing.route) - 3):
             # New random route when the old one is finished.
             # 経路を走り切ったら新しいランダム経路を引く。
-            sps = world.get_map().get_spawn_points()
+            sps = lane_spawn_points(world.get_map())
             goal = random.choice(sps).location
             route = planner.trace_route(ego.get_location(), goal)
             sensing = EgoSensing(world, ego, route)

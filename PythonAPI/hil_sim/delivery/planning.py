@@ -41,6 +41,7 @@ class Building(object):
     name: str
     drop: tuple          # sidewalk point in front of the building / 建物前の歩道
     curb: tuple          # driving-lane point the car stops at / 車の停車地点
+    box: int = None      # a box station in the world (delivery/boxes.py): its id / 箱型ステーション
 
 
 @dataclass
@@ -88,6 +89,7 @@ class OrderGenerator(object):
     _next_batch_id: int = 1
     busy_buildings: set = field(default_factory=set)
     skipped: int = 0         # batches dropped because every building was busy
+    boxes: list = field(default_factory=list)   # box stations: face-to-face orders go to these / 対面注文の配達先
 
     def schedule_from(self, t, immediate=False):
         gap = self.rng.uniform(self.min_gap, self.max_gap) / max(self.fleet_size, 1)
@@ -126,7 +128,11 @@ class OrderGenerator(object):
         n_drone = kinds.count(DRONE)
         if n_drone:
             chosen += self._pick_cluster(free, n_drone)
-        rest = [b for b in free if b not in chosen]
+        if self.boxes:
+            # face to face: a free box station in the world / 対面：空いている箱
+            rest = [b for b in self.boxes if b.id not in self.busy_buildings]
+        else:
+            rest = [b for b in free if b not in chosen]
         chosen += self.rng.sample(rest, min(n - len(chosen), len(rest)))
         if len(chosen) < n:     # map too small / all buildings busy
             kinds = kinds[:len(chosen)]

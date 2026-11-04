@@ -146,18 +146,23 @@ def _tf(pose):
 class Hazards(object):
     """What can go wrong in flight, and how often. / 飛行中の故障要因と頻度。
 
-    Collisions, a flat battery and being blown off course always count.
-    ``random`` switches the chance failures (motor, parcel torn off) on/off.
-    衝突・電池切れ・ロストは常に有効。``random`` は確率的な故障の有無。
+    Collisions and a flat battery always count. A gust stronger than the
+    drone only pushes it off its path; it flies back once the gust eases, and
+    crashes only if the push takes it into something (the collision check
+    runs on the drifted position). ``lost_drift`` > 0 brings back a hard
+    limit (lost when pushed further than that). ``random`` switches the
+    chance failures (motor, parcel torn off) on/off.
+    衝突・電池切れは常に有効。突風で流されても何かに当たらなければ経路に戻る
+    （``lost_drift`` > 0 で距離制限を復活）。``random`` は確率的な故障の有無。
     """
 
     def __init__(self, random=True, motor_per_hour=1.0, parcel_wind=12.0,
-                 parcel_loss_per_s=0.35, lost_drift=6.0):
+                 parcel_loss_per_s=0.35, lost_drift=0.0):
         self.random = random
         self.motor_per_hour = motor_per_hour    # motor failures per flight hour
         self.parcel_wind = parcel_wind          # above this the tether can snap [m/s]
         self.parcel_loss_per_s = parcel_loss_per_s
-        self.lost_drift = lost_drift            # pushed this far off: control lost [m]
+        self.lost_drift = lost_drift            # >0: pushed this far off = lost [m]; 0 = no limit
 
 
 class DroneUnit(object):
@@ -468,7 +473,7 @@ class DroneUnit(object):
                     self.crash_detail = "%s at z %.1f, during %s" % (
                         h.label, h.location.z, f.state)
                     return "collision:%s" % str(h.label)
-        if self.drift.offset > self.hz.lost_drift:
+        if self.hz.lost_drift > 0 and self.drift.offset > self.hz.lost_drift:
             return "blown_off_course"
         if (self.hz.random and
                 self.rng.random() < self.hz.motor_per_hour / 3600.0 * dt):

@@ -208,6 +208,9 @@ class LmpVanMixin(object):
         if self._prep_allowed():
             self.lmp_prep(t)
         self.pod.apply(a.mech(self.rig_slots(), self.pod.mech.jacks), self.lmp_units)
+        if a.box is not None and self._job and self._job.get("box") is not None:
+            # the box station's intake flap follows the side port / 箱の投入口も連動
+            self.boxes.pose(self._job["box"], self.pod.mech.flap, 0.0)
 
     def _prep_allowed(self):
         if self.state in ("stranded", "ev_charging", "yard_in", "yard_out", "waiting_charger"):
@@ -460,13 +463,41 @@ class LmpVanMixin(object):
     def lmp_begin_direct(self, t):
         self.handover_queue = list(self.stops[0].orders)
         self._job = {"kind": "f2f", "phase": "settle"}
+        first = self.stops[0].orders[0] if self.stops[0].orders else None
+        box = getattr(getattr(first, "building", None), "box", None)
+        self.anim.box = None
+        if box is not None and getattr(self, "boxes", None) is not None and box in self.boxes.boxes:
+            self._job["box"] = box
+            self.anim.box = self._box_offset(box)
+            self.log(t, "box_station", batch=self.stops[0].batch, pos=self.car_pos(),
+                     detail="%d parcel(s) into box station %d, arm %.2f m"
+                     % (len(self.handover_queue), box, self.anim.box["reach"]))
+            return
         self.log(t, "box_station", batch=self.stops[0].batch, pos=self.car_pos(),
                  detail="%d parcel(s) through the side port" % len(self.handover_queue))
 
+    def _box_offset(self, box):
+        """Where the world box stands relative to where the HTML sets its own
+        station down, and the slide reach that gets into its intake (HTML axes).
+        世界の箱の位置のずれと、投入口に届くスライドの伸び量。"""
+        tf = self.car.get_transform()
+        b = self.boxes.boxes[box].site.loc
+        inv = tf.get_inverse_matrix()
+        lx = inv[0][0] * b[0] + inv[0][1] * b[1] + inv[0][2] * b[2] + inv[0][3]
+        ly = inv[1][0] * b[0] + inv[1][1] * b[1] + inv[1][2] * b[2] + inv[1][3]
+        dx, dz = lx - R.STN_X, ly - R.STN_ZC         # CARLA pod (x, y) = HTML (x, z) / 座標の対応
+        return {"dx": dx, "dz": dz, "reach": max(R.SLIDE_MAX - dz, 0.3)}
+
     def _hand_over(self, t):
         if self.handover_queue:
-            c = self.pod._world(R.H(R.CELL_CENTER))
+            box = (self._job or {}).get("box")
+            if box is not None:
+                c = self.boxes.world_point(box, R.station_point(R.CELL_CENTER))
+            else:
+                c = self.pod._world(R.H(R.CELL_CENTER))
             self.finish_order(t, self.handover_queue.pop(0), (c.x, c.y, c.z))
+            if box is not None:
+                self.boxes.store(box, t)              # waits there for its customer / 客を待つ
 
     def lmp_direct_work(self, t, dt):
         self.hold()
@@ -482,6 +513,11 @@ class LmpVanMixin(object):
                 return
             if self.handover_queue:
                 a.play("direct_order")
+            elif job.get("box") is not None:
+                # a box station in the world: the customer comes later, the pod
+                # drives on / 世界の箱：客は後で来る。ポッドは出発
+                a.x_on, a.box = False, None
+                job["phase"] = "receive"
             elif a.name.get("x") is None and job.get("collected"):
                 a.x_on = False                # station and customer go / 撤去
                 job["phase"] = "receive"

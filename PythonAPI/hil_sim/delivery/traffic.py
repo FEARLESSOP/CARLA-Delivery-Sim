@@ -13,6 +13,8 @@ import random
 
 import carla
 
+from lane_spawns import lane_spawn_points
+
 SpawnActor = carla.command.SpawnActor
 SetAutopilot = carla.command.SetAutopilot
 FutureActor = carla.command.FutureActor
@@ -48,7 +50,7 @@ class Traffic(object):
                if b.get_attribute("number_of_wheels").as_int() == 4
                and (not b.has_attribute("base_type")
                     or b.get_attribute("base_type").as_str() in ("car", "van", "truck", ""))]
-        points = [sp for sp in self.world.get_map().get_spawn_points()
+        points = [sp for sp in lane_spawn_points(self.world.get_map())
                   if all(sp.location.distance(a) > 10.0 for a in avoid)]
         self.rng.shuffle(points)
         batch = []
@@ -75,10 +77,13 @@ class Traffic(object):
         lib = self.world.get_blueprint_library()
         bps = list(lib.filter("walker.pedestrian.*"))
         batch, speeds = [], []
-        for _ in range(n):
+        for _ in range(n * 10):
+            if len(batch) >= n:
+                break
             loc = self.world.get_random_location_from_navigation()
             if loc is None:
                 continue
+            loc.z += 1.0    # clear of slopes / 坂で衝突しないよう上げる
             bp = self.rng.choice(bps)
             if bp.has_attribute("is_invincible"):
                 bp.set_attribute("is_invincible", "false")
@@ -102,7 +107,10 @@ class Traffic(object):
         self.world.set_pedestrians_cross_factor(cross)
         for ctrl, sp in zip(self.world.get_actors(self.controllers), ok_speeds):
             ctrl.start()
-            ctrl.go_to_location(self.world.get_random_location_from_navigation())
+            dest = next((d for d in (self.world.get_random_location_from_navigation()
+                                     for _ in range(10)) if d is not None), None)
+            if dest is not None:
+                ctrl.go_to_location(dest)
             ctrl.set_max_speed(sp)
         return len(self.walkers)
 

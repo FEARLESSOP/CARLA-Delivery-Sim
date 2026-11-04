@@ -1,0 +1,10 @@
+{
+    "props": [],
+    "maps": [
+        {
+            "name": "PasirRis",
+            "path": "/Game/Singapore/Maps/PasirRis",
+            "use_carla_materials": false
+        }
+    ]
+}

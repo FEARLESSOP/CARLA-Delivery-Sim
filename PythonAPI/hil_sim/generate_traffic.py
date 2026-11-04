@@ -31,6 +31,8 @@ except IndexError:
 
 import carla
 
+from lane_spawns import lane_spawn_points
+
 from carla import VehicleLightState as vls
 
 import argparse
@@ -583,7 +585,7 @@ def main():
 
         blueprints = sorted(blueprints, key=lambda bp: bp.id)
 
-        spawn_points = world.get_map().get_spawn_points()
+        spawn_points = lane_spawn_points(world.get_map())   # on today's lanes / 現在の車線上
         number_of_spawn_points = len(spawn_points)
 
         if args.number_of_vehicles < number_of_spawn_points:
@@ -675,13 +677,18 @@ def main():
             world.set_pedestrians_seed(args.seedw)
             random.seed(args.seedw)
         # 1. take all the random locations to spawn / 1. スポーン用のランダムな位置をすべて取得
+        # The navmesh query can come back empty: keep drawing (bounded). Lift
+        # each point 1 m so the capsule does not start inside a slope (hilly
+        # maps fail with "collision at spawn position"); the walker drops.
+        # ナビメッシュの点が取れないことがあるので再試行。坂で衝突しないよう 1 m 上げる。
         spawn_points = []
-        for i in range(args.number_of_walkers):
-            spawn_point = carla.Transform()
+        for _ in range(args.number_of_walkers * 10):
+            if len(spawn_points) >= args.number_of_walkers:
+                break
             loc = world.get_random_location_from_navigation()
-            if (loc != None):
-                spawn_point.location = loc
-                spawn_points.append(spawn_point)
+            if loc is not None:
+                loc.z += 1.0
+                spawn_points.append(carla.Transform(loc))
         # 2. we spawn the walker object / 2. 歩行者オブジェクトを生成
         batch = []
         walker_speed = []
@@ -763,7 +770,13 @@ def main():
             # start walker / 歩行者を開始
             all_actors[i].start()
             # set walk to random point / ランダムな地点へ歩行させる
-            all_actors[i].go_to_location(world.get_random_location_from_navigation())
+            dest = None
+            for _ in range(10):
+                dest = world.get_random_location_from_navigation()
+                if dest is not None:
+                    break
+            if dest is not None:
+                all_actors[i].go_to_location(dest)
             # max speed / 最高速度
             all_actors[i].set_max_speed(float(walker_speed[int(i/2)]))
 

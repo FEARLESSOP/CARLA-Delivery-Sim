@@ -102,6 +102,8 @@ except IndexError:
 
 import carla
 
+from lane_spawns import lane_spawn_points
+
 from carla import ColorConverter as cc
 
 import argparse
@@ -301,7 +303,7 @@ class World(object):
             if start is not None:
                 self.player = self.world.try_spawn_actor(blueprint, start)
         while self.player is None:
-            spawn_points = self.world.get_map().get_spawn_points()
+            spawn_points = lane_spawn_points(self.world.get_map())   # on today's lanes / 現在の車線上
             spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
         # Set up the sensors. / センサー類をセットアップ。
@@ -375,11 +377,12 @@ class World(object):
 
 
 class DualControl(object):
-    def __init__(self, world, start_in_autopilot, keyboard=False):
+    def __init__(self, world, start_in_autopilot, keyboard=False, tm_port=8000):
         self._autopilot_enabled = start_in_autopilot
+        self._tm_port = tm_port
         if isinstance(world.player, carla.Vehicle):
             self._control = carla.VehicleControl()
-            world.player.set_autopilot(self._autopilot_enabled)
+            world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
         elif isinstance(world.player, carla.Walker):
             self._control = carla.WalkerControl()
             self._autopilot_enabled = False
@@ -718,7 +721,7 @@ class DualControl(object):
                         self._shift(world, 1)
                     elif event.key == K_p:
                         self._autopilot_enabled = not self._autopilot_enabled
-                        world.player.set_autopilot(self._autopilot_enabled)
+                        world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
                         world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
 
         # Pick up pedal-tuning changes made on the dashboard (~1x/second).
@@ -2123,7 +2126,7 @@ def game_loop(args):
         hud = HUD(args.width, args.height)
         world = World(client, client.get_world(), hud, args.filter, args.fov,
                       start_vehicle=args.start_vehicle)
-        controller = DualControl(world, args.autopilot, args.keyboard)
+        controller = DualControl(world, args.autopilot, args.keyboard, args.tm_port)
 
         clock = pygame.time.Clock()
         while True:
@@ -2174,6 +2177,15 @@ def main():
         '-a', '--autopilot',
         action='store_true',
         help='enable autopilot')
+    argparser.add_argument(
+        '--tm-port',
+        default=8000,
+        type=int,
+        help='Traffic Manager port for the hero autopilot (default: 8000). '
+        'The pipeline gives the hero its own port: set_autopilot() creates '
+        'the TM server in this process if none exists yet, and when that '
+        'happens before generate_traffic.py starts, the traffic cars join a '
+        'TM nobody steps and never move. / hero の自動運転用 TM ポート')
     argparser.add_argument(
         '--keyboard',
         action='store_true',

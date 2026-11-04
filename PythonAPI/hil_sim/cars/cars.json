@@ -1,5 +1,5 @@
 {
-  "_doc": "Your own cars (cars/build_cars.sh). Per car: source model, which objects are the wheels and the steering wheel, and the vehicle's specs. forward = the model's axis the car's nose points along. Lengths in metres, mass in kg. / \u81ea\u4f5c\u8eca\u4e21\u306e\u8a2d\u5b9a glass = window material names made invisible (make_glass.py); glass_objects = objects given their own window material first (when windows or lamp lenses share a material with something else).",
+  "_doc": "Your own cars (cars/build_cars.sh). Per car: source model, which objects are the wheels and the steering wheel, and the vehicle's specs. forward = the model's axis the car's nose points along. Lengths in metres, mass in kg. / \u81ea\u4f5c\u8eca\u4e21\u306e\u8a2d\u5b9a glass = window material names made invisible (make_glass.py); glass_objects = objects given their own window material first (when windows or lamp lenses share a material with something else). blinkers = indicator lens/bulb faces given <Name>_BlinkerL/_BlinkerR (side from CARLA y) and made to blink by make_lights.py; mirrors = side-mirror glass faces given <Name>_MirrorGlass (a mirror material). Rule keys: name/objects/materials, material, per_face, box {x|y|abs_y|z: [lo, hi]} in the vehicle frame (metres, x forward from mid-axle, y right, z up from the ground), tint, side (car_guide ch. 4, 12). lenses = lamp lens faces that come out opaque in UE, made invisible with the glass (<Name>_LensGlass).",
   "rx7": {
     "name": "MazdaRX7",
     "make": "mazda",
@@ -16,6 +16,55 @@
     "mass": 1280,
     "tyre_width_m": 0.235,
     "drive_side": "right",
+    "blinkers": [
+      {
+        "name": "FRONTBUMPER_mm_lights",
+        "box": {
+          "x": [
+            1.6,
+            2.1
+          ],
+          "abs_y": [
+            0.58,
+            0.72
+          ]
+        },
+        "tint": "amber"
+      },
+      {
+        "name": "CHASSIS_mm_lights",
+        "box": {
+          "x": [
+            -2.3,
+            -1.8
+          ],
+          "abs_y": [
+            0.58,
+            0.7
+          ]
+        },
+        "tint": "amber"
+      },
+      {
+        "name": "BODY_mm_lights",
+        "box": {
+          "x": [
+            0.4,
+            1.0
+          ],
+          "abs_y": [
+            0.8,
+            1.0
+          ]
+        },
+        "tint": "amber"
+      }
+    ],
+    "mirrors": [
+      {
+        "name": "MIRROR_GLASS"
+      }
+    ],
     "glass_objects": [
       "LOD_A_GLASS_",
       "_LENS_"
@@ -40,8 +89,89 @@
     "mass": 1510,
     "tyre_width_m": 0.225,
     "drive_side": "right",
+    "blinkers": [
+      {
+        "material": [
+          "Ln2Mtl",
+          "TurnSignalGlass1Mtl"
+        ],
+        "box": {
+          "x": [
+            1.9,
+            2.4
+          ]
+        }
+      },
+      {
+        "material": [
+          "Ln2Mtl",
+          "TurnSignalGlass2Mtl"
+        ],
+        "box": {
+          "x": [
+            1.5,
+            1.95
+          ],
+          "abs_y": [
+            0.75,
+            1.0
+          ]
+        }
+      },
+      {
+        "material": [
+          "Ln2Mtl"
+        ],
+        "box": {
+          "x": [
+            -2.4,
+            -2.0
+          ]
+        }
+      },
+      {
+        "material": [
+          "Taillightglass1Mtl"
+        ],
+        "per_face": true,
+        "box": {
+          "x": [
+            -2.4,
+            -2.0
+          ],
+          "abs_y": [
+            0.635,
+            0.8
+          ],
+          "z": [
+            0.57,
+            0.78
+          ]
+        }
+      }
+    ],
+    "mirrors": [
+      {
+        "material": [
+          "Ln1Mtl"
+        ],
+        "box": {
+          "x": [
+            0.2,
+            0.5
+          ],
+          "abs_y": [
+            0.75,
+            0.95
+          ],
+          "z": [
+            0.8,
+            1.0
+          ]
+        }
+      }
+    ],
     "glass": [
-      "glass1",
       "cpillarwindow"
     ]
   },
@@ -65,6 +195,96 @@
     "mass": 1100,
     "tyre_width_m": 0.175,
     "drive_side": "right",
+    "blinkers": [
+      {
+        "material": [
+          "light_signal"
+        ]
+      },
+      {
+        "material": [
+          "glass_lamp"
+        ],
+        "per_face": true,
+        "box": {
+          "x": [
+            1.25,
+            1.7
+          ],
+          "abs_y": [
+            0.45,
+            0.68
+          ],
+          "z": [
+            0.62,
+            0.77
+          ]
+        }
+      },
+      {
+        "material": [
+          "glass_lamp"
+        ],
+        "per_face": true,
+        "box": {
+          "x": [
+            -1.75,
+            -1.2
+          ],
+          "abs_y": [
+            0.45,
+            0.68
+          ],
+          "z": [
+            1.1,
+            1.2
+          ]
+        }
+      },
+      {
+        "material": [
+          "light"
+        ],
+        "box": {
+          "x": [
+            0.7,
+            1.1
+          ],
+          "abs_y": [
+            0.6,
+            0.8
+          ]
+        }
+      }
+    ],
+    "mirrors": [
+      {
+        "material": [
+          "chrome"
+        ],
+        "box": {
+          "x": [
+            0.4,
+            0.9
+          ],
+          "abs_y": [
+            0.7,
+            0.95
+          ],
+          "z": [
+            0.9,
+            1.15
+          ]
+        }
+      }
+    ],
+    "lenses": [
+      {
+        "material": [
+          "glass_lamp"
+        ]
+      }
+    ],
     "glass": [
       "glass_window",
       "glass_surr"
@@ -90,7 +310,47 @@
     ],
     "mass": 1270,
     "tyre_width_m": 0.195,
-    "drive_side": "left"
+    "drive_side": "left",
+    "blinkers": [
+      {
+        "material": [
+          "orange_glass"
+        ]
+      },
+      {
+        "material": [
+          "BMW_MAT_Lights1"
+        ],
+        "tint": "amber",
+        "box": {
+          "x": [
+            1.5,
+            2.4
+          ]
+        }
+      }
+    ],
+    "mirrors": [
+      {
+        "material": [
+          "BMW_MAT_Details_MAT1"
+        ],
+        "box": {
+          "x": [
+            0.2,
+            0.6
+          ],
+          "abs_y": [
+            0.75,
+            0.95
+          ],
+          "z": [
+            0.85,
+            1.05
+          ]
+        }
+      }
+    ]
   },
   "nsx": {
     "name": "HondaNSXR",
@@ -113,7 +373,42 @@
     ],
     "mass": 1270,
     "tyre_width_m": 0.235,
-    "drive_side": "right"
+    "drive_side": "right",
+    "blinkers": [
+      {
+        "material": [
+          "Fri1Mtl"
+        ]
+      },
+      {
+        "material": [
+          "Details1Mtl"
+        ],
+        "box": {
+          "x": [
+            0.7,
+            1.1
+          ],
+          "abs_y": [
+            0.78,
+            1.0
+          ]
+        }
+      }
+    ],
+    "mirrors": [
+      {
+        "material": [
+          "Meshpart7Mtl"
+        ],
+        "box": {
+          "abs_y": [
+            0.78,
+            1.0
+          ]
+        }
+      }
+    ]
   },
   "soarer": {
     "name": "ToyotaSoarer",
@@ -136,7 +431,112 @@
     ],
     "mass": 1580,
     "tyre_width_m": 0.225,
-    "drive_side": "right"
+    "drive_side": "right",
+    "blinkers": [
+      {
+        "material": [
+          "L1Mtl",
+          "L2Mtl",
+          "L3Mtl",
+          "L4Mtl"
+        ],
+        "box": {
+          "x": [
+            1.8,
+            1.92
+          ],
+          "abs_y": [
+            0.68,
+            0.76
+          ]
+        }
+      },
+      {
+        "material": [
+          "Meshesheadlightglass31Mtl",
+          "Meshesheadlightglassextra1Mtl"
+        ],
+        "per_face": true,
+        "box": {
+          "x": [
+            1.75,
+            2.3
+          ],
+          "abs_y": [
+            0.69,
+            0.85
+          ],
+          "z": [
+            0.55,
+            0.72
+          ]
+        }
+      },
+      {
+        "material": [
+          "L5Mtl",
+          "L6Mtl"
+        ]
+      },
+      {
+        "material": [
+          "Meshesheadlightglass31Mtl",
+          "Meshestaillightglassextra1Mtl"
+        ],
+        "per_face": true,
+        "box": {
+          "x": [
+            -2.6,
+            -2.1
+          ],
+          "abs_y": [
+            0.62,
+            0.85
+          ],
+          "z": [
+            0.6,
+            0.78
+          ]
+        }
+      },
+      {
+        "material": [
+          "Meshessidemarkers11Mtl"
+        ]
+      }
+    ],
+    "mirrors": [
+      {
+        "material": [
+          "Mirrors1Mtl"
+        ]
+      }
+    ],
+    "lenses": [
+      {
+        "material": [
+          "Meshesheadlightglass31Mtl",
+          "Meshesheadlightglassextra1Mtl",
+          "Mesheshighbeamglass1Mtl",
+          "Mesheshighbeamglass21Mtl"
+        ]
+      },
+      {
+        "material": [
+          "Meshestaillightglassextra1Mtl"
+        ],
+        "box": {
+          "x": [
+            -2.6,
+            -1.8
+          ],
+          "abs_y": [
+            0.15,
+            1.0
+          ]
+        }
+      }
+    ]
   },
   "sileighty": {
     "name": "NissanSileighty",
@@ -159,7 +559,66 @@
     ],
     "mass": 1200,
     "tyre_width_m": 0.205,
-    "drive_side": "right"
+    "drive_side": "right",
+    "blinkers": [
+      {
+        "material": [
+          "L1Mtl"
+        ]
+      },
+      {
+        "material": [
+          "Alpha1Mtl"
+        ]
+      },
+      {
+        "material": [
+          "Meshesexportcube185cube1251Mtl"
+        ]
+      },
+      {
+        "material": [
+          "Meshess13HatchPartsTlnhlcover001tlnhlcover0021Mtl",
+          "L7Mtl"
+        ],
+        "per_face": true,
+        "box": {
+          "x": [
+            -2.3,
+            -1.9
+          ],
+          "abs_y": [
+            0.3,
+            0.5
+          ],
+          "z": [
+            0.6,
+            0.82
+          ]
+        }
+      }
+    ],
+    "mirrors": [
+      {
+        "material": [
+          "Meshesexportcube189cube1291Mtl"
+        ],
+        "box": {
+          "x": [
+            0.3,
+            0.5
+          ],
+          "abs_y": [
+            0.8,
+            0.95
+          ],
+          "z": [
+            0.8,
+            0.95
+          ]
+        }
+      }
+    ]
   },
   "rb16": {
     "name": "RedBullRB16",
@@ -177,6 +636,11 @@
     "mass": 746,
     "tyre_width_m": 0.35,
     "drive_side": "center",
+    "mirrors": [
+      {
+        "name": "MIRROR_GLASS"
+      }
+    ],
     "glass": [
       "car_windows"
     ],

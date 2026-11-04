@@ -48,6 +48,7 @@ from flask import Flask, Response, jsonify, request
 
 from delivery import live as delivery_live
 import ffb_settings
+import seasons
 import vehicle_tuning
 
 
@@ -1361,6 +1362,66 @@ def vehicle_tuning_route():
         "status": vehicle_tuning.read_status()})
 
 
+# Tree seasons and wind (seasons.py): the choice lives in season.json; the
+# worker below applies it, and again whenever the map is (re)loaded.
+# 樹木の季節と風（seasons.py）。選択は season.json、下のワーカーが適用する。
+SEASON_STATUS = {"applied": None, "result": None, "pending": True}
+
+
+@app.route("/season", methods=["GET", "POST"])
+def season_route():
+    s = seasons.load_state()
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        if body.get("season") in seasons.SEASONS + ("auto",):
+            s["season"] = body["season"]
+        if body.get("wind") is not None:
+            try:
+                s["wind"] = max(0.0, min(100.0, float(body["wind"])))
+            except (TypeError, ValueError):
+                pass
+        try:
+            seasons.save_state(s)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        SEASON_STATUS["pending"] = True
+    return jsonify({"season": s["season"], "wind": s["wind"],
+                    "by_date": seasons.season_for(),
+                    "seasons": [{"key": k, "en": seasons.LABELS[k][0], "ja": seasons.LABELS[k][1]}
+                                for k in ("auto",) + seasons.SEASONS],
+                    "result": SEASON_STATUS["result"], "pending": SEASON_STATUS["pending"]})
+
+
+def season_worker(host, port):
+    """Apply season.json when it changes, when the map (re)loads (a new world
+    id: the swapped texture is gone) and at midnight in 'auto'.
+    season.json の変更時・マップ再読込時・日付変更時に適用する。"""
+    last = None
+    client = None
+    while True:
+        time.sleep(1.0)
+        try:
+            if client is None:
+                client = carla.Client(host, port)
+                client.set_timeout(20.0)
+            world = client.get_world()
+            s = seasons.load_state()
+            eff = seasons.season_for() if s["season"] == "auto" else s["season"]
+            key = (world.id, s["season"], eff, round(float(s["wind"]), 1))
+            if key == last and not SEASON_STATUS["pending"]:
+                continue
+            if last is not None and key[0] != last[0]:
+                time.sleep(3.0)                   # let a fresh map settle / 読込直後は少し待つ
+            r = seasons.apply(world, s["season"], s["wind"])
+            r["at"] = time.strftime("%H:%M:%S")
+            SEASON_STATUS.update({"result": r, "pending": False})
+            last = key
+        except Exception as exc:
+            SEASON_STATUS["result"] = {"ok": False, "error": str(exc), "at": time.strftime("%H:%M:%S")}
+            client = None
+            time.sleep(5.0)
+
+
 def vehicle_tuning_worker(host, port):
     """Keep every car's physics in line with vehicle_tuning.json.
 
@@ -1687,6 +1748,8 @@ HTML = r"""<!doctype html>
           border-radius:6px; padding:4px 10px; min-height:26px; cursor:pointer;
           text-transform:none; letter-spacing:.3px; }
   .rbtn:hover { border-color:var(--blue); color:var(--ink); }
+  .seasonbtns { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 10px; }
+  .seasonbtns .rbtn.active { background:var(--blue); border-color:var(--blue); color:#fff; }
   .chartwrap { position:relative; }
   canvas { background:var(--panel2); border-radius:8px; display:block;
            width:100%; height:140px; }
@@ -2277,6 +2340,15 @@ HTML = r"""<!doctype html>
       <span class="v"><span id="wwd">0</span>%</span></div>
     <div class="kv"><span data-i18n="lbl_sunalt">Sun altitude</span>
       <span class="v" id="wsa">0°</span></div>
+  </div>
+
+  <div class="card">
+    <h3 data-i18n="card_season">Season &amp; wind</h3>
+    <div class="seasonbtns" id="season-btns" role="group" aria-label="Season"></div>
+    <div class="inlbl"><span data-i18n="season_wind">Wind (trees sway)</span><b id="v-swind">30</b></div>
+    <input type="range" id="r-swind" min="0" max="100" step="5" value="30">
+    <div class="kv"><span data-i18n="season_now">Showing</span><span class="v" id="season-eff">-</span></div>
+    <div class="sub" id="season-msg"></div>
   </div>
 
   <div class="card">
@@ -3114,6 +3186,7 @@ HTML = r"""<!doctype html>
       <span><i class="c" style="background:#199e70"></i><span data-i18n="dr_lg_drone">drone (colour = battery)</span></span>
       <span><i style="background:#78ff3c"></i><span data-i18n="dr_lg_station">charge station</span></span>
       <span><i style="background:#ffd228"></i><span data-i18n="dr_lg_ev">EV charger (pods)</span></span>
+      <span><i style="background:#c084fc"></i><span data-i18n="dr_lg_box">Box station</span></span>
       <span><i class="c" style="background:#ff8c00"></i><span data-i18n="dr_lg_f2f">face-to-face order</span></span>
       <span><i class="c" style="background:#00a0ff"></i><span data-i18n="dr_lg_dr">drone order</span></span>
       <span><i style="background:#dc00dc"></i><span data-i18n="dr_lg_hub">drone hub</span></span>
@@ -3383,7 +3456,7 @@ const I18N = {
   dr_waiting:'No delivery simulation running.', dr_noevents:'No events yet.',
   dr_none:'not running', dr_live:'live', dr_stopped:'stopped', dr_steady:'steady', dr_sent:'sent',
   dr_grounded:'GROUNDED', dr_wind_hold:'Take-off hold above',
-  dr_lg_ev:'EV charger (pods)', dr_chip_busy:'Busy pods', dr_th_podbatt:'Pod battery',
+  dr_lg_ev:'EV charger (pods)', dr_lg_box:'Box station', dr_chip_busy:'Busy pods', dr_th_podbatt:'Pod battery',
   dr_s_evch:'Pod EV charges', dr_s_podkm:'Pod distance', dr_s_strand:'Pods stranded',
   dr_nodrone:'no drone',
   dr_th_drone:'Drone', dr_th_status:'Status', dr_th_batt:'Battery', dr_th_van:'Pod', dr_th_order:'Order',
@@ -3463,6 +3536,8 @@ const I18N = {
   card_lane:'Lane / Road', lbl_onroad:'On road', lbl_roadlane:'Road / Lane',
   lbl_lanew:'Lane width', lbl_laneoff:'Lane offset', lbl_junction:'Junction',
   yes:'yes', no:'no', offroad:'OFF ROAD',
+  card_season:'Season & wind', season_wind:'Wind (trees sway)', season_now:'Showing',
+  season_pending:'applying…', season_ok:'applied to {n} leaf objects at {at}',
   card_weather:'Weather', lbl_cloud:'Cloud', lbl_rain:'Rain', lbl_wet:'Wetness',
   lbl_fog:'Fog', lbl_wind:'Wind', lbl_sunalt:'Sun altitude',
   card_trip:'Trip', lbl_elapsed:'elapsed', lbl_avgspeed:'Avg speed',
@@ -3537,7 +3612,7 @@ const I18N = {
   dr_waiting:'配送シミュレーションは動いていません。', dr_noevents:'イベントはまだありません。',
   dr_none:'停止中', dr_live:'稼働中', dr_stopped:'終了', dr_steady:'安定', dr_sent:'送信',
   dr_grounded:'離陸禁止', dr_wind_hold:'離陸禁止の風速',
-  dr_lg_ev:'EV 充電器（ポッド）', dr_chip_busy:'稼働ポッド', dr_th_podbatt:'ポッド電池',
+  dr_lg_ev:'EV 充電器（ポッド）', dr_lg_box:'箱型ステーション', dr_chip_busy:'稼働ポッド', dr_th_podbatt:'ポッド電池',
   dr_s_evch:'ポッドの充電回数', dr_s_podkm:'ポッド走行距離', dr_s_strand:'電池切れポッド',
   dr_nodrone:'機体なし',
   dr_th_drone:'機体', dr_th_status:'状態', dr_th_batt:'電池', dr_th_van:'ポッド', dr_th_order:'注文',
@@ -3616,6 +3691,8 @@ const I18N = {
   card_lane:'車線・道路', lbl_onroad:'車線上', lbl_roadlane:'道路/車線ID',
   lbl_lanew:'車線幅', lbl_laneoff:'横オフセット', lbl_junction:'交差点',
   yes:'はい', no:'いいえ', offroad:'車線外',
+  card_season:'季節と風', season_wind:'風（木が揺れる）', season_now:'表示中',
+  season_pending:'適用中…', season_ok:'{at} に葉オブジェクト {n} 個へ適用',
   card_weather:'天候', lbl_cloud:'雲量', lbl_rain:'雨', lbl_wet:'路面湿潤',
   lbl_fog:'霧', lbl_wind:'風', lbl_sunalt:'太陽高度',
   card_trip:'走行', lbl_elapsed:'経過時間', lbl_avgspeed:'平均速度',
@@ -3673,6 +3750,7 @@ function applyLang() {
   $('lang-en').classList.toggle('active', LANG === 'en');
   $('lang-ja').classList.toggle('active', LANG === 'ja');
   renderSessTable(); renderHist(); if (FF.params) ffBuild(); if (VT.params) vtBuild();
+  if (typeof seasonRender === 'function') seasonRender();
 }
 function setLang(l) { LANG = l; localStorage.setItem('carla_lang', l); applyLang(); }
 $('lang-en').onclick = () => setLang('en');
@@ -4530,6 +4608,57 @@ $('tune-reset').onclick = () => {
 loadTune();
 setInterval(loadTune, 5000);   // reflect in-sim [ / ] key changes
 
+// Season & wind card (seasons.py) / 季節と風
+var SEASON = null, seasonWindTimer = null, seasonDragging = false;   // var: applyLang may run first
+function seasonLabel(k) {
+  const it = SEASON && SEASON.seasons.find(x => x.key === k);
+  return it ? (LANG === 'ja' ? it.ja : it.en) : k;
+}
+function seasonRender() {
+  if (!SEASON) return;
+  const box = $('season-btns');
+  if (box.childElementCount !== SEASON.seasons.length) {
+    box.innerHTML = '';
+    SEASON.seasons.forEach(it => {
+      const b = document.createElement('button');
+      b.className = 'rbtn'; b.dataset.key = it.key;
+      b.onclick = () => seasonPost({season: it.key});
+      box.appendChild(b);
+    });
+  }
+  box.querySelectorAll('button').forEach(b => {
+    b.textContent = seasonLabel(b.dataset.key);
+    b.classList.toggle('active', b.dataset.key === SEASON.season);
+    b.setAttribute('aria-pressed', b.dataset.key === SEASON.season ? 'true' : 'false');
+  });
+  if (!seasonDragging) { $('r-swind').value = SEASON.wind; $('v-swind').textContent = Math.round(SEASON.wind); }
+  const eff = SEASON.season === 'auto' ? SEASON.by_date : SEASON.season;
+  $('season-eff').textContent = seasonLabel(eff);
+  const r = SEASON.result;
+  $('season-msg').textContent = SEASON.pending ? t('season_pending')
+    : !r ? '' : r.ok ? t('season_ok').replace('{n}', r.objects ?? 0).replace('{at}', r.at || '')
+    : (r.error || '');
+}
+async function seasonTick() {
+  try { SEASON = await (await fetch('/season')).json(); seasonRender(); } catch (e) {}
+}
+async function seasonPost(body) {
+  try {
+    SEASON = await (await fetch('/season', {method:'POST', headers:{'Content-Type':'application/json'},
+                                           body: JSON.stringify(body)})).json();
+    seasonRender();
+  } catch (e) {}
+}
+$('r-swind').addEventListener('input', () => {
+  $('v-swind').textContent = $('r-swind').value;
+  clearTimeout(seasonWindTimer);
+  seasonWindTimer = setTimeout(() => seasonPost({wind: parseFloat($('r-swind').value)}), 300);
+});
+$('r-swind').addEventListener('pointerdown', () => { seasonDragging = true; });
+$('r-swind').addEventListener('pointerup', () => { seasonDragging = false; });
+seasonTick();
+setInterval(seasonTick, 2000);
+
 
 /* ---------------------------------------------------- vehicle performance */
 // Brakes / power / top speed multipliers (vehicle_tuning.py); the dashboard's
@@ -5052,6 +5181,79 @@ function drArrow(ctx, x, y, dx, dy, col, w) {
   ctx.closePath(); ctx.fill();
 }
 
+// CARLA's own top-down map colours (PythonAPI/examples/no_rendering_mode.py, Tango palette)
+// CARLA の 2D 地図と同じ配色
+const DR_MAPC = {ground:'#555753', road:'#2e3436', side:'#888a85', shoulder:'#423e40',
+                 park:'#423e40', bld:'#46484a', bldEdge:'#3a3c3d', white:'#babdb6', yellow:'#edd400'};
+
+// the map itself (lanes, markings, buildings), redrawn only when the view
+// changes / 地図本体は表示範囲が変わった時だけ描き直す
+function drBaseLayer(W, H, dpr) {
+  const m = DR.map, v = DR.view;
+  const key = [m.map, W, H, dpr, v.cx, v.cy, v.s].join();
+  if (DR.base && DR.baseKey === key && DR.baseMap === m) return DR.base;
+  const cv = DR.base || document.createElement('canvas');
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const cw = W / 2, ch = H / 2;
+  const path = (f, close) => {
+    ctx.beginPath();
+    for (let i = 0; i < f.length; i += 2) {
+      const x = (f[i] - v.cx) * v.s + cw, y = (f[i + 1] - v.cy) * v.s + ch;
+      if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    }
+    if (close) ctx.closePath();
+  };
+  // buildings / 建物
+  ctx.fillStyle = m.lanes ? DR_MAPC.bld : '#18202d';
+  ctx.strokeStyle = m.lanes ? DR_MAPC.bldEdge : '#243044'; ctx.lineWidth = 1;
+  const pt = (x, y) => [(x - v.cx) * v.s + cw, (y - v.cy) * v.s + ch];
+  for (const [x, y, ex, ey, yaw] of m.buildings) {
+    const r = yaw * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+    ctx.beginPath();
+    [[ex, ey], [-ex, ey], [-ex, -ey], [ex, -ey]].forEach(([a, b], i) => {
+      const p = pt(x + a * c - b * sn, y + a * sn + b * c);
+      if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]);
+    });
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  if (m.lanes) {
+    // pavements and shoulders under the carriageways, as CARLA draws them;
+    // each lane is also outlined in its own colour so neighbouring lanes meet
+    // without a seam / 歩道・路肩の上に車道。隙間が出ないよう同色で縁取る
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 1.2;
+    for (const [kinds, col] of [[['s'], DR_MAPC.side], [['h', 'p'], DR_MAPC.shoulder], [['d'], DR_MAPC.road]]) {
+      ctx.fillStyle = ctx.strokeStyle = col;
+      for (const [k, f] of m.lanes) {
+        if (!kinds.includes(k)) continue;
+        path(f, true); ctx.fill(); ctx.stroke();
+      }
+    }
+    // lane markings, only once they are big enough to read / 区画線（拡大時のみ）
+    if (v.s > 0.6) {
+      ctx.lineCap = 'butt';
+      ctx.lineWidth = Math.max(1, Math.min(3, 0.15 * v.s));
+      const dash = [3 * v.s, 5 * v.s];
+      for (const [col, broken, f] of m.marks || []) {
+        ctx.strokeStyle = col === 'y' ? DR_MAPC.yellow : DR_MAPC.white;
+        ctx.setLineDash(broken ? dash : []);
+        path(f, false); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+  } else {
+    // older delivery_sim: lane centre lines only / 旧形式: 車線中心線のみ
+    ctx.strokeStyle = '#33415a'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1.2, 3.4 * v.s);
+    for (const pl of m.roads) { path(pl.flat(), false); ctx.stroke(); }
+  }
+  DR.base = cv; DR.baseKey = key; DR.baseMap = m;
+  return cv;
+}
+
 function drDrawMap() {
   const cv = $('dmap'), dpr = window.devicePixelRatio || 1;
   const W = cv.clientWidth, H = cv.clientHeight;
@@ -5061,8 +5263,8 @@ function drDrawMap() {
   }
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#0c1119'; ctx.fillRect(0, 0, W, H);
   const m = DR.map, s = DR.state;
+  ctx.fillStyle = m && m.lanes ? DR_MAPC.ground : '#0c1119'; ctx.fillRect(0, 0, W, H);
   DR.hits = [];
   if (!m) {
     ctx.fillStyle = C.mute; ctx.font = '13px ' + getComputedStyle(document.body).fontFamily;
@@ -5072,18 +5274,7 @@ function drDrawMap() {
   }
   if (!DR.view) drFit();
   const v = DR.view;
-  // buildings, then roads / 建物、道路
-  ctx.fillStyle = '#18202d'; ctx.strokeStyle = '#243044'; ctx.lineWidth = 1;
-  for (const [x, y, ex, ey, yaw] of m.buildings) {
-    drBox(ctx, x, y, ex, ey, yaw); ctx.fill(); ctx.stroke();
-  }
-  ctx.strokeStyle = '#33415a'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.lineWidth = Math.max(1.2, 3.4 * v.s);
-  for (const pl of m.roads) {
-    ctx.beginPath();
-    pl.forEach(([x, y], i) => { const p = drP(x, y); if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); });
-    ctx.stroke();
-  }
+  ctx.drawImage(drBaseLayer(W, H, dpr), 0, 0, W, H);
   const R = k => Math.max(k, k * v.s / 2.2);     // marker size grows when zoomed in
   // charge station / 充電所
   ctx.fillStyle = '#78ff3c33'; ctx.strokeStyle = '#78ff3c';
@@ -5106,6 +5297,13 @@ function drDrawMap() {
     ctx.textAlign = 'center'; ctx.fillText('EV', p[0], p[1] + 3);
     DR.hits.push({x:p[0], y:p[1], r:9, tip:t('dr_lg_ev')});
   }
+  // LastMile box stations on the pavements / 歩道の箱型ステーション
+  (m.boxes || []).forEach(([x, y], i) => {
+    const p = drP(x, y), r = R(3.5);
+    ctx.fillStyle = '#c084fc'; ctx.strokeStyle = '#0d1117'; ctx.lineWidth = 1.5;
+    ctx.fillRect(p[0] - r, p[1] - r * 1.3, 2 * r, 2.6 * r); ctx.strokeRect(p[0] - r, p[1] - r * 1.3, 2 * r, 2.6 * r);
+    DR.hits.push({x:p[0], y:p[1], r:8, tip:t('dr_lg_box') + ' ' + (i + 1)});
+  });
   if (!s || !s.available) return;
   // drones on the pads, listed beside the station / 充電パッド上の機体
   const parked = (s.drones || []).filter(d => d.status === 'charging' || d.status === 'standby');
@@ -5633,6 +5831,8 @@ def main():
         daemon=True)
     t.start()
     threading.Thread(target=vehicle_tuning_worker, args=(args.host, args.port),
+                     daemon=True).start()
+    threading.Thread(target=season_worker, args=(args.host, args.port),
                      daemon=True).start()
 
     print("[dashboard] serving http://0.0.0.0:%d/" % args.dashboard_port)

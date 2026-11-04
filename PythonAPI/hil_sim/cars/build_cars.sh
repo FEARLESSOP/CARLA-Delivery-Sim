@@ -41,8 +41,8 @@ step "1/8 Blender: vehicle + steering wheel per car"
 rm -rf "$STAGE" "$VEHSTAGE" "$CONTENT/$PKG"   # textures go to $STAGE/<Name>_textures
 mkdir -p "$STAGE" "$VEHSTAGE"
 for k in "${KEYS[@]}"; do
-    "${BLENDER:-blender}" -b -P "$HERE/prepare_car.py" -- "$HERE/cars.json" "$k" "$STAGE" \
-        2>&1 | grep -E "^CAR|Error|SystemExit" | cut -c1-200 || true
+    "${BLENDER:-blender}" -b --disable-autoexec -P "$HERE/prepare_car.py" -- "$HERE/cars.json" "$k" "$STAGE" \
+        2>&1 | grep -E "^CAR|Error|SystemExit|rule matched|blinkers:" | cut -c1-200 || true
     [ -f "$STAGE/$k.json" ] || { echo "Blender step failed for $k"; exit 1; }
     mv "$STAGE/$k.json" "$VEHSTAGE/"
 done
@@ -95,10 +95,23 @@ PYEOF
     tail -1 "$ASSETS/build_car_$k.log" | grep -q '^OK$' || { echo "vehicle build failed: $k"; exit 1; }
     GLASS="$("$PY" -c "import json,sys; print(','.join(json.load(open(sys.argv[1])).get('glass', [])))" "$VEHSTAGE/$k.json")"
     if [ -n "$GLASS" ]; then          # see-through windows / 窓を半透明に
+        rm -f "$HERE/make_glass_$k.log"   # no stale OK / 古い OK を残さない
         CAR_DIR="/Game/$PKG/Vehicles/$NAME" CAR_GLASS="$GLASS" CAR_GLASS_LOG="make_glass_$k.log" \
             "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/make_glass.py" >/dev/null 2>&1 || true
         cat "$HERE/make_glass_$k.log"
         tail -1 "$HERE/make_glass_$k.log" | grep -q '^OK$' || { echo "glass failed: $k"; exit 1; }
+    fi
+    # blinking indicators + mirror glass (cars.json "blinkers" / "mirrors")
+    # ウインカー（点滅）とミラーのマテリアル
+    LIGHTS="$("$PY" -c "import json,sys; c=json.load(open(sys.argv[1])); print('|'.join(','.join(c.get(k, [])) for k in ('blinker_left', 'blinker_right', 'mirror')))" "$VEHSTAGE/$k.json")"
+    if [ "$LIGHTS" != "||" ]; then
+        IFS='|' read -r BLINK_L BLINK_R MIRROR <<< "$LIGHTS"
+        rm -f "$HERE/make_lights_$k.log"
+        CAR_DIR="/Game/$PKG/Vehicles/$NAME" CAR_BLINK_L="$BLINK_L" CAR_BLINK_R="$BLINK_R" CAR_MIRROR="$MIRROR" \
+            CAR_LIGHTS_LOG="make_lights_$k.log" \
+            "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/make_lights.py" >/dev/null 2>&1 || true
+        cat "$HERE/make_lights_$k.log"
+        tail -1 "$HERE/make_lights_$k.log" | grep -q '^OK$' || { echo "lights failed: $k"; exit 1; }
     fi
     # the steering-wheel prop too: the props map alone left one out (Soarer)
     # ハンドルも明示的に cook する（props map だけでは漏れることがある）

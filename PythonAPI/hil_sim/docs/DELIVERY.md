@@ -240,3 +240,66 @@ pod with nothing queued gets a batch within seconds; at most
 | `delivery/lmp_van.py` | LastMile pod stop logic: drone and direct stops, deck, magazine / 停車地の作業 |
 | `delivery/assets/build_lastmile.sh` | build + install the LastMile pod (Blender, UE4 editor, cook) / ビルド |
 | `tests/test_lmp_rig.py`, `tests/test_lmp_van.py` | port vs the HTML; stop logic / 試験 |
+
+## Box stations in the world / 世界に置かれた箱型ステーション
+
+On keep-left maps (`"keep_left": true` in `maps/maps.json`, e.g. Oita Station)
+the LastMile pods no longer set their own box down beside them. Instead
+`delivery/boxes.py` places box stations around the city at startup, like post
+boxes:
+
+- on the raised pavement just behind the kerb of a kerb-side lane, away from
+  junctions, at least `--box-spacing` (110 m) apart; the kerb is found on the
+  3-D model (where the ground steps up), since the road logic's lane edge
+  need not match the modelled road;
+- each site is checked: every point of the box's footprint and the
+  customer's spot on the same pavement level, nothing in the way up to 2 m,
+  and an arm reach of at most 3 m;
+- intake towards the road (the pod's side port is on its left), compartment
+  door towards the pavement.
+
+A face-to-face order goes to a free box. The pod drives there, docks (creeps
+along the kerb lane, holding the lane centre, until its port is level with
+the box), extends the side port as far as that box needs, puts the parcel in
+and drives on -- the rest of the flow (drones meeting at the stop) is
+unchanged. The parcel waits in the box; 20-60 s later a pedestrian walks up
+along the pavement, opens the compartment, takes it and leaves. The
+dashboard's Delivery map shows the boxes. `--no-box-stations` goes back to
+the pod's own box; keep-right maps always use it (the port faces the road
+centre there).
+
+左側通行のマップでは、箱型ステーションを歩道に点在させ、対面注文はその箱へ
+配達する。ポッドは横付けしてサイドポートを必要な長さまで伸ばし、荷物を入れて
+出発する。その後、歩行者が受け取りに来る。
+
+## Wind / 風
+
+A gust stronger than a drone (11 m/s) pushes it off its path; it flies back
+once the gust eases and only crashes if the push takes it into something
+(the collision check runs on the drifted position). In a test a 16 m/s gust
+pushed a drone 17.7 m off course and it carried on. `--lost-drift M` brings
+back the old hard limit (lost when pushed further than M metres).
+
+突風で流されても、何かに衝突しない限りドローンは経路に戻る。
+
+## Oita Station ring road / 外周道路
+
+The 3D model has a ring road (外周道路) round its outside that is not in
+OpenStreetMap. `maps/add_ring_road.py` (run by `maps/prepare_oita.py` before
+netconvert) cuts the OSM streets where they meet it and adds it as a
+two-lane, 7.5 m road with a T-junction at each street, the way the model's
+own build does. Autopilot cars and pods drive on it; nothing runs past it.
+
+- The traffic manager's cached map (`.../OitaStation/TM/OitaStation.bin`)
+  was made from the original road logic and crashed the traffic manager with
+  the new one. It is moved aside (`.bin.before_ring`); the traffic manager
+  builds its map itself in under a second.
+- The level's baked spawn points come from the original road logic (43
+  outside the ring, most facing backwards). `lane_spawns.py` keeps the ones
+  on a lane, snapped to its centre and heading; traffic, the hero car and
+  the delivery pods use it.
+- Pods only stop where they can drive both in and out again (one-way
+  streets can lead nowhere), re-route when a route ends short of a box
+  station, and drive round the block to a box they have just passed.
+
+外周道路を道路情報に追加し、その外側の道路を削除した。

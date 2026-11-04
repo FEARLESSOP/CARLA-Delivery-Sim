@@ -54,10 +54,20 @@
       0.3952,
       0.9838
     ],
-    "materials": 11,
+    "materials": 14,
     "glass": [
       "MazdaRX7_WindowGlass"
-    ]
+    ],
+    "blinker_left": [
+      "MazdaRX7_BlinkerL"
+    ],
+    "blinker_right": [
+      "MazdaRX7_BlinkerR"
+    ],
+    "mirror": [
+      "MazdaRX7_MirrorGlass"
+    ],
+    "light_pieces": 10
   },
   "vehicle.toyota.supra_a70": {
     "name": "ToyotaSupraA70",
@@ -114,11 +124,20 @@
       0.3519,
       0.9607
     ],
-    "materials": 67,
+    "materials": 70,
     "glass": [
-      "glass1",
       "cpillarwindow"
-    ]
+    ],
+    "blinker_left": [
+      "ToyotaSupraA70_BlinkerL"
+    ],
+    "blinker_right": [
+      "ToyotaSupraA70_BlinkerR"
+    ],
+    "mirror": [
+      "ToyotaSupraA70_MirrorGlass"
+    ],
+    "light_pieces": 94
   },
   "vehicle.mitsubishi.i_miev": {
     "name": "MitsubishiIMiev",
@@ -175,11 +194,22 @@
       0.3514,
       1.2164
     ],
-    "materials": 23,
+    "materials": 27,
     "glass": [
       "glass_window",
-      "glass_surr"
-    ]
+      "glass_surr",
+      "MitsubishiIMiev_LensGlass"
+    ],
+    "blinker_left": [
+      "MitsubishiIMiev_BlinkerL"
+    ],
+    "blinker_right": [
+      "MitsubishiIMiev_BlinkerR"
+    ],
+    "mirror": [
+      "MitsubishiIMiev_MirrorGlass"
+    ],
+    "light_pieces": 500
   },
   "vehicle.bmw.csl_e9": {
     "name": "BMW30CSL",
@@ -236,10 +266,20 @@
       -0.3641,
       1.096
     ],
-    "materials": 18,
+    "materials": 21,
     "glass": [
       "bmw_mat_glass1"
-    ]
+    ],
+    "blinker_left": [
+      "BMW30CSL_BlinkerL"
+    ],
+    "blinker_right": [
+      "BMW30CSL_BlinkerR"
+    ],
+    "mirror": [
+      "BMW30CSL_MirrorGlass"
+    ],
+    "light_pieces": 8
   },
   "vehicle.honda.nsx_r": {
     "name": "HondaNSXR",
@@ -296,10 +336,20 @@
       0.4268,
       0.9321
     ],
-    "materials": 24,
+    "materials": 27,
     "glass": [
       "meshpart7mtl"
-    ]
+    ],
+    "blinker_left": [
+      "HondaNSXR_BlinkerL"
+    ],
+    "blinker_right": [
+      "HondaNSXR_BlinkerR"
+    ],
+    "mirror": [
+      "HondaNSXR_MirrorGlass"
+    ],
+    "light_pieces": 14
   },
   "vehicle.toyota.soarer": {
     "name": "ToyotaSoarer",
@@ -356,10 +406,21 @@
       0.4221,
       0.9954
     ],
-    "materials": 99,
+    "materials": 103,
     "glass": [
-      "mesheslwindow1"
-    ]
+      "mesheslwindow1",
+      "ToyotaSoarer_LensGlass"
+    ],
+    "blinker_left": [
+      "ToyotaSoarer_BlinkerL"
+    ],
+    "blinker_right": [
+      "ToyotaSoarer_BlinkerR"
+    ],
+    "mirror": [
+      "ToyotaSoarer_MirrorGlass"
+    ],
+    "light_pieces": 3108
   },
   "vehicle.nissan.sileighty": {
     "name": "NissanSileighty",
@@ -412,16 +473,27 @@
       "diameter_m": 0.397
     },
     "driver_eye": [
-      -0.2445,
-      0.3939,
-      0.9157
+      -0.244,
+      0.394,
+      1.016
     ],
-    "materials": 53,
+    "materials": 56,
     "glass": [
       "mesheshatchfrontwindowcube169cube055material16631",
       "meshesexportcube202cube1431",
       "mesheshatchmissingpartss13ref006s13ref008none1"
-    ]
+    ],
+    "blinker_left": [
+      "NissanSileighty_BlinkerL"
+    ],
+    "blinker_right": [
+      "NissanSileighty_BlinkerR"
+    ],
+    "mirror": [
+      "NissanSileighty_MirrorGlass"
+    ],
+    "light_pieces": 597,
+    "eye_tuned": true
   },
   "vehicle.redbull.rb16": {
     "name": "RedBullRB16",
@@ -476,19 +548,25 @@
     "driver_eye": [
       0.14,
       0.0,
-      0.74
+      0.76
     ],
-    "materials": 9,
+    "materials": 10,
     "glass": [
       "car_windows"
     ],
+    "blinker_left": [],
+    "blinker_right": [],
+    "mirror": [
+      "RedBullRB16_MirrorGlass"
+    ],
+    "light_pieces": 2,
     "cameras": [
       {
         "name": "Cockpit",
         "loc": [
           0.14,
           0.0,
-          0.74
+          0.76
         ],
         "rot": [
           -6.0,

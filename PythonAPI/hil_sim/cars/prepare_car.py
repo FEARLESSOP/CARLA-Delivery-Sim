@@ -12,7 +12,11 @@ From the car's entry in cars.json:
                      rolling it about x (cars/car_views.py)
   <key>.json         wheel centres / radius, bounds, the steering wheel's hub
                      and column tilt, and a first guess at the driver's eye,
-                     all in CARLA axes (x forward, y right, z up, metres)
+                     all in CARLA axes (x forward, y right, z up, metres),
+                     plus the blinker / mirror slots for make_lights.py
+
+"blinkers" / "mirrors" rules give indicator lenses <Name>_BlinkerL/_BlinkerR
+(side by CARLA y) and side-mirror glass <Name>_MirrorGlass (select_faces).
 
 Blender (x, y, z) arrives in CARLA as (x, -y, z).
 
@@ -141,6 +145,146 @@ def column_axis(o):
     return n
 
 
+def islands(o, faces, weld=0.002):
+    """Connected pieces of ``faces`` (polygon indices of ``o``). Vertices closer
+    than ``weld`` count as shared: OBJ parts often have split vertices.
+    面を連結部品に分ける（近接頂点は共有とみなす）。"""
+    key = [tuple(int(round(c / weld)) for c in v.co) for v in o.data.vertices]
+    parent = {f: f for f in faces}
+
+    def root(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    owner = {}
+    for f in faces:
+        for vi in o.data.polygons[f].vertices:
+            k = key[vi]
+            if k in owner:
+                ra, rb = root(f), root(owner[k])
+                if ra != rb:
+                    parent[ra] = rb
+            else:
+                owner[k] = f
+    out = {}
+    for f in faces:
+        out.setdefault(root(f), []).append(f)
+    return list(out.values())
+
+
+_pixels = {}
+
+
+def face_colour(o, faces):
+    """Mean base colour of ``faces``: the base-colour texture sampled at the
+    face corners and centres, or the material's base colour.
+    面の平均色（テクスチャを UV で読む、無ければ基本色）。"""
+    me, cols = o.data, []
+    uv = me.uv_layers.active
+    for f in faces:
+        p = me.polygons[f]
+        mat = me.materials[p.material_index] if p.material_index < len(me.materials) else None
+        img, base = None, (1.0, 1.0, 1.0)
+        if mat and mat.use_nodes:
+            for n in mat.node_tree.nodes:
+                if n.type == "BSDF_PRINCIPLED":
+                    sock = n.inputs["Base Color"]
+                    base = tuple(sock.default_value[:3])
+                    if sock.is_linked and sock.links[0].from_node.type == "TEX_IMAGE":
+                        img = sock.links[0].from_node.image
+                    break
+        if img is None or uv is None or not img.size[0]:
+            cols.append(base)
+            continue
+        if img.name not in _pixels:
+            import numpy as np     # bundled with Blender / Blender 同梱
+            px = np.empty(img.size[0] * img.size[1] * 4, dtype=np.float32)
+            img.pixels.foreach_get(px)
+            _pixels[img.name] = (img.size[0], img.size[1], px)
+        w, h, px = _pixels[img.name]
+        uvs = [uv.data[li].uv for li in p.loop_indices]
+        uvs.append(sum(uvs, Vector((0.0, 0.0))) / len(uvs))
+        for t in uvs:
+            i = (int((t.y % 1.0) * (h - 1)) * w + int((t.x % 1.0) * (w - 1))) * 4
+            cols.append(tuple(float(c) for c in px[i:i + 3]))
+    return [sum(c[i] for c in cols) / len(cols) for i in range(3)]
+
+
+def tinted(rgb, tint):
+    """Colour test for "tint" rules / 色の判定: amber = orange-yellow lens."""
+    r, g, b = rgb
+    if tint == "amber":
+        return r > 0.2 and 0.2 <= g / r <= 0.85 and b <= 0.5 * r
+    raise SystemExit("unknown tint: %s" % tint)
+
+
+def select_faces(objs, specs, what):
+    """Face groups chosen by the cars.json "blinkers" / "mirrors" rules, in the
+    final vehicle frame (CARLA axes, metres: x forward from mid-axle, y right,
+    z up from the ground; the frame of the CAR line). Each rule:
+      name / objects / materials   which objects (as for wheels; all if none)
+      material  [names]            only faces with these materials
+      per_face  true               judge single faces, not connected pieces
+      box  {x|y|abs_y|z: [lo, hi]} the piece's (or face's) centre must be inside
+      tint "amber"                 the piece's colour must be amber
+      side "left"|"right"          blinkers only: force the side (else by y)
+    Returns [(object, faces, centre, rule)]; a rule matching nothing stops.
+    cars.json のルールで面を選ぶ（最終座標系：x 前、y 右、z 上、m）。"""
+    if isinstance(specs, dict):
+        specs = [specs]
+    out = []
+    for spec in specs:
+        want = {m.lower() for m in spec.get("material", [])}
+        box, n = spec.get("box", {}), 0
+        for o in objs:
+            if any(k in spec for k in ("name", "objects", "materials")) and not matches(o, spec):
+                continue
+            mats = o.data.materials
+            faces = [p.index for p in o.data.polygons
+                     if not want or (p.material_index < len(mats) and mats[p.material_index]
+                                     and mats[p.material_index].name.lower() in want)]
+            if not faces:
+                continue
+            for group in ([[f] for f in faces] if spec.get("per_face") else islands(o, faces)):
+                vs = [o.data.vertices[vi].co for f in group for vi in o.data.polygons[f].vertices]
+                lo_ = Vector([min(v[i] for v in vs) for i in range(3)])
+                hi_ = Vector([max(v[i] for v in vs) for i in range(3)])
+                c = carla((lo_ + hi_) / 2.0)
+                val = {"x": c[0], "y": c[1], "abs_y": abs(c[1]), "z": c[2]}
+                if not all(r[0] <= val[k] <= r[1] for k, r in box.items()):
+                    continue
+                if "tint" in spec and not tinted(face_colour(o, group), spec["tint"]):
+                    continue
+                out.append((o, group, c, spec))
+                n += 1
+        if not n:
+            raise SystemExit("%s: rule matched no faces: %s" % (what, spec))
+    return out
+
+
+def set_material(o, faces, mat):
+    """Give ``faces`` of ``o`` the material ``mat`` / 面にマテリアルを割り当てる"""
+    if mat.name not in [m.name for m in o.data.materials if m]:
+        o.data.materials.append(mat)
+    idx = [i for i, m in enumerate(o.data.materials) if m and m.name == mat.name][0]
+    for f in faces:
+        o.data.polygons[f].material_index = idx
+
+
+def flat_material(name, rgb, metallic=0.0, roughness=0.5):
+    """A plain material; make_lights.py (UE) swaps it by slot name.
+    単色マテリアル（UE 側の make_lights.py がスロット名で差し替える）。"""
+    mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    mat.use_nodes = True
+    mat.diffuse_color = (rgb[0], rgb[1], rgb[2], 1.0)
+    bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Base Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
+    bsdf.inputs["Metallic"].default_value = metallic
+    bsdf.inputs["Roughness"].default_value = roughness
+    return mat
+
+
 def main():
     cfg_path, key, out_dir = sys.argv[sys.argv.index("--") + 1:][:3]
     cfg = json.load(open(cfg_path))[key]
@@ -245,6 +389,45 @@ def main():
         centres[b] -= origin
     lo, hi = bounds(objs)
 
+    # mirror glass and blinker lenses get their own materials; make_lights.py
+    # (UE) swaps them by slot name for a mirror look and blinking amber
+    # ミラーとウインカーに専用マテリアル（UE の make_lights.py が差し替える）
+    pieces, light_slots = [], {"blinker_left": [], "blinker_right": [], "mirror": []}
+    body_objs = [o for o in objs if o is not steer]
+    if cfg.get("mirrors"):
+        mat = flat_material(name + "_MirrorGlass", (0.9, 0.9, 0.9), metallic=1.0, roughness=0.05)
+        for o, faces, c, spec in select_faces(body_objs, cfg["mirrors"], "mirrors"):
+            set_material(o, faces, mat)
+            pieces.append([mat.name, o.name, len(faces), c])
+        light_slots["mirror"] = [mat.name]
+    if cfg.get("blinkers"):
+        mats = {s: flat_material(name + "_Blinker" + s[0].upper(), (1.0, 0.35, 0.0), roughness=0.3)
+                for s in ("left", "right")}
+        for o, faces, c, spec in select_faces(body_objs, cfg["blinkers"], "blinkers"):
+            side = spec.get("side") or ("left" if c[1] < 0 else "right")
+            set_material(o, faces, mats[side])
+            pieces.append([mats[side].name, o.name, len(faces), c])
+        for s in ("left", "right"):
+            if not any(p[0] == mats[s].name for p in pieces):
+                raise SystemExit("blinkers: nothing on the %s side" % s)
+            light_slots["blinker_" + s] = [mats[s].name]
+    # lamp lenses that come out opaque in UE (black / grey covers over the
+    # lamp) join the invisible glass, after the blinkers took theirs
+    # UE で不透明になるランプレンズ（黒・灰色）は透明ガラスに（ウインカー分の後）
+    if cfg.get("lenses"):
+        mat = flat_material(name + "_LensGlass", (0.9, 0.9, 0.9), roughness=0.05)
+        for o, faces, c, spec in select_faces(body_objs, cfg["lenses"], "lenses"):
+            set_material(o, faces, mat)
+            pieces.append([mat.name, o.name, len(faces), c])
+        glass.append(mat.name)
+    summary = {}      # per slot, object and side: faces, centre / スロット・部品・左右ごと
+    for slot, obj, nf, c in pieces:
+        s = summary.setdefault((slot, obj, c[1] > 0, c[0] > 0), [0, Vector()])
+        s[0] += nf
+        s[1] += Vector(c) * nf
+    for (slot, obj, _, _), (nf, c) in sorted(summary.items()):
+        print("LIGHT %s %s faces=%d centre=%s" % (slot, obj, nf, [round(v / nf, 2) for v in c]))
+
     # steering wheel prop: hub at the origin, column along +x / ハンドル：ハブ原点、コラム +x
     axis = column_axis(steer)
     slo, shi = bounds([steer])
@@ -333,6 +516,11 @@ def main():
         "driver_eye": carla(eye),
         "materials": len({m.name for m in mesh.data.materials if m}),
         "glass": glass,
+        # slots make_lights.py swaps (blinking amber / mirror) / 差し替えるスロット
+        "blinker_left": light_slots["blinker_left"],
+        "blinker_right": light_slots["blinker_right"],
+        "mirror": light_slots["mirror"],
+        "light_pieces": len(pieces),
     }
     if "cameras" in cfg:
         out["cameras"] = cfg["cameras"]

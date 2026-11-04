@@ -18,17 +18,28 @@ MAP_NAME = "OitaStation"
 
 
 def generate_opendrive(osm_path, out_xodr):
-    """Generate OpenDRIVE (.xodr) with Japanese left-hand traffic rule.
-    日本の左側通行規則に合わせた OpenDRIVE (.xodr) を生成する。
+    """Generate OpenDRIVE (.xodr) for Japanese keep-left traffic (netconvert --lefthand).
+    日本の左側通行に合わせた OpenDRIVE (.xodr) を生成する（netconvert --lefthand）。
     """
+    import xml.etree.ElementTree as ET
+
     netconvert_bin = "/home/inouelab/Downloads/CARLA_0.9.16/carla-venv/bin/netconvert"
     if not os.path.exists(netconvert_bin):
         netconvert_bin = "netconvert"
 
     proj = "+proj=eqc +lat_ts=33.0855531587 +lat_0=33.2326262 +lon_0=131.6060258 +x_0=0 +y_0=0 +R=6367449 +units=m +no_defs"
+    raw_xodr = out_xodr + ".raw"
+    venv_py = "/home/inouelab/Downloads/CARLA_0.9.16/carla-venv/bin/python"
+    if not os.path.exists(venv_py):
+        venv_py = sys.executable
+    here = os.path.dirname(os.path.abspath(__file__))
+    # the model's ring road 外周道路 is not in OSM: add it, and cut the streets
+    # where they meet it (add_ring_road.py) / OSM に無い外周道路を追加
+    ring_osm = out_xodr + ".ring.osm"
+    subprocess.check_call([venv_py, os.path.join(here, "add_ring_road.py"), osm_path, ring_osm])
     cmd = [
         netconvert_bin,
-        "--osm-files", osm_path,
+        "--osm-files", ring_osm,
         "-o", "/tmp/oita_temp.net.xml",
         "--lefthand", "true",
         "--proj", proj,
@@ -47,17 +58,40 @@ def generate_opendrive(osm_path, out_xodr):
         "--remove-edges.isolated", "true",
         "--keep-edges.components", "1",
         "--no-turnarounds.tls", "true",
-        "--opendrive-output", out_xodr,
+        "--opendrive-output", raw_xodr,
         "--verbose", "false"
     ]
     print("Generating OpenDRIVE road logic via netconvert...")
     subprocess.check_call(cmd)
-    print(f"Generated: {out_xodr} ({os.path.getsize(out_xodr) / (1024*1024):.2f} MB)")
+
+    # Do NOT mark the roads rule="LHT". netconvert --lefthand already builds
+    # keep-left traffic: every direction is its own road running the way the
+    # cars go, on the left half of the street, with ordinary (negative)
+    # lanes. rule="LHT" tells CARLA those lanes run against the road, so
+    # every car drove backwards on the right half of the street, and the
+    # traffic manager's hybrid mode jittered far-away cars on the spot.
+    # rule="LHT" は付けない。netconvert --lefthand で既に左側通行になっており、
+    # 付けると全車線の向きが逆になって右側を走る。
+    tree = ET.parse(raw_xodr)
+    root = tree.getroot()
+    for el in [root.find("header")] + root.findall("road"):
+        if el is not None and "rule" in el.attrib:
+            del el.attrib["rule"]
+    count = len(root.findall("road"))
+    tree.write(out_xodr, encoding="utf-8", xml_declaration=True)
+    if os.path.exists(raw_xodr):
+        os.remove(raw_xodr)
+    # traffic lights: on the ground, one per approach, grouped by junction
+    # (fix_xodr_signals.py; run with the carla venv so the poles get checked)
+    # 信号機を地面・進入路ごと・交差点単位に修正
+    subprocess.check_call([venv_py, os.path.join(here, "fix_xodr_signals.py"), out_xodr, out_xodr])
+    os.remove(ring_osm)
+    print(f"Generated keep-left OpenDRIVE with {count} roads: {out_xodr} ({os.path.getsize(out_xodr) / (1024*1024):.2f} MB)")
 
 
 def prepare_mesh_in_blender(in_fbx, out_fbx):
-    """Consolidate meshes and apply CARLA semantic prefixes in Blender.
-    Blender でメッシュを結合・整理し CARLA セマンティック接頭辞を付与する。
+    """Consolidate meshes, sanitize material names, and apply CARLA semantic prefixes in Blender.
+    Blender でメッシュを結合・整理し、マテリアル名をサニタイズして CARLA セマンティック接頭辞を付与する。
     """
     script = f"""
 import bpy, os
@@ -66,24 +100,56 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 print("Importing source FBX...")
 bpy.ops.import_scene.fbx(filepath="{in_fbx}")
 
-# 1. Join 742 individual buildings into a single static mesh
-# 742 棟の建物を 1 つのスタティックメッシュに結合
-bldg_objs = [o for o in bpy.data.objects if o.type == 'MESH' and ("Bldg" in o.name or "Building" in o.name or "Structure" in o.name)]
-# Fallback: include any mesh objects not part of known non-building categories
-if not bldg_objs:
-    exclude = {"Ground", "Roads", "Road_Markings", "JR_Oita_City", "Railway", "Street_Furniture", "Traffic_Signals", "Trees", "Cars"}
-    bldg_objs = [o for o in bpy.data.objects if o.type == 'MESH' and o.name not in exclude]
-if bldg_objs:
-    bpy.ops.object.select_all(action="DESELECT")
-    for o in bldg_objs:
-        o.select_set(True)
-    bpy.context.view_layer.objects.active = bldg_objs[0]
-    bpy.ops.object.join()
-    bldg = bpy.context.view_layer.objects.active
-    bldg.name = bldg.data.name = "SM_Buildings"
+# 1. Rename all problem materials (avoiding 'sign' and 'light' substrings which trigger CARLA commandlet drop)
+RENAME_MAP = {{
+    'M_across_sign': 'M_across_board',
+    'M_car_headlight': 'M_car_headlamp',
+    'M_car_taillight': 'M_car_taillamp',
+    'M_decal_jroc_sign': 'M_decal_jroc_logo',
+    'M_road_signs': 'M_road_boards',
+    'M_roof_slab_light': 'M_roof_slab_lit',
+    'M_sign_best': 'M_board_best',
+    'M_sign_collegio': 'M_board_collegio',
+    'M_sign_ekimae_parking': 'M_board_ekimae_parking',
+    'M_sign_hanamaru': 'M_board_hanamaru',
+    'M_sign_jankara': 'M_board_jankara',
+    'M_sign_npc': 'M_board_npc',
+    'M_sign_red_mark': 'M_board_red_mark',
+    'M_sign_regal': 'M_board_regal',
+    'M_sign_routeinn': 'M_board_routeinn',
+    'M_signal_housing': 'M_pole_housing',
+    'M_vsign_atlas': 'M_vboard_atlas',
+}}
+for m in bpy.data.materials:
+    if m.name in RENAME_MAP:
+        m.name = RENAME_MAP[m.name]
+    else:
+        new_name = m.name
+        if "sign" in new_name.lower():
+            new_name = new_name.replace("sign", "board").replace("Sign", "Board").replace("SIGN", "BOARD")
+        if "light" in new_name.lower():
+            new_name = new_name.replace("light", "lit").replace("Light", "Lit").replace("LIGHT", "LIT")
+        if new_name != m.name:
+            m.name = new_name
 
-# 2. Separate Ground object by material to classify surfaces
-# Ground オブジェクトをマテリアルごとに分離して路面・歩道・縁石を分類
+# 2. Join 742 individual buildings by 16 tile groups (Buildings_A1 ... Buildings_D4)
+tiles = ["A1","A2","A3","A4","B1","B2","B3","B4","C1","C2","C3","C4","D1","D2","D3","D4"]
+for t in tiles:
+    parent = bpy.data.objects.get("Buildings_" + t)
+    children = [o for o in bpy.data.objects if o.parent == parent and o.type == "MESH"]
+    if children:
+        bpy.ops.object.select_all(action="DESELECT")
+        for c in children:
+            c.select_set(True)
+        bpy.context.view_layer.objects.active = children[0]
+        bpy.ops.object.join()
+        joined = bpy.context.view_layer.objects.active
+        joined.name = joined.data.name = f"SM_Buildings_{{t}}"
+        joined.parent = None
+    if parent:
+        bpy.data.objects.remove(parent)
+
+# 3. Separate Ground object by material to classify surfaces
 ground = bpy.data.objects.get("Ground")
 if ground:
     bpy.ops.object.select_all(action="DESELECT")
@@ -113,7 +179,6 @@ if ground:
             plaza_parts.append(p)
 
     # Road_Road_Roads: Asphalt carriageways + parking lots
-    # 車道アスファルトと駐車場
     road_obj = bpy.data.objects.get("Roads")
     if road_obj:
         bpy.ops.object.select_all(action="DESELECT")
@@ -169,16 +234,15 @@ if ground:
         pl = bpy.context.view_layer.objects.active
         pl.name = pl.data.name = "SM_Ground_Plaza"
 
-# 3. Rename remaining layers to CARLA static mesh / semantic standards
-# 残りのレイヤーを CARLA の命名規約に従ってリネーム
+# 4. Rename remaining layers to CARLA static mesh standards (avoiding sign/light)
 renames = {{
     "Road_Markings": "Road_Marking_Markings",
     "JR_Oita_City": "SM_JR_Oita_City",
     "Railway": "SM_Railway",
     "Trains": "SM_Trains",
     "Street_Furniture": "SM_Street_Furniture",
-    "Road_Signs": "SM_Road_Signs",
-    "Traffic_Signals": "SM_Traffic_Signals",
+    "Road_Signs": "SM_Road_Boards",
+    "Traffic_Signals": "SM_Traffic_Poles",
     "Trees": "SM_Trees",
     "Cars": "SM_Cars"
 }}
@@ -186,6 +250,15 @@ for old_name, new_name in renames.items():
     o = bpy.data.objects.get(old_name)
     if o:
         o.name = o.data.name = new_name
+
+# 5. Sanity check all meshes and materials
+mesh_names = [o.name for o in bpy.data.objects if o.type == 'MESH']
+for name in mesh_names:
+    assert "sign" not in name.lower() and "light" not in name.lower(), f"Disallowed mesh name: {{name}}"
+    o = bpy.data.objects[name]
+    for m in o.data.materials:
+        if m:
+            assert "sign" not in m.name.lower() and "light" not in m.name.lower(), f"Disallowed material: {{m.name}} in {{name}}"
 
 print("Exporting consolidated FBX...")
 bpy.ops.object.select_all(action="SELECT")

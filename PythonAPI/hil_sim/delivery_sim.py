@@ -52,8 +52,9 @@ except IndexError:
 sys.path.append('../carla')
 
 import carla  # noqa: E402
+from lane_spawns import lane_spawn_points  # noqa: E402
 from agents.navigation.basic_agent import BasicAgent  # noqa: E402
-from agents.navigation.global_route_planner import GlobalRoutePlanner  # noqa: E402
+from delivery.route import SafeRoutePlanner  # noqa: E402  (bounded on imported maps)
 
 from delivery import planning  # noqa: E402
 from delivery.planning import DRONE, FACE_TO_FACE, CHARGE, Building, Stop  # noqa: E402
@@ -69,6 +70,7 @@ from delivery import live  # noqa: E402
 from delivery import pod as podlib  # noqa: E402
 from delivery import lmp_pod, lmp_rig  # noqa: E402
 from delivery import backends  # noqa: E402  (OVERLAYS: the tooltip switch)
+from delivery import boxes  # noqa: E402
 from delivery.lmp_van import LmpVanMixin, LMP_DRONE, LMP_DIRECT  # noqa: E402
 from delivery import yard as yardlib  # noqa: E402
 
@@ -89,6 +91,7 @@ IDLE, DRIVING, HANDOVER, DRONE_OUT = "idle", "driving", "handover", "drone_out"
 # what a van does once it reaches a stop, in order (see Van.arrive)
 # 停車地点に着いてからの手順（Van.arrive 参照）
 STOPPING, JACKS_DOWN, HATCH_OPEN = "stopping", "jacks_down", "hatch_open"
+DOCKING = "docking"          # creeping the side port level with a box station / 箱へ横付け
 HATCH_CLOSE, JACKS_UP = "hatch_close", "jacks_up"
 # the pod's EV battery / ポッドの EV バッテリー
 EV_CHARGING, WAIT_CHARGER, STRANDED = "ev_charging", "waiting_charger", "stranded"
@@ -118,6 +121,41 @@ def tup(location):
 
 # --- world analysis / ワールド解析 -----------------------------------------
 
+MAPS_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps", "maps.json")
+_BUILDINGS = {}
+
+
+def map_buildings(world):
+    """The map's buildings: CARLA's Buildings-tagged objects, or for your own
+    maps whose buildings came in under another tag (Oita Station: merged
+    tiles tagged Terrain) the building table named in maps/maps.json
+    ("buildings_csv": id, name, height_m, x_east_m, y_north_m, footprint_m2;
+    CARLA x = east, y = -north), as square footprints of the same area.
+    建物一覧：CARLA の Buildings タグ、無ければ maps.json の建物表から作る。"""
+    name = world.get_map().name.split("/")[-1]
+    if name in _BUILDINGS:
+        return _BUILDINGS[name]
+    objs = list(world.get_environment_objects(carla.CityObjectLabel.Buildings))
+    if not objs:
+        try:
+            entry = next((m for m in json.load(open(MAPS_JSON)).values()
+                          if isinstance(m, dict) and m.get("name") == name), {})
+        except (OSError, ValueError):
+            entry = {}
+        path = os.path.expanduser(entry.get("buildings_csv", ""))
+        if path and os.path.exists(path):
+            for r in csv.DictReader(open(path, encoding="utf-8")):
+                h = float(r["height_m"])
+                half = max(math.sqrt(float(r["footprint_m2"] or 16.0)), 4.0) / 2.0
+                bb = carla.BoundingBox(carla.Location(float(r["x_east_m"]), -float(r["y_north_m"]), h / 2.0),
+                                       carla.Vector3D(half, half, h / 2.0))
+                objs.append(types.SimpleNamespace(name=r["name"] or r["id"], bounding_box=bb))
+            print("  %d buildings from %s (none tagged Buildings in the map) / 建物表から読込"
+                  % (len(objs), os.path.basename(path)), flush=True)
+    _BUILDINGS[name] = objs
+    return objs
+
+
 def find_buildings(world, wmap, max_sidewalk_gap=15.0, max_curb_gap=12.0, grid=12.0):
     """Buildings that have a sidewalk in front and a drivable lane beside it.
 
@@ -125,7 +163,7 @@ def find_buildings(world, wmap, max_sidewalk_gap=15.0, max_curb_gap=12.0, grid=1
     the same sidewalk spot are merged.
     前に歩道、横に走行車線がある建物を返す。同じ歩道地点の部分メッシュは統合。
     """
-    objs = world.get_environment_objects(carla.CityObjectLabel.Buildings)
+    objs = map_buildings(world)
     buildings, seen, roof = [], set(), -1e9
     for o in objs:
         bb = o.bounding_box
@@ -172,7 +210,7 @@ def find_obstacles(world):
         label = getattr(carla.CityObjectLabel, name, None)
         if label is None:
             continue
-        for o in world.get_environment_objects(label):
+        for o in (map_buildings(world) if name == "Buildings" else world.get_environment_objects(label)):
             bb = o.bounding_box
             out.append(planning.Obstacle(bb.location.x, bb.location.y, bb.extent.x,
                                          bb.extent.y, bb.rotation.yaw,
@@ -203,19 +241,43 @@ def make_surface_fn(world, step=20.0):
     return surface
 
 
-def hub_candidates(wmap, spacing=4.0):
-    """Rightmost, non-junction driving-lane points where the car may park.
+def keep_left_map(wmap):
+    """True when traffic drives on the left (maps/maps.json "keep_left"). / 左側通行の自作マップ。"""
+    name = wmap.name.split("/")[-1]
+    try:
+        return any(isinstance(m, dict) and m.get("name") == name and m.get("keep_left")
+                   for m in json.load(open(MAPS_JSON)).values())
+    except (OSError, ValueError):
+        return False
 
-    車が停車できる、交差点外の最も右側の走行車線上の点。
+
+def hub_candidates(wmap, spacing=4.0):
+    """Kerb-side, non-junction driving-lane points where the car may park.
+
+    The kerb lane has no driving lane beside it on the kerb side: the right
+    on keep-right maps, the left on keep-left ones (Oita Station). On a
+    two-way road the lane by the centre line has oncoming traffic beside it,
+    so it is not taken.
+    車が停車できる、交差点外の路肩側の走行車線上の点（右側通行は右、左側通行は左）。
     """
+    left = keep_left_map(wmap)
     out = []
     for wp in wmap.generate_waypoints(spacing):
         if wp.lane_type != carla.LaneType.Driving or wp.is_junction:
             continue
-        right = wp.get_right_lane()
-        if right is not None and right.lane_type == carla.LaneType.Driving:
+        kerb_side = wp.get_left_lane() if left else wp.get_right_lane()
+        if kerb_side is not None and kerb_side.lane_type == carla.LaneType.Driving:
             continue
-        out.append(tup(wp.transform.location))
+        # where there is pavement close by, it must be on the kerb side (not
+        # across the median) / 近くに歩道があるなら路肩側にあること
+        L = wp.transform.location
+        sw = wmap.get_waypoint(L, project_to_road=True, lane_type=carla.LaneType.Sidewalk)
+        if sw is not None and sw.transform.location.distance(L) < 8.0:
+            f, q = wp.transform.get_forward_vector(), sw.transform.location
+            on_right = f.x * (q.y - L.y) - f.y * (q.x - L.x) > 0
+            if on_right == left:
+                continue
+        out.append(tup(L))
     return out
 
 
@@ -357,17 +419,27 @@ def choose_station(wmap, buildings, n_pads, sky):
     for drop in sorted(drops, key=lambda d: planning.dist2d(d, c))[:60]:
         wp = wmap.get_waypoint(loc(drop), project_to_road=True,
                                lane_type=carla.LaneType.Sidewalk)
-        if wp is None:
-            continue
-        pads = []
-        while len(pads) < n_pads and wp is not None:
-            p = wp.transform.location
-            pads.append((p.x, p.y, sky.surface_z(p.x, p.y, p.z) + 0.02))
-            nxt = wp.next(1.8)
-            wp = nxt[0] if nxt else None
-        if len(pads) == n_pads and all(
-                sky.column_clear(x, y, z + 60.0, z + 0.5, r=0.6) for x, y, z in pads):
-            return ChargeStation(pads)
+        if wp is not None:
+            pads = []
+            while len(pads) < n_pads and wp is not None:
+                p = wp.transform.location
+                pads.append((p.x, p.y, sky.surface_z(p.x, p.y, p.z) + 0.02))
+                nxt = wp.next(1.8)
+                wp = nxt[0] if nxt else None
+            if len(pads) == n_pads and all(
+                    sky.column_clear(x, y, z + 60.0, z + 0.5, r=0.6) for x, y, z in pads):
+                return ChargeStation(pads)
+        else:
+            # Fallback for maps without OpenDrive sidewalks: line pads along roadside
+            d_loc = loc(drop)
+            pads = []
+            for i in range(n_pads):
+                px = d_loc.x + i * 1.8
+                py = d_loc.y
+                pads.append((px, py, sky.surface_z(px, py, d_loc.z) + 0.02))
+            if len(pads) == n_pads and all(
+                    sky.column_clear(x, y, z + 60.0, z + 0.5, r=0.6) for x, y, z in pads):
+                return ChargeStation(pads)
     return None
 
 
@@ -384,26 +456,102 @@ def choose_chargers(wmap, hubs, near, n, spacing=12.0):
     return out
 
 
-def export_map(world, wmap, station, chargers=None):
-    """Roads (lane centre lines), building footprints and the station, for the
-    dashboard's 2D map. / ダッシュボードの 2D 地図用の道路・建物・充電所。"""
-    lanes = {}
-    for wp in wmap.generate_waypoints(3.0):
-        if wp.lane_type != carla.LaneType.Driving:
-            continue
-        p = wp.transform.location
-        lanes.setdefault((wp.road_id, wp.section_id, wp.lane_id), []).append(
-            (wp.s, round(p.x, 1), round(p.y, 1)))
-    roads = [[[x, y] for _, x, y in sorted(v)] for v in lanes.values() if len(v) > 1]
+MAP_LANE_KINDS = {"driving": "d", "sidewalk": "s", "shoulder": "h", "parking": "p",
+                  "restricted": "h", "biking": "h", "bidirectional": "d", "entry": "d",
+                  "exit": "d", "onRamp": "d", "offRamp": "d"}
+
+
+def map_lanes(wmap, step=2.0):
+    """Every lane of the road logic as CARLA's own top-down map draws it
+    (PythonAPI/examples/no_rendering_mode.py): its surface as a polygon to
+    the lane's width, and the lane markings along its edges, solid or broken,
+    white or yellow. The lanes come from the OpenDRIVE file itself, section by
+    section, so pavements are included and each lane runs to its section's
+    ends. Returns (lanes, marks, centre lines of the driving lanes).
+    lanes: [kind, [x, y, x, y, ...]]  kind d driving, s sidewalk, h shoulder, p parking
+    marks: [colour w/y, broken 0/1, [x, y, ...]]
+    道路論理の各車線を CARLA の 2D 地図と同じ形（車線幅の面と区画線）で返す。"""
+    import xml.etree.ElementTree as ET
+    lanes, marks, centres = [], [], []
+
+    def shift(wp, d):
+        t = wp.transform
+        r = t.get_right_vector()
+        return (round(t.location.x + r.x * d, 2), round(t.location.y + r.y * d, 2))
+
+    def flat(pts):
+        return [v for pt in pts for v in pt]
+
+    try:
+        roads = list(ET.fromstring(wmap.to_opendrive()).iter("road"))
+    except ET.ParseError:
+        return lanes, marks, centres
+    for road in roads:
+        rid = int(road.get("id"))
+        secs = list(road.iter("laneSection"))
+        starts = [float(x.get("s")) for x in secs]
+        ends = starts[1:] + [float(road.get("length"))]
+        for sec, s0, s1 in zip(secs, starts, ends):
+            if s1 - s0 < 0.05:
+                continue
+            n = max(1, int(math.ceil((s1 - s0) / step)))
+            ss = [s0 + 0.01 + (s1 - s0 - 0.02) * i / n for i in range(n + 1)]
+            for lane in sec.iter("lane"):
+                kind = MAP_LANE_KINDS.get(lane.get("type"))
+                lid = int(lane.get("id"))
+                if not kind or lid == 0:
+                    continue
+                wps = []
+                for sv in ss:
+                    w = wmap.get_waypoint_xodr(rid, lid, sv)
+                    if w is not None and w.lane_id == lid:
+                        wps.append(w)
+                if len(wps) < 2 or max(w.lane_width for w in wps) < 0.2:
+                    continue
+                left = [shift(w, -w.lane_width / 2) for w in wps]
+                right = [shift(w, w.lane_width / 2) for w in wps]
+                lanes.append([kind, flat(left + right[::-1])])
+                if kind != "d":
+                    continue
+                centres.append([[round(w.transform.location.x, 1), round(w.transform.location.y, 1)]
+                                for w in wps])
+                for side, sign in (("left_lane_marking", -1), ("right_lane_marking", 1)):
+                    run, key = [], None
+                    for w in wps + [None]:
+                        lm = getattr(w, side) if w is not None else None
+                        k = (str(lm.type), lm.color == carla.LaneMarkingColor.Yellow) if lm is not None else None
+                        if k != key or w is None:
+                            if key is not None and len(run) > 1:
+                                name, yellow = key
+                                parts = ([name] if name in ("Solid", "Broken") else
+                                         [name[:5], name[5:]] if name in (
+                                             "SolidSolid", "SolidBroken", "BrokenSolid", "BrokenBroken") else [])
+                                for i, part in enumerate(parts):
+                                    pts = [shift(q, sign * (q.lane_width / 2 + 0.25 * i)) for q in run]
+                                    marks.append(["y" if yellow else "w", 1 if part == "Broken" else 0, flat(pts)])
+                            run = run[-1:] if w is not None else []
+                            key = k
+                        if w is not None:
+                            run.append(w)
+    return lanes, marks, centres
+
+
+def export_map(world, wmap, station, chargers=None, boxmgr=None):
+    """Lanes and lane markings (as CARLA draws its map), building footprints,
+    the station, chargers and box stations, for the dashboard's 2D map.
+    ダッシュボードの 2D 地図用の車線・区画線・建物・充電所。"""
+    lanes, marks, roads = map_lanes(wmap)
     blds = []
-    for o in world.get_environment_objects(carla.CityObjectLabel.Buildings):
+    for o in map_buildings(world):
         bb = o.bounding_box
         blds.append([round(bb.location.x, 1), round(bb.location.y, 1), round(bb.extent.x, 1),
                      round(bb.extent.y, 1), round(bb.rotation.yaw, 1)])
-    return {"map": wmap.name, "roads": roads, "buildings": blds,
+    return {"map": wmap.name, "roads": roads, "lanes": lanes, "marks": marks, "buildings": blds,
             "station": [[round(x, 2), round(y, 2)] for x, y, _ in station.pads],
             "chargers": [[round(x, 2), round(y, 2)] for x, y, _ in
-                         (chargers.spots if chargers else [])]}
+                         (chargers.spots if chargers else [])],
+            "boxes": [[round(b.site.loc[0], 2), round(b.site.loc[1], 2)]
+                      for b in (boxmgr.boxes.values() if boxmgr else [])]}
 
 
 class EventLog(object):
@@ -644,6 +792,63 @@ class Van(LmpVanMixin):
         self.state = DRIVING
         self.log(t, "drive", batch=s.batch, pos=s.location,
                  detail="to %s stop" % s.kind)
+
+    def _detour_to(self, target):
+        """Route to ``target`` by way of a point further along the road. The
+        planner finds no route to a spot just behind the van in its own lane
+        (it would have to drive backwards), so go on and round the block.
+        True when such a route was set.
+        同じ車線のすぐ後ろの地点へは経路が引けないため、先の地点を経由する。"""
+        here = self.wmap.get_waypoint(self.car.get_location())
+        goal = self.wmap.get_waypoint(carla.Location(*target))
+        if here is None or goal is None:
+            return False
+        for ahead in (30.0, 60.0, 120.0):
+            for via in here.next(ahead):
+                try:
+                    plan = self.agent.trace_route(here, via)
+                    back = self.agent.trace_route(via, goal)
+                except (RuntimeError, ValueError, KeyError):
+                    continue
+                # a route back along the same lane comes out empty or stops
+                # short of the goal / 同一車線を戻る経路は空か手前で終わる
+                if plan and back and back[-1][0].transform.location.distance(goal.transform.location) < 5.0:
+                    self.agent.set_global_plan(plan + back[1:])
+                    return True
+        return False
+
+    def dock_step(self, t, dt):
+        """Creep along the kerb lane until the side port is level with the box
+        station (the stop's location is where the pod's centre must be).
+        箱型ステーションにサイドポートが並ぶまで低速で前後に寄せる。"""
+        self.timer += dt
+        tf = self.car.get_transform()
+        f, p = tf.get_forward_vector(), tf.location
+        goal = self.stops[0].location
+        e = (goal[0] - p.x) * f.x + (goal[1] - p.y) * f.y            # along the heading / 進行方向の残り
+        v = self.car.get_velocity()
+        speed = v.x * f.x + v.y * f.y
+        if (abs(e) < 0.15 and abs(speed) < 0.15) or self.timer > 25.0:
+            self.arrive(t)
+            return
+        want = max(-0.8, min(1.4, 0.6 * e))                         # m/s / 目標速度
+        # keep on the parking lane's centre line: heading error plus the
+        # sideways offset (Stanley), so the box ends where the arm expects it
+        # 駐車車線の中心線に沿う（向きの誤差＋横ずれ）
+        lane = self.wmap.get_waypoint(carla.Location(goal[0], goal[1], goal[2]))
+        lyaw = math.radians(lane.transform.rotation.yaw)
+        head = math.atan2(math.sin(lyaw - math.radians(tf.rotation.yaw)), math.cos(lyaw - math.radians(tf.rotation.yaw)))
+        lp = lane.transform.location
+        side = (p.x - lp.x) * math.sin(lyaw) - (p.y - lp.y) * math.cos(lyaw)   # >0: left of the line / 線の左
+        steer = head + math.atan2(1.5 * side, abs(speed) + 0.5)
+        if want < 0:
+            steer = -head                                           # backing up: only straighten / 後退時
+        c = carla.VehicleControl(steer=max(-1.0, min(1.0, steer / 0.7)), reverse=want < 0)
+        if abs(speed) < abs(want) - 0.1:
+            c.throttle = 0.35
+        elif abs(speed) > abs(want) + 0.1 or abs(e) < 0.15:
+            c.brake = 0.4
+        self.car.apply_control(c)
 
     def arrive(self, t):
         """Plan what happens at this stop; Van.step works through it.
@@ -1116,12 +1321,38 @@ class Van(LmpVanMixin):
                 self.go_charge(t, "critical")
                 return
             near = planning.dist2d(self.car_pos(), s.location) < self.args.arrive_radius
-            if near or self.agent.done():
+            box_stop = (self.lmp and s.kind == FACE_TO_FACE and s.orders
+                        and getattr(getattr(s.orders[0], "building", None), "box", None) is not None)
+            if box_stop and planning.dist2d(self.car_pos(), s.location) < 12.0:
+                self.state, self.timer = DOCKING, 0.0
+            elif box_stop and self.agent.done():
+                # the route ran out short of the box: docking from here would
+                # stretch the arm across the street. Route again; after a few
+                # tries put the pod beside the box, logged, like a stuck van.
+                # 箱の手前で経路が尽きた。再経路、数回失敗したら箱の横へ移す
+                self._stop_recoveries += 1
+                if self._stop_recoveries > MAX_RECOVERIES:
+                    tf = self.wmap.get_waypoint(carla.Location(*s.location)).transform
+                    self._teleport(tf)
+                    self.log(t, "gave_up_driving", batch=s.batch, pos=tup(tf.location),
+                             detail="no route to the box station")
+                    self.state, self.timer = DOCKING, 0.0
+                else:
+                    self.reroutes += 1
+                    self.log(t, "reroute", batch=s.batch, pos=self.car_pos(),
+                             detail="route ended %.0f m short of the box station"
+                             % planning.dist2d(self.car_pos(), s.location))
+                    if not self._detour_to(s.location):
+                        self.agent.set_destination(carla.Location(*s.location),
+                                                   start_location=self.car.get_location())
+            elif near or self.agent.done():
                 self.arrive(t)
             else:
                 control = self.agent.run_step()
                 self.car.apply_control(control)
                 self.guard(t, dt, control)
+        elif self.state == DOCKING:
+            self.dock_step(t, dt)
         elif self.state == STOPPING:
             # the jacks only come down once the van is at a full stop
             # ジャッキは完全に停止してから下ろす
@@ -1318,6 +1549,8 @@ class Fleet(object):
 
     def step(self, t, dt):
         self.commands(t)
+        if getattr(self, "boxes", None) is not None:
+            self.boxes.step(t, dt)                 # customers collecting parcels / 受取客
         self.sky.wind.step(t, dt)
         wind = self.sky.wind.vector(t)
         ready = [v for v in self.vans
@@ -1772,25 +2005,40 @@ class CameraControl(object):
 def find_addresses(wmap, spacing=40.0, grid=25.0):
     """Fallback delivery points for maps with few buildings (highways, rural).
 
-    A sidewalk spot beside a rightmost driving lane stands in for a building.
-    建物の少ないマップ（高速道路・郊外）用の代替配送地点。最も右の走行車線の
+    A sidewalk spot beside an outer driving lane stands in for a building.
+    建物の少ないマップ（高速道路・郊外）用の代替配送地点。最外側車線の
     横の歩道を建物の代わりにする。
     """
     out, seen = [], set()
     for wp in wmap.generate_waypoints(spacing):
         if wp.lane_type != carla.LaneType.Driving or wp.is_junction:
             continue
-        side = wp.get_right_lane()
-        for _ in range(4):
-            if side is None or side.lane_type == carla.LaneType.Sidewalk:
+        side = None
+        for get_neighbor in (lambda w: w.get_left_lane(), lambda w: w.get_right_lane()):
+            s = get_neighbor(wp)
+            for _ in range(4):
+                if s is None or s.lane_type == carla.LaneType.Sidewalk:
+                    break
+                if s.lane_type == carla.LaneType.Driving:
+                    s = None
+                    break
+                s = get_neighbor(s)
+            if s and s.lane_type == carla.LaneType.Sidewalk:
+                side = s
                 break
-            if side.lane_type == carla.LaneType.Driving:
-                side = None         # not the rightmost lane / 最右車線ではない
-                break
-            side = side.get_right_lane()
-        if side is None or side.lane_type != carla.LaneType.Sidewalk:
-            continue
-        drop = tup(side.transform.location)
+        drop = None
+        if side is not None:
+            drop = tup(side.transform.location)
+        else:
+            sw = wmap.get_waypoint(wp.transform.location, project_to_road=True,
+                                   lane_type=carla.LaneType.Sidewalk)
+            if sw and wp.transform.location.distance(sw.transform.location) <= 20.0:
+                drop = tup(sw.transform.location)
+            else:
+                yaw_rad = math.radians(wp.transform.rotation.yaw)
+                drop = (wp.transform.location.x - 2.5 * math.sin(yaw_rad),
+                        wp.transform.location.y + 2.5 * math.cos(yaw_rad),
+                        wp.transform.location.z)
         key = (round(drop[0] / grid), round(drop[1] / grid))
         if key in seen:
             continue
@@ -1819,7 +2067,7 @@ def spawn_vans(world, wmap, rng, n, min_sep=40.0, pod=False, lmp=False):
         if bp.has_attribute("color"):
             bp.set_attribute("color", "255,255,255")
     bp.set_attribute("role_name", "delivery")
-    points = wmap.get_spawn_points()
+    points = lane_spawn_points(wmap)   # on today's lanes / 現在の車線上
     rng.shuffle(points)
     cars = []
     for sep in (min_sep, 10.0):         # relax spacing on small maps / 狭いマップでは緩める
@@ -1924,6 +2172,11 @@ def parse_args(argv=None):
     p.add_argument("--shell", choices=lmp_pod.SHELL_MODES, default="solid",
                    help="LastMile pod shell at start: solid, cutaway, xray, frame (X in the "
                         "CARLA window cycles it, or the dashboard's Settings > Delivery sim) / 外殻の表示")
+    p.add_argument("--no-box-stations", action="store_true",
+                   help="LastMile pods set their own box down beside them at face-to-face stops "
+                        "instead of using box stations placed in the world / 世界の箱を使わない")
+    p.add_argument("--box-spacing", type=float, default=110.0,
+                   help="minimum distance between box stations in the world, m / 箱の最小間隔 [m]")
     p.add_argument("--tooltips", action="store_true",
                    help="start with the markers, labels and drone trails shown in the CARLA "
                         "window (the dashboard toggles them) / マーカー・ラベル・軌跡を表示して開始")
@@ -2016,9 +2269,10 @@ def parse_args(argv=None):
     p.add_argument("--parcel-wind", type=float, default=12.0,
                    help="above this wind a hovering drone can lose its parcel, m/s / "
                         "荷物が外れうる風速")
-    p.add_argument("--lost-drift", type=float, default=6.0,
-                   help="pushed this far off its path, a drone is lost, m / "
-                        "これ以上流されるとロスト [m]")
+    p.add_argument("--lost-drift", type=float, default=0.0,
+                   help="0 (default): a gust only pushes a drone off its path and it flies "
+                        "back; it crashes only if it hits something. >0: pushed further than "
+                        "this (m), it is lost / 0: 衝突しない限り経路に戻る。>0: この距離で喪失 [m]"),
     p.add_argument("--no-random-failures", action="store_true",
                    help="no motor failures or torn-off parcels (collisions, flat "
                         "batteries and being blown away still count) / 確率的な故障を無効化")
@@ -2151,7 +2405,20 @@ def main(argv=None):
 
     print("analysing %s ... / マップ解析中" % wmap.name, flush=True)
     buildings, roof_z = find_buildings(world, wmap)
+    grp = SafeRoutePlanner(wmap, 2.0)
+    if grp.runaway_segments:
+        print("  route planner: %d road segments could not be sampled (imported road logic); "
+              "linked end to end / サンプリング不能な区間 %d" % (grp.runaway_segments, grp.runaway_segments),
+              flush=True)
     hubs = hub_candidates(wmap)
+    # only stops a van can drive to and away from (one-way streets leading
+    # nowhere: imported maps) / 行けて出られる停車地のみ（一方通行の行き止まり）
+    can_reach = boxes.reachable(grp)
+    n_hubs = len(hubs)
+    hubs = [h for h in hubs if can_reach(loc(h))]
+    if len(hubs) < n_hubs:
+        print("  %d stopping places left out: a van could not drive both to and away from them "
+              "/ 出入りできない停車候補 %d" % (n_hubs - len(hubs), n_hubs - len(hubs)), flush=True)
     if len(buildings) < 20:
         # few real buildings (highway / rural maps): add roadside addresses
         # 建物が少ないマップ（高速・郊外）では道路沿いの地点を追加
@@ -2165,6 +2432,8 @@ def main(argv=None):
                          % (len(buildings), wmap.name))
     if not hubs:
         raise SystemExit("no road points to park on / 停車できる道路地点が無い")
+    if roof_z < 0 and buildings:
+        roof_z = max(b.drop[2] for b in buildings) + 15.0
     print("  %d delivery points, %d hub candidates, tallest roof z=%.1f m"
           % (len(buildings), len(hubs), roof_z), flush=True)
 
@@ -2210,6 +2479,7 @@ def main(argv=None):
     livew = None
     fleet = None
     traffic = None
+    boxmgr = None
     t = 0.0
     missed = 0
     try:
@@ -2288,20 +2558,33 @@ def main(argv=None):
             print("  cruise altitude: per trip, %.0f m over obstacles, min %.0f m, checked "
                   "by raycast / 往復ごとの巡航高度" % (args.clearance, args.min_alt), flush=True)
 
-        grp = GlobalRoutePlanner(wmap, 2.0)
+        # LastMile box stations in the world (keep-left maps: the side port is
+        # on the pod's left, facing the kerb) / 世界の箱型ステーション（左側通行）
+        box_targets = []
+        if use_lmp and keep_left_map(wmap) and not args.no_box_stations:
+            sites = boxes.find_box_sites(world, wmap, random.Random(args.seed), spacing=args.box_spacing,
+                                         planner=grp)
+            boxmgr = boxes.BoxStations(world, client, sites, random.Random(args.seed))
+            box_targets = [Building(100000 + s.id, "box station %d" % s.id, s.loc, s.park, box=s.id)
+                           for s in sites if s.id in boxmgr.boxes]
+            print("  %d LastMile box stations on the pavements; face-to-face orders go to them "
+                  "/ 歩道の箱型ステーション %d 台" % (len(box_targets), len(box_targets)), flush=True)
         gen = planning.OrderGenerator(
             buildings, random.Random(args.seed), min_gap=args.min_gap,
             max_gap=args.max_gap, min_batch=args.min_orders, max_batch=args.max_orders,
             drone_prob=args.drone_prob, drone_radius=args.drone_radius,
-            fleet_size=len(cars))
+            fleet_size=len(cars), boxes=box_targets)
         vans = [Van(i + 1, args, world, car, hubs, grp, log, obstacles, gen, sky,
                     pod=pod) for i, (car, pod) in enumerate(zip(cars, pods))]
+        for v in vans:
+            v.boxes = boxmgr
         sky.drones.start(vans)
         if not args.no_live:
             livew = live.LiveWriter(args.live_dir)
-            livew.write_map(export_map(world, wmap, station, sky.chargers))
+            livew.write_map(export_map(world, wmap, station, sky.chargers, boxmgr))
             print("  live state for the dashboard: %s / ダッシュボード用" % livew.dir, flush=True)
         fleet = Fleet(args, world, vans, gen, log, sky, livew)
+        fleet.boxes = boxmgr
         camera = CameraControl(world, args, vans, sky.drones.units)
         fleet.camera = camera
         if use_lmp:
@@ -2362,6 +2645,8 @@ def main(argv=None):
             d.destroy()
         for v in (fleet.vans if fleet is not None else []):
             v.cleanup()
+        if boxmgr is not None:
+            boxmgr.destroy()
         if livew is not None:
             livew.close()
         for a in actors:

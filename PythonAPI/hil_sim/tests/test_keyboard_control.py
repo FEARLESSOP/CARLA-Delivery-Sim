@@ -41,7 +41,7 @@ class FakeVehicle(object):
         return real_carla.Vector3D(self.speed, 0.0, 0.0)
     def apply_control(self, c):
         self.applied.append(c)
-    def set_autopilot(self, on):
+    def set_autopilot(self, on, tm_port=8000):
         pass
     def get_control(self):
         return real_carla.VehicleControl()

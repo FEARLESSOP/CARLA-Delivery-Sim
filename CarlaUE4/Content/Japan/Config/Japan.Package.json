@@ -2,6 +2,11 @@
     "props": [],
     "maps": [
         {
+            "name": "OitaKosen",
+            "path": "/Game/Japan/Maps/OitaKosen",
+            "use_carla_materials": false
+        },
+        {
             "name": "OitaStation",
             "path": "/Game/Japan/Maps/OitaStation",
             "use_carla_materials": false

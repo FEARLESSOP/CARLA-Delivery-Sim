@@ -23,6 +23,7 @@ Ctrl+C を一度押すと全プロセスをクリーンに終了する。
 """
 
 import argparse
+import json
 import os
 import shlex
 import signal
@@ -39,6 +40,18 @@ UTIL_DIR = CARLA_ROOT / "PythonAPI" / "util"
 CONTROL_SCRIPT = BASE_DIR / "manual_control_steeringwheel G923.py"
 FFB_SCRIPT = BASE_DIR / "carla_ffb.py"
 DATA_DIR = BASE_DIR / "data"                        # simulation database / シミュレーションデータの保存先
+
+
+def map_is_left_hand(map_name):
+    """True for your own left-hand-traffic maps (maps/maps.json). / 左側通行の自作マップ。"""
+    try:
+        maps = json.load(open(BASE_DIR / "maps" / "maps.json"))
+    except (OSError, ValueError):
+        return False
+    # maps.json writes "keep_left" (make_osm_city.sh); older entries "left_hand_traffic"
+    return any(isinstance(m, dict) and m.get("name") == map_name
+               and (m.get("keep_left") or m.get("left_hand_traffic"))
+               for m in maps.values())
 
 
 def nvidia_offload_env(mode):
@@ -511,7 +524,15 @@ def main():
                    "--cyclists", str(args.cyclists if args.vehicles or args.walkers else 0),
                    "--wheelchair-share", str(args.wheelchair_share),
                    "--runners", str(args.runners)]
-            if not args.no_hybrid:
+            lht = map_is_left_hand(args.map)
+            if lht and not args.no_hybrid:
+                # In hybrid mode the traffic manager moves far-away cars along
+                # the lane in the right-hand direction: on a left-hand map
+                # they step back and forth on the spot. Full physics for all.
+                # 左側通行マップではハイブリッドの遠方車両が往復して止まるため無効化。
+                print("[pipeline] %s is left-hand traffic -> hybrid physics off (all "
+                      "cars fully simulated) / 左側通行のためハイブリッド無効" % args.map)
+            if not args.no_hybrid and not lht:
                 # Full wheeled-vehicle physics for every car in the town runs
                 # on the simulator's CPU whether or not anyone can see it.
                 # Hybrid mode keeps physics only within 70 m of the hero and
@@ -649,6 +670,12 @@ def main():
                "--mirror-fps", str(args.mirror_fps)]
         if args.autopilot:
             cmd.append("--autopilot")
+        # The hero's autopilot (--autopilot or the P key) gets its own TM:
+        # set_autopilot() would otherwise create the traffic TM server in
+        # manual_control before generate_traffic starts, and the traffic
+        # cars would join a TM that is never stepped (they stand still).
+        # hero の自動運転は別ポートの TM を使う（交通車両が動かなくなるため）。
+        cmd += ["--tm-port", str(args.tm_port + 1)]
         if args.keyboard:
             cmd.append("--keyboard")
         mc = launch(cmd, BASE_DIR, "manual_control")

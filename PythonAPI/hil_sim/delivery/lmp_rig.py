@@ -258,6 +258,7 @@ class Mech(object):
         self.swap = [0.52, 0.0, 0.095]               # jaw z, drop, magazine dx
         self.hoist = [SLOTS[4], HOIST_UP, 0.0]       # x, gripper y, latch
         self.port = [0.0, 0.0]                       # slide ext, door open
+        self.port_reach = SLIDE_MAX                  # how far the slide goes at ext 1 / 伸び量
         self.flap, self.cell_door = 0.0, 0.0
         self.tray_m = (0.2, 1.19, FAR_Z)             # drone-parcel tray (bottom centre)
         self.tray_xl = (0.7, 0.86, FAR_Z)            # direct-parcel tray
@@ -497,35 +498,47 @@ def _direct_keys():
 XK = _direct_keys()
 
 
-def port_carrier_z(ext):
-    return FAR_Z - smooth(ext) * SLIDE_MAX
+def port_carrier_z(ext, reach=SLIDE_MAX):
+    return FAR_Z - smooth(ext) * reach
 
 
-def direct_cycle(t, m=None, customer=True, slots=None):
-    """The HTML direct delivery at ``t`` (0..DIRECT_TOTAL). / 直接配達。"""
+def direct_cycle(t, m=None, customer=True, slots=None, box=None):
+    """The HTML direct delivery at ``t`` (0..DIRECT_TOTAL). / 直接配達。
+
+    ``box``: a box station standing in the world (delivery/boxes.py) instead
+    of the one the pod sets down: {"dx", "dz", "reach"} -- its origin's
+    offset from where the HTML puts the station (HTML axes) and the slide
+    reach that gets the carrier into its intake. The pod then shows no
+    station and no customer, and the parcel ends in that box's compartment.
+    世界に置かれた箱型ステーション：位置のずれとスライドの伸び量。
+    """
     m = drone_cycle(at("assign", 1.0), m, flight=False, slots=slots)   # the rest at rest
     K = lambda name: keyed(XK[name], t + S["d_drive"])
     T = t + S["d_drive"]
     a = at
     m.jacks = K("jacks")[0]
+    reach = box["reach"] if box else SLIDE_MAX
+    m.port_reach = reach
+    if box:
+        customer = False
     sx, ty, fz = K("shuttle")
     m.shuttle = [sx, ty, fz]
     ext = K("slide")[0]
     m.port = [ext, K("door")[0]]
     m.flap, m.cell_door = K("flap")[0], K("cell_door")[0]
-    m.station = True
+    m.station = box is None
     on_forks = a("d_retrieve", 3.0) <= T < a("d_load", 3.0) or a("d_depart", 1.2) <= T < a("d_depart", 3.9)
     on_slide = a("d_load", 3.0) <= T < a("d_depart", 1.2)
     rest = PORT_Y if a("d_load") <= T < a("d_depart", 3.0) else DSY
     if on_forks:
         tray = (sx, max(ty, rest), AISLE_Z + fz)
     elif on_slide:
-        tray = (PORT_X, PORT_Y, port_carrier_z(ext))
+        tray = (PORT_X, PORT_Y, port_carrier_z(ext, reach))
     else:
         tray = (DSX, DSY, FAR_Z)
     m.tray_xl = tray
     on_tray = (tray[0], tray[1] + TRAY_T + PARCEL_XL_H / 2, tray[2])
-    cell = CELL_CENTER
+    cell = CELL_CENTER if not box else (CELL_CENTER[0] + box["dx"], CELL_CENTER[1], CELL_CENTER[2] + box["dz"])
     in_cell = (cell[0], cell[1] + PARCEL_XL_H / 2, cell[2])
 
     # customer: walks out of the building, collects, walks back in / 客の動き
@@ -552,8 +565,8 @@ def direct_cycle(t, m=None, customer=True, slots=None):
     elif T < a("d_transfer", 4.6):
         u = smooth((T - a("d_transfer", 3.7)) / 0.9)
         m.parcel_xl_on = "pod"
-        m.parcel_xl = (PORT_X, lerp(PORT_Y + TRAY_T + PARCEL_XL_H / 2, in_cell[1], u),
-                       lerp(port_carrier_z(1.0), cell[2], u))
+        m.parcel_xl = (lerp(PORT_X, cell[0], u), lerp(PORT_Y + TRAY_T + PARCEL_XL_H / 2, in_cell[1], u),
+                       lerp(port_carrier_z(1.0, reach), cell[2], u))
     elif T < a("d_collect", 4.8):
         m.parcel_xl_on, m.parcel_xl = "pod", in_cell
     elif T < a("d_collect", 5.6) and person is not None:
@@ -701,7 +714,7 @@ def part_poses(m):
     if m.parcel_xl_on == "pod":
         put("LMPParcelXL", None, tuple(a - b for a, b in zip(m.parcel_xl, r.parcel_xl)))
 
-    e, e0 = smooth(m.port[0]) * SLIDE_MAX, smooth(r.port[0]) * SLIDE_MAX
+    e, e0 = smooth(m.port[0]) * m.port_reach, smooth(r.port[0]) * r.port_reach
     put("LMPPortDoor", None, (0.0, 0.5 * (smooth(m.port[1]) - smooth(r.port[1])), 0.0))
     for k, prop in enumerate(("LMPPortStage1", "LMPPortStage2", "LMPPortStage3", "LMPPortCarrier")):
         put(prop, None, (0.0, 0.0, -(e - e0) * k / 3.0))
@@ -749,6 +762,22 @@ def station_poses(m):
             rotator(-1.3 * smooth(m.flap), 0.0, 0.0),
             "LMPStationDoor": (so[0] + door[0], so[1] + door[1], so[2] + door[2]) +
             rotator(0.0, 1.6 * smooth(m.cell_door), 0.0)}
+
+
+def station_local(flap, cell_door):
+    """Flap and compartment door relative to the box station's own origin
+    (pod axes), for a box standing in the world. / 箱の原点に対する扉の姿勢。"""
+    f = parts()["LMPStationFlap"]["instances"]["BoxStation_IntakeFlap"]
+    d = parts()["LMPStationDoor"]["instances"][STATION_DOOR]
+    return {"LMPStationFlap": tuple(f) + rotator(-1.3 * smooth(flap), 0.0, 0.0),
+            "LMPStationDoor": tuple(d) + rotator(0.0, 1.6 * smooth(cell_door), 0.0)}
+
+
+def station_point(p):
+    """An HTML point near the station -> relative to the station's origin (pod axes).
+    ステーション付近の点を原点基準に。"""
+    a, o = H(p), H(STATION_ORIGIN)
+    return tuple(x - y for x, y in zip(a, o))
 
 
 def person_pose(m):
@@ -838,6 +867,7 @@ class PodAnim(object):
         self.crane = None                   # [keys, moves, t, end]
         self.shuttle = "m"                  # which cargo track drives the shuttle
         self.x_on = False                   # station/side port in use / 直接配達中
+        self.box = None                     # a world box station at this stop (direct_cycle) / 世界の箱
 
     def play(self, name):
         track, t0, t1 = WINDOWS[name]
@@ -907,9 +937,10 @@ def compose(anim, slots, jacks):
     m.parcel_m, m.parcel_m_on = cargo.parcel_m, cargo.parcel_m_on
     m.shuttle = cargo.shuttle
     if anim.x_on:
-        x = direct_cycle(anim.t["x"] - S["d_drive"], slots=base)
+        x = direct_cycle(anim.t["x"] - S["d_drive"], slots=base, box=anim.box)
         m.tray_xl, m.parcel_xl, m.parcel_xl_on = x.tray_xl, x.parcel_xl, x.parcel_xl_on
         m.port, m.flap, m.cell_door, m.station, m.person = x.port, x.flap, x.cell_door, x.station, x.person
+        m.port_reach = x.port_reach
         if anim.shuttle == "x":
             m.shuttle = x.shuttle
     # drones on their slots at the lift's height, or on the crane / 区画またはクレーン上
