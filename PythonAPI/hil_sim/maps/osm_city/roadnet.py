@@ -455,6 +455,14 @@ def netconvert(osm, xodr, meta, lefthand):
            "--verbose", "false"]
     if lefthand:
         cmd[1:1] = ["--lefthand", "true"]
+    if meta.get("road_fixes"):
+        # no U-turn connections at ordinary junctions (dead ends keep theirs, or
+        # their roads run away): a 3 m lane turned round in a ~2 m radius swings
+        # its outer edge 2-3 m past the road edges, and the model paved that as
+        # rectangular "ears" at junction mouths (OitaKosen 2026-11-04); cars sent
+        # round them climb the kerb. TLS junctions had none already.
+        # 通常の交差点では転回接続を作らない（袋小路は残す）: 縁石の「耳」の原因
+        cmd[-4:-4] = ["--no-turnarounds.except-deadend", "true"]
     subprocess.check_call(cmd)
     os.remove(xodr + ".net.xml")
     tree = ET.parse(xodr + ".raw")

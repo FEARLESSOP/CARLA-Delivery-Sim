@@ -772,7 +772,14 @@ class JP(object):
         setback = {"house": 2.2, "apaato": 2.2, "danchi": 3.0, "mansion": 2.5, "shop": 1.2, "shed": 0.4,
                    "school": 1.5, "worship": 1.5}
         for i, it in self.items.items():
-            it.cell = shapely.union_all(by.get(i, [])).buffer(0)
+            try:
+                it.cell = shapely.union_all(by.get(i, [])).buffer(0)
+            except shapely.errors.GEOSException:
+                # a Voronoi cell with a zero-length edge (non-noded, invalid): cells
+                # are convex, so their hulls are the same shapes made valid; merged
+                # with a 1 mm overlap / ボロノイセルは凸なので凸包で補正して合成
+                cs = [c.convex_hull.buffer(1e-3) for c in by.get(i, [])]
+                it.cell = shapely.union_all(cs).buffer(-1e-3)
             it.setback = setback.get(it.style, 1.5)
 
     def lot_of(self, it, s):

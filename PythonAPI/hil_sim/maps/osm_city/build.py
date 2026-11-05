@@ -62,13 +62,13 @@ def save(mesh_dir, name, m, manifest, kind):
                                 "tris": int(sum(len(a[3]) for a in arrs.values()))})
 
 
-def road_style(name):
-    """maps.json "road_style" of the map called ``name`` (e.g. "japan"), None
-    for the default (Singapore) practice. / maps.json の道路様式。"""
+def road_style(name, key="road_style"):
+    """maps.json "road_style" (or another ``key``) of the map called ``name``
+    (e.g. "japan"), None for the default (Singapore) practice. / maps.json の道路様式。"""
     try:
         for v in json.load(open(os.path.join(HERE, "..", "maps.json"))).values():
             if isinstance(v, dict) and v.get("name") == name:
-                return v.get("road_style")
+                return v.get(key)
     except (OSError, ValueError):
         pass
     return None
@@ -82,6 +82,8 @@ def main():
     style = road_style(name)
     if style:
         meta["road_style"] = style
+    if road_style(name, "ring_guardrail"):
+        meta["ring_guardrail"] = True      # props.py: guardrail on the ring's outer kerb / 外周ガードレール
     L = layout.Layout(meta, os.path.join(out, "lanes.json"), osm)
     print(L.summary(), flush=True)
     # hilly maps: the ground follows the elevated road logic and the terrain
@@ -223,7 +225,11 @@ def main():
                 P.trees = [t for t in P.trees if not tc.contains(Point(t[0], t[1]))] + lm.trees()
             P.items = [it for it in P.items if not (ko.intersects(it[1]) if hasattr(it[1], "geom_type")
                                                     else ko.contains(Point(it[1][0], it[1][1])))]
-    print("trees %d, furniture %d" % (len(P.trees), len(P.items)), flush=True)
+    print("trees %d, furniture %d" % (len(P.trees), len(P.items))
+          + (", lamps left out (pinched mouths, dead ends, narrow islands) %d" % P.lamps_skipped
+             if getattr(P, "lamps_skipped", 0) else ""), flush=True)
+    if P.guard is not None:
+        print("ring guardrail: %.0f m, %d openings" % (P.guard_len, P.guard_openings), flush=True)
     mesh_dir = os.path.join(out, "meshes")
     os.makedirs(mesh_dir, exist_ok=True)
     for f in os.listdir(mesh_dir):
@@ -377,6 +383,8 @@ def main():
         extra["jartic_log"] = M.jartic_log
     pickle.dump(extra, open(os.path.join(out, "crossings.pkl"), "wb"))
     tot = sum(o["tris"] for o in manifest["objects"])
+    if getattr(P, "dropped_over_road", 0):
+        print("trees left out, built crown over a road below %.1f m: %d" % (props.CLEAR_OVER_ROAD, P.dropped_over_road))
     print("objects %d, triangles %d (%.0f s)" % (len(manifest["objects"]), tot, time.time() - t0))
 
 

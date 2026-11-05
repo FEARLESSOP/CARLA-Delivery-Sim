@@ -6,8 +6,18 @@
             "size": "small"
         },
         {
+            "name": "FerrariSF90XXSteer",
+            "path": "/Game/UserCars/Static/Car/FerrariSF90XXSteer/FerrariSF90XXSteer_FerrariSF90XXSteer.FerrariSF90XXSteer_FerrariSF90XXSteer",
+            "size": "small"
+        },
+        {
             "name": "HondaNSXRSteer",
             "path": "/Game/UserCars/Static/Car/HondaNSXRSteer/HondaNSXRSteer_HondaNSXRSteer.HondaNSXRSteer_HondaNSXRSteer",
+            "size": "small"
+        },
+        {
+            "name": "HondaS800Steer",
+            "path": "/Game/UserCars/Static/Car/HondaS800Steer/HondaS800Steer_HondaS800Steer.HondaS800Steer_HondaS800Steer",
             "size": "small"
         },
         {
@@ -28,6 +38,11 @@
         {
             "name": "RedBullRB16Steer",
             "path": "/Game/UserCars/Static/Car/RedBullRB16Steer/RedBullRB16Steer_RedBullRB16Steer.RedBullRB16Steer_RedBullRB16Steer",
+            "size": "small"
+        },
+        {
+            "name": "RollsRoyceDawnSteer",
+            "path": "/Game/UserCars/Static/Car/RollsRoyceDawnSteer/RollsRoyceDawnSteer_RollsRoyceDawnSteer.RollsRoyceDawnSteer_RollsRoyceDawnSteer",
             "size": "small"
         },
         {

@@ -94,5 +94,72 @@ back = vt.tune(down, vt.NEUTRAL, FAC)
 check("back to stock is stock", back.wheels[0].max_brake_torque == 1000.0 and back.max_rpm == 9000.0
       and abs(max(p.y for p in back.torque_curve) - 749) < 0.5)
 
+# own cars: the real torque curve and drag come from cars.json (UE Python
+# can't write a curve into the blueprint), only once the car is built with
+# its drivetrain (probed max RPM = cars.json max RPM)
+# 自作車両: 実車カーブと空気抵抗は cars.json から（drivetrain 付きビルド後のみ）
+print("own drivetrains")
+own = vt.own_drivetrains()
+check("cars.json drivetrains read", "vehicle.rollsroyce.dawn" in own and len(own["vehicle.rollsroyce.dawn"]["torque_curve"]) >= 2)
+vt._OWN = own
+dawn = own["vehicle.rollsroyce.dawn"]
+built = dict(FAC, max_rpm=dawn["max_rpm"])
+f = vt._with_own("vehicle.rollsroyce.dawn", built)
+check("built car gets its real curve and drag", f["torque_curve"] == dawn["torque_curve"]
+      and f["drag"] == dawn["drag"] and f["brake"] == FAC["brake"])
+check("car still on the Prius drivetrain keeps the probed curve",
+      vt._with_own("vehicle.rollsroyce.dawn", FAC) is FAC)
+check("CARLA's own cars untouched", vt._with_own("vehicle.audi.etron", built) is built)
+pc = vt.tune(blueprint_pc(), dict(vt.NEUTRAL, power_scale=1.3), f)
+check("power scale works on the real curve",
+      abs(max(p.y for p in pc.torque_curve) - 1.3 * max(y for _, y in dawn["torque_curve"])) < 0.5)
+
+# stale cache: a long-running dashboard kept / wrote back the Prius probe
+# (max 5000) of a rebuilt own car -> probe again once per process
+# 古いキャッシュ（再ビルド前のプリウス値）は 1 プロセス 1 回だけ再計測
+print("stale factory cache")
+class FakeProbe:
+    def __init__(self, pc): self.pc = pc
+    def set_simulate_physics(self, on): pass
+    def get_physics_control(self): return self.pc
+    def destroy(self): pass
+class FakeBP:
+    def has_attribute(self, k): return False
+class FakeLib:
+    def find(self, t): return FakeBP()
+class FakeWorld:
+    def __init__(self, max_rpm): self.max_rpm, self.spawns = max_rpm, 0
+    def get_blueprint_library(self): return FakeLib()
+    def try_spawn_actor(self, bp, tf):
+        self.spawns += 1
+        pc = blueprint_pc(); pc.max_rpm = self.max_rpm
+        return FakeProbe(pc)
+import json as _json
+with tempfile.TemporaryDirectory() as tmp:
+    cache = os.path.join(tmp, "fac.json")
+    stale = dict(FAC, max_rpm=5000.0)
+    _json.dump({"vehicle.rollsroyce.dawn": stale, "vehicle.audi.etron": FAC}, open(cache, "w"))
+    vt._FACTORY.clear(); vt._REPROBED.clear(); vt._OWN = own
+    vt._FACTORY["vehicle.rollsroyce.dawn"] = dict(stale)       # in memory too
+    w = FakeWorld(dawn["max_rpm"])
+    f = vt.factory(w, "vehicle.rollsroyce.dawn", cache)
+    check("stale entry re-probed", w.spawns == 1 and f["max_rpm"] == dawn["max_rpm"])
+    check("re-probed car gets its real curve", f["torque_curve"] == dawn["torque_curve"])
+    disk = _json.load(open(cache))
+    check("cache file fixed, other entries kept", disk["vehicle.rollsroyce.dawn"]["max_rpm"] == dawn["max_rpm"]
+          and "vehicle.audi.etron" in disk)
+    vt.factory(w, "vehicle.rollsroyce.dawn", cache)
+    check("no second probe", w.spawns == 1)
+    vt._FACTORY.clear(); vt._REPROBED.clear()
+    _json.dump({"vehicle.rollsroyce.dawn": stale}, open(cache, "w"))
+    old = FakeWorld(5000.0)
+    f = vt.factory(old, "vehicle.rollsroyce.dawn", cache)
+    vt.factory(old, "vehicle.rollsroyce.dawn", cache)
+    check("not yet rebuilt: probed once, keeps the Prius curve", old.spawns == 1 and f is vt._FACTORY["vehicle.rollsroyce.dawn"])
+    vt._FACTORY.clear(); vt._REPROBED.clear()
+    _json.dump({"vehicle.audi.etron": FAC}, open(cache, "w"))
+    vt.factory(old, "vehicle.audi.etron", cache)
+    check("CARLA's cars trust the cache", old.spawns == 1)
+
 print("\n%s" % ("ALL PASSED" if not FAILS else "FAILED: " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

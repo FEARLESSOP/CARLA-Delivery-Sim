@@ -9,6 +9,9 @@
   shelters   bus shelters at the OSM bus stops, on the footpath beside the kerb
   linkways   covered walkways over the footways OSM tags covered=yes
   barrier    a noise barrier where the ring road runs beside the expressway
+  guardrail  maps.json "ring_guardrail": a Japanese guardrail (white W-beam on
+             posts) along the ring road's outer kerb, so cars cannot leave the
+             map; real collision (the visible mesh is the collider)
   beacons    Belisha beacons (amber globes) at the ends of zebra crossings
 
 Signs and traffic lights are CARLA's own, made from the road logic.
@@ -30,6 +33,13 @@ import jtrees
 
 CLEAR_OVER_ROAD = 4.5
 JT_ROOM = 0.8             # seasonal trees: crown edge to the carriageway / 樹冠と車道の間隔
+GUARD_GAP = 0.5           # guardrail beam face behind the kerb's back edge / 縁石背面からビーム前面まで
+GUARD_POST = 2.0          # post spacing (Gr-C-2E) / 支柱間隔
+GUARD_POST_TOP = 0.78     # post top over the beam's base ground (beam 0.40-0.80) / 支柱上端
+GUARD_PIECE = 40.0        # mesh pieces (one per tile by its midpoint) / メッシュ分割長
+LAMP_JUNCTION_CLEAR = 1.0  # no lamp this close to a junction lane (a pinched mouth) / 交差点車線からの離れ（狭い口）
+LAMP_DEAD_END_CLEAR = 2.5  # nor this close to a dead end's U-turn lanes (cars swing wide) / 袋小路の転回車線から
+ISLAND_MIN_W = 4.0         # no lamps or trees on narrower islands / これより狭い島に街灯・樹木を置かない
 
 
 class Props(object):
@@ -43,9 +53,11 @@ class Props(object):
         # (jtrees.py) at the same spots; build.py sets it / 日本式は季節の樹木で描く
         self.jtrees = False
         self.items = []           # (kind, data) / 設置物
+        self.guard = guard_line(L)    # ring guardrail (None when off) / 外周ガードレール
         self.no_trunk = unary_union([L.road_all, L.driveways, getattr(L, "reserved", Polygon()), L.parking, L.footpaths.buffer(0.3),
                                      L.cycleways.buffer(0.3), L.building_area.buffer(2.5), L.pools.buffer(1.0),
-                                     L.pitches, L.playgrounds.buffer(0.5)] + ([keepout] if keepout is not None else []))
+                                     L.pitches, L.playgrounds.buffer(0.5)] + ([keepout] if keepout is not None else [])
+                                    + ([self.guard.buffer(1.0)] if self.guard is not None else []))
         self.place_street_trees()
         self.place_lawn_trees()
         self.place_edge_trees()
@@ -53,6 +65,7 @@ class Props(object):
         self.place_shelters()
         self.place_linkways()
         self.place_barrier()
+        self.place_guardrail()
         self.place_beacons()
 
     def ok(self, x, y, r=0.6):
@@ -91,8 +104,9 @@ class Props(object):
                     kind = "palm" if big and self.rng.random() < 0.12 else \
                         ("rain" if self.rng.random() < 0.55 else "angsana")
                     self.add_tree(q.x, q.y, kind, self.rng.uniform(0.85, 1.2) * (1.15 if big else 0.95))
+        island_min = ISLAND_MIN_W / 2 if L.meta.get("road_fixes") else 1.2
         for p in polys(L.islands):
-            if p.buffer(-1.2).is_empty:
+            if p.buffer(-island_min).is_empty:
                 continue
             spine = p.buffer(-1.2)
             for q in polys(spine):
@@ -140,6 +154,13 @@ class Props(object):
     def place_lamps(self):
         L = self.L
         ring_line = L.carriageway.buffer(0.2 + 0.45, quad_segs=2)
+        # road_fixes maps: off pinched junction mouths, dead-end heads and narrow
+        # islands (cars wedged on them; lamps beside ordinary junction corners stay)
+        # 狭い交差点の口・袋小路・狭い島には置かない
+        jl = getattr(L, "junction_lanes", None) if L.meta.get("road_fixes") else None
+        narrow = unary_union([p for p in polys(L.islands) if p.buffer(-ISLAND_MIN_W / 2).is_empty]) \
+            if jl is not None else Polygon()
+        self.lamps_skipped = 0
         for p in polys(ring_line):
             for ring in [p.exterior] + list(p.interiors):
                 if ring.length < 30:
@@ -149,10 +170,17 @@ class Props(object):
                     if L.driveways.buffer(1.0).contains(q) or L.footpaths.contains(q) or \
                             getattr(L, "reserved", Polygon()).buffer(1.0).contains(q):
                         continue
+                    if jl is not None and (jl.distance(q) < LAMP_JUNCTION_CLEAR or narrow.distance(q) < 1.0
+                                           or L.dead_end_lanes.distance(q) < LAMP_DEAD_END_CLEAR):
+                        self.lamps_skipped += 1
+                        continue
                     # the arm reaches over the road: toward the nearest carriageway edge
                     # 腕は最寄りの車道側へ
                     e = L.carriageway.boundary.interpolate(L.carriageway.boundary.project(q))
                     ang = math.atan2(e.y - q.y, e.x - q.x)
+                    if self.guard is not None and self.guard.distance(q) < 0.6:
+                        # behind the ring guardrail, not in it / ガードレールの後ろへ
+                        q = Point(q.x - 0.9 * math.cos(ang), q.y - 0.9 * math.sin(ang))
                     self.items.append(("lamp", (q.x, q.y, ang)))
 
     def place_shelters(self):
@@ -193,6 +221,31 @@ class Props(object):
             for h in getattr(g2, "geoms", [g2]):
                 if h.geom_type == "LineString" and h.length > 20:
                     self.items.append(("barrier", h))
+
+    def place_guardrail(self):
+        """The ring guardrail in GUARD_PIECE m pieces, cut where it would come
+        within 0.3 m of a road or kerb (a road leaving the map: an opening).
+        外周ガードレールを分割して配置（道路が外へ出る所は開口）。"""
+        if self.guard is None:
+            return
+        ra = self.L.road_all.buffer(GUARD_GAP - 0.2)
+        try:
+            g = self.guard.difference(ra)
+        except shapely.errors.GEOSException:
+            # GEOS robustness failure (seen once with the bigger dead-end heads): on a 1 mm grid
+            # GEOS の位相エラー時は 1 mm 格子で
+            g = shapely.set_precision(self.guard, 0.001).difference(
+                shapely.set_precision(make_valid(ra), 0.001))
+        self.guard_openings = max(0, len(getattr(g, "geoms", [g])) - 1)
+        self.guard_len = 0.0
+        for part in getattr(g, "geoms", [g]):
+            if part.geom_type != "LineString" or part.length < 4.0:
+                continue
+            n = max(1, int(round(part.length / GUARD_PIECE)))
+            for k in range(n):
+                piece = substring_line(part, part.length * k / n, part.length * (k + 1) / n)
+                self.items.append(("guardrail", piece))
+                self.guard_len += piece.length
 
     def place_beacons(self):
         for cr in self.crossings:
@@ -320,7 +373,7 @@ class Props(object):
                 mid = d.interpolate(0.5, normalized=True)
                 if x0 <= mid.x < x1 and y0 <= mid.y < y1:
                     if D is not None:                    # long things follow the ground / 長い物は地形に沿う
-                        f.zfun, f.dense = D.z, 2.5
+                        f.zfun, f.dense = (self.guard_z if kind == "guardrail" else D.z), 2.5
                     getattr(self, "m_" + kind)(f, d)
                     f.zfun, f.dense = None, None
         out = {"Terrain_Trees": m, "Terrain_Street": f}
@@ -359,11 +412,27 @@ class Props(object):
         # beside a road the limbs and crown stay off it: they start low, under the
         # crown, unlike the old sphere crowns / 道路脇では枝も樹冠も道路に出さない
         crown = 4.0 if over else max(1.0, dist - JT_ROOM)
-        lm = leaves[sp]
-        lm.zoff = m.zoff
-        jtrees.tree(m, lm, x, y, sp, seed=int(x * 100) * 31 + int(y * 100), height=hgt, crown=crown,
+        # built apart and checked as built: no vertex over the road (carriageway,
+        # kerb) lower than CLEAR_OVER_ROAD above it (the sampled crown check let
+        # a crown on a bank hang 3.3 m over the ring) / 完成形で確認して不可なら植えない
+        tm, tl = Mesh(), Mesh()
+        tm.zoff = tl.zoff = m.zoff
+        jtrees.tree(tm, tl, x, y, sp, seed=int(x * 100) * 31 + int(y * 100), height=hgt, crown=crown,
                     clear=clear, lite=lite, z0=0.1)
-        lm.zoff = 0.0
+        if dist < 15.0:
+            V = np.concatenate([np.concatenate(pt[0]) for mm in (tm, tl) for pt in mm.parts.values() if pt[0]])
+            road = getattr(self, "_road_prep", None)
+            if road is None:
+                road = self._road_prep = self.L.road_all.buffer(0.05)
+                shapely.prepare(road)
+            on = shapely.contains_xy(road, V[:, 0], V[:, 1])
+            if on.any():
+                zr = self.drape.z(V[on, 0], V[on, 1]) if self.drape is not None else 0.0
+                if float(np.min(V[on, 2] - zr)) < CLEAR_OVER_ROAD:
+                    self.dropped_over_road = getattr(self, "dropped_over_road", 0) + 1
+                    return
+        m.merge(tm)
+        leaves[sp].merge(tl)
 
     def m_lamp(self, m, x, y, ang):
         m.cylinder("metal_grey", x, y, 0.1, 10.0, 0.11, seg=6, top=False, r1=0.07)
@@ -401,6 +470,90 @@ class Props(object):
             q = line.interpolate(min(line.length, k * 5.0))
             m.box("metal_grey", q.x, q.y, 0.14, 4.2, 0.2, 0.2)
 
+    def guard_z(self, X, Y):
+        """Ground for the guardrail beam: the higher of the ground under it and
+        the road edge beside it (on an embankment the ground falls away and the
+        beam sank to 0.39 m over the road). / ビームの基準高: 地面と隣の車道端の高い方。"""
+        X, Y = np.asarray(X, float), np.asarray(Y, float)
+        g = self.drape.z(X, Y)
+        edge = getattr(self.L, "guard_edge", None)
+        if edge is None:
+            return g
+        Q = shapely.line_interpolate_point(edge, shapely.line_locate_point(edge, shapely.points(X, Y)))
+        return np.maximum(g, self.drape.z(shapely.get_x(Q), shapely.get_y(Q)))
+
+    def m_guardrail(self, m, line):
+        """Japanese guardrail (ガードレール Gr-C): a white W-beam, rail top 0.8 m,
+        on 0.14 m posts every GUARD_POST m behind it. The beam is a closed
+        section (front W profile, flat back, top and bottom) so it collides from
+        both sides; the road is on the LEFT of the line (guard_line: CCW ring,
+        outside on the right). / 白いWビームと支柱（閉じた断面で両側に当たる）。"""
+        c = np.asarray(line.coords)
+        # W profile toward the road (d = offset to the road side, z) / 道路側のW断面
+        prof = [(0.0, 0.40), (0.06, 0.46), (0.06, 0.54), (0.02, 0.60), (0.06, 0.66), (0.06, 0.74), (0.0, 0.80)]
+        back = -0.04
+        for a, b in zip(c, c[1:]):
+            t = b - a
+            ln = float(np.hypot(*t))
+            if ln < 1e-3:
+                continue
+            nl = np.array([-t[1], t[0]]) / ln          # left of travel = toward the road / 道路側
+            P = lambda q, d, z: (q[0] + nl[0] * d, q[1] + nl[1] * d, z)
+            for (d0, z0), (d1, z1) in zip(prof, prof[1:]):
+                # faces toward the road: a->b with the road on the left -> quad wound to face left
+                m.quad("line_white", P(b, d0, z0), P(a, d0, z0), P(a, d1, z1), P(b, d1, z1))
+            m.quad("line_white", P(a, back, 0.40), P(b, back, 0.40), P(b, back, 0.80), P(a, back, 0.80))
+            m.quad("line_white", P(a, back, 0.80), P(b, back, 0.80), P(b, 0.0, 0.80), P(a, 0.0, 0.80))
+            m.quad("line_white", P(b, back, 0.40), P(a, back, 0.40), P(a, 0.0, 0.40), P(b, 0.0, 0.40))
+        # posts behind the beam, down into the ground / ビームの背後の支柱（地中まで）
+        L = line.length
+        for k in range(int(L // GUARD_POST) + 1):
+            s0 = min(L, k * GUARD_POST)
+            q = line.interpolate(s0)
+            q1 = line.interpolate(min(L, s0 + 0.5))
+            q0 = line.interpolate(max(0.0, s0 - 0.5))
+            tx, ty = q1.x - q0.x, q1.y - q0.y
+            tn = math.hypot(tx, ty) or 1.0
+            px, py = q.x + ty / tn * 0.11, q.y - tx / tn * 0.11     # right = away from the road / 外側
+            if m.zfun is None:
+                m.cylinder("line_white", px, py, -0.4, GUARD_POST_TOP, 0.07, seg=8)
+                continue
+            # from 0.4 m into the ground up to just under the beam top, wherever the
+            # beam sits (raised to the road on embankments) / 地中から梁上端の直下まで
+            zf, dn = m.zfun, m.dense
+            zg = float(self.drape.z(np.array([px]), np.array([py]))[0])
+            zb = float(self.guard_z(np.array([px]), np.array([py]))[0])
+            m.zfun, m.dense = None, None
+            m.cylinder("line_white", px, py, zg - 0.4, zb + GUARD_POST_TOP, 0.07, seg=8)
+            m.zfun, m.dense = zf, dn
+
     def m_beacon(self, m, x, y):
         m.cylinder("pole_stripes", x, y, 0.15, 2.6, 0.06, seg=6, top=True)
         m.sphere("beacon_amber", x, y, 2.85, 0.25, 0.25, 0.25, seg=8, rings=5)
+
+
+def substring_line(line, a, b):
+    from shapely.ops import substring
+    return substring(line, a, b)
+
+
+def guard_line(L):
+    """The ring guardrail's line (maps.json "ring_guardrail", copied into meta
+    by build.py): GUARD_GAP m behind the back of the kerb along the OUTER edge
+    of the carriageway piece that carries the ring road, as a CCW ring (the
+    road on its left). None when off. / 外周道路の外側縁石の GUARD_GAP m 後ろ。"""
+    if not L.meta.get("ring_guardrail") or "ring_wkt" not in L.meta:
+        return None
+    from shapely import wkt
+    from mesh import polys as _polys
+    ring = wkt.loads(L.meta["ring_wkt"]).exterior
+    probe = ring.interpolate(0.0)
+    piece = next((p for p in _polys(L.carriageway) if p.buffer(0.5).contains(probe)), None)
+    if piece is None:
+        return None
+    L.guard_edge = LineString(piece.exterior.coords)      # the ring's outer carriageway edge / 外側車道端
+    outer = Polygon(piece.exterior).buffer(0.2 + GUARD_GAP, quad_segs=8).exterior.simplify(0.03)
+    if not Polygon(outer).exterior.is_ccw:
+        outer = LineString(list(outer.coords)[::-1])
+    return LineString(outer.coords)
+

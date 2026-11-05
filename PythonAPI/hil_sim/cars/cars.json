@@ -1,5 +1,5 @@
 {
-  "_doc": "Your own cars (cars/build_cars.sh). Per car: source model, which objects are the wheels and the steering wheel, and the vehicle's specs. forward = the model's axis the car's nose points along. Lengths in metres, mass in kg. / \u81ea\u4f5c\u8eca\u4e21\u306e\u8a2d\u5b9a glass = window material names made invisible (make_glass.py); glass_objects = objects given their own window material first (when windows or lamp lenses share a material with something else). blinkers = indicator lens/bulb faces given <Name>_BlinkerL/_BlinkerR (side from CARLA y) and made to blink by make_lights.py; mirrors = side-mirror glass faces given <Name>_MirrorGlass (a mirror material). Rule keys: name/objects/materials, material, per_face, box {x|y|abs_y|z: [lo, hi]} in the vehicle frame (metres, x forward from mid-axle, y right, z up from the ground), tint, side (car_guide ch. 4, 12). lenses = lamp lens faces that come out opaque in UE, made invisible with the glass (<Name>_LensGlass).",
+  "_doc": "Your own cars (cars/build_cars.sh). Per car: source model, which objects are the wheels and the steering wheel, and the vehicle's specs. forward = the model's axis the car's nose points along. Lengths in metres, mass in kg. / \u81ea\u4f5c\u8eca\u4e21\u306e\u8a2d\u5b9a glass = window material names made invisible (make_glass.py); glass_objects = objects given their own window material first (when windows or lamp lenses share a material with something else). blinkers = indicator lens/bulb faces given <Name>_BlinkerL/_BlinkerR (side from CARLA y) and made to blink by make_lights.py; mirrors = side-mirror glass faces given <Name>_MirrorGlass (a mirror material). Rule keys: name/objects/materials, material, per_face, box {x|y|abs_y|z: [lo, hi]} in the vehicle frame (metres, x forward from mid-axle, y right, z up from the ground), tint, side (car_guide ch. 4, 12). lenses = lamp lens faces that come out opaque in UE, made invisible with the glass (<Name>_LensGlass). rhd_convert = make a left-hand-drive model right-hand drive: move (shared parts: wheel, column, cluster, pedals, as one block, axis_y), mirror (driver-shaped mouldings, per_face box symmetric about the centre line), flip_uv / unmirror (graphics on mirrored faces read right again; uv_box picks a decal in an atlas) (car_guide ch. 13). drop = helper meshes removed; split = one mesh cut per material and connected piece; vertex_colour_base = game-rip vertex colours and atlas UVs made visible in UE; steering_wheel box/in = the wheel cut out of merged meshes by a CAR-frame box, exclude = parts never joined to the wheel.",
   "rx7": {
     "name": "MazdaRX7",
     "make": "mazda",
@@ -68,7 +68,65 @@
     "glass_objects": [
       "LOD_A_GLASS_",
       "_LENS_"
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "5MT",
+      "layout": "FR, rotary 13B-REW twin turbo",
+      "gears": [
+        3.483,
+        2.015,
+        1.391,
+        1.0,
+        0.719
+      ],
+      "final": 4.3,
+      "reverse": 3.288,
+      "max_rpm": 8000,
+      "torque_curve": [
+        [
+          1000,
+          150
+        ],
+        [
+          2500,
+          250
+        ],
+        [
+          3500,
+          294
+        ],
+        [
+          5000,
+          314
+        ],
+        [
+          6500,
+          303
+        ],
+        [
+          7500,
+          255
+        ],
+        [
+          8000,
+          225
+        ]
+      ],
+      "shift_up": 0.85,
+      "switch_time": 0.3,
+      "autobox_latency": 0.5,
+      "moi": 0.12,
+      "drag": 0.46,
+      "frontal_area_m2": 1.76,
+      "drive": "rear",
+      "_real": {
+        "power": "280 PS @ 6500",
+        "torque": "314 Nm (32.0 kgm) @ 5000",
+        "top_kmh": 250,
+        "0_100_s": 5.0
+      },
+      "_note": "Spirit R Type A: 0.719 stock 5th, 4.300 RS final; no factory table found. Cd 0.46 = real 0.31 + rolling/driveline losses (PhysX has neither)."
+    }
   },
   "supra": {
     "name": "ToyotaSupraA70",
@@ -173,7 +231,69 @@
     ],
     "glass": [
       "cpillarwindow"
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "5MT (R154)",
+      "layout": "FR, 7M-GTE 3.0 turbo (MA70 3.0GT Turbo)",
+      "gears": [
+        3.251,
+        1.955,
+        1.31,
+        1.0,
+        0.753
+      ],
+      "final": 3.909,
+      "reverse": 3.18,
+      "max_rpm": 6800,
+      "torque_curve": [
+        [
+          1000,
+          190
+        ],
+        [
+          2000,
+          270
+        ],
+        [
+          3000,
+          315
+        ],
+        [
+          4000,
+          324
+        ],
+        [
+          5000,
+          314
+        ],
+        [
+          5600,
+          294
+        ],
+        [
+          6500,
+          245
+        ],
+        [
+          6800,
+          225
+        ]
+      ],
+      "shift_up": 0.85,
+      "switch_time": 0.35,
+      "autobox_latency": 0.5,
+      "moi": 0.2,
+      "drag": 0.43,
+      "frontal_area_m2": 1.86,
+      "drive": "rear",
+      "_real": {
+        "power": "230 PS @ 5600 (net)",
+        "torque": "324 Nm (33.0 kgm) @ 4000",
+        "top_kmh": 240,
+        "0_100_s": 6.5
+      },
+      "_note": "1988 MA70 3.0GT Turbo assumed from the model year; 1987-88 final 3.909 (1989+ 3.727). Cd 0.43 effective (real 0.32)."
+    }
   },
   "imiev": {
     "name": "MitsubishiIMiev",
@@ -288,7 +408,64 @@
     "glass": [
       "glass_window",
       "glass_surr"
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "single-speed reduction (EV)",
+      "layout": "RR, Y4F1 permanent-magnet motor",
+      "gears": [
+        1.0
+      ],
+      "final": 7.065,
+      "reverse": 1.0,
+      "max_rpm": 8600,
+      "torque_curve": [
+        [
+          0,
+          180
+        ],
+        [
+          2000,
+          180
+        ],
+        [
+          3000,
+          150
+        ],
+        [
+          4000,
+          112
+        ],
+        [
+          5000,
+          90
+        ],
+        [
+          6000,
+          75
+        ],
+        [
+          7500,
+          58
+        ],
+        [
+          8600,
+          50
+        ]
+      ],
+      "switch_time": 0.0,
+      "autobox_latency": 0.0,
+      "moi": 0.2,
+      "drag": 0.45,
+      "frontal_area_m2": 2.0,
+      "drive": "rear",
+      "_real": {
+        "power": "47 kW (64 PS) @ 3000-6000",
+        "torque": "180 Nm @ 0-2000",
+        "top_kmh": 130,
+        "0_100_s": 15.9
+      },
+      "_note": "Really single-speed: one fixed 7.065 reduction; max_rpm 8600 = the 130 km/h limit. Cd 0.45 effective (real 0.35)."
+    }
   },
   "csl": {
     "name": "BMW30CSL",
@@ -350,7 +527,64 @@
           ]
         }
       }
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "4MT (Getrag)",
+      "layout": "FR, M30 3.0 L six, D-Jetronic",
+      "gears": [
+        3.855,
+        2.203,
+        1.402,
+        1.0
+      ],
+      "final": 3.25,
+      "reverse": 4.3,
+      "max_rpm": 6400,
+      "torque_curve": [
+        [
+          1000,
+          190
+        ],
+        [
+          2000,
+          235
+        ],
+        [
+          3000,
+          260
+        ],
+        [
+          4300,
+          272
+        ],
+        [
+          5500,
+          255
+        ],
+        [
+          6000,
+          235
+        ],
+        [
+          6400,
+          215
+        ]
+      ],
+      "shift_up": 0.88,
+      "switch_time": 0.45,
+      "autobox_latency": 0.6,
+      "moi": 0.2,
+      "drag": 0.5,
+      "frontal_area_m2": 1.88,
+      "drive": "rear",
+      "_real": {
+        "power": "200 PS @ 5500",
+        "torque": "272 Nm @ 4300",
+        "top_kmh": 220,
+        "0_100_s": 7.3
+      },
+      "_note": "Cd 0.50 effective (real ~0.39). Reverse ratio approximate."
+    }
   },
   "nsx": {
     "name": "HondaNSXR",
@@ -408,7 +642,66 @@
           ]
         }
       }
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "6MT",
+      "layout": "MR, C32B 3.2 L V6 VTEC",
+      "gears": [
+        3.066,
+        1.956,
+        1.428,
+        1.125,
+        0.914,
+        0.717
+      ],
+      "final": 4.235,
+      "reverse": 3.186,
+      "max_rpm": 8000,
+      "torque_curve": [
+        [
+          1000,
+          200
+        ],
+        [
+          2500,
+          255
+        ],
+        [
+          4000,
+          280
+        ],
+        [
+          5300,
+          304
+        ],
+        [
+          6500,
+          295
+        ],
+        [
+          7300,
+          270
+        ],
+        [
+          8000,
+          240
+        ]
+      ],
+      "shift_up": 0.92,
+      "switch_time": 0.25,
+      "autobox_latency": 0.5,
+      "moi": 0.15,
+      "drag": 0.4,
+      "frontal_area_m2": 1.75,
+      "drive": "rear",
+      "_real": {
+        "power": "280 PS @ 7300",
+        "torque": "304 Nm (31.0 kgm) @ 5300",
+        "top_kmh": 270,
+        "0_100_s": 4.8
+      },
+      "_note": "2002 NA2 NSX-R close-ratio 6MT. Cd 0.40 effective (real 0.32)."
+    }
   },
   "soarer": {
     "name": "ToyotaSoarer",
@@ -536,7 +829,60 @@
           ]
         }
       }
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "4AT (A340E, ECT)",
+      "layout": "FR, 1JZ-GTE 2.5 turbo VVT-i (JZZ30 2.5GT-T, 1997-)",
+      "gears": [
+        2.804,
+        1.531,
+        1.0,
+        0.705
+      ],
+      "final": 3.916,
+      "reverse": 2.393,
+      "max_rpm": 6800,
+      "torque_curve": [
+        [
+          1000,
+          230
+        ],
+        [
+          2400,
+          378
+        ],
+        [
+          3500,
+          378
+        ],
+        [
+          4800,
+          370
+        ],
+        [
+          6200,
+          318
+        ],
+        [
+          6800,
+          280
+        ]
+      ],
+      "shift_up": 0.75,
+      "switch_time": 0.3,
+      "autobox_latency": 0.8,
+      "moi": 0.25,
+      "drag": 0.44,
+      "frontal_area_m2": 1.97,
+      "drive": "rear",
+      "_real": {
+        "power": "280 PS @ 6200",
+        "torque": "378 Nm (38.5 kgm) @ 2400",
+        "top_kmh": 250,
+        "0_100_s": 6.5
+      },
+      "_note": "1998 JZZ30 2.5GT-T assumed (mass 1580 kg; the model does not show the engine); 4AT A340E. Cd 0.44 effective (real ~0.30)."
+    }
   },
   "sileighty": {
     "name": "NissanSileighty",
@@ -618,7 +964,65 @@
           ]
         }
       }
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "5MT",
+      "layout": "FR, SR20DET 2.0 turbo",
+      "gears": [
+        3.321,
+        1.902,
+        1.308,
+        1.0,
+        0.759
+      ],
+      "final": 4.083,
+      "reverse": 3.382,
+      "max_rpm": 7500,
+      "torque_curve": [
+        [
+          1000,
+          150
+        ],
+        [
+          2500,
+          230
+        ],
+        [
+          4000,
+          275
+        ],
+        [
+          5000,
+          270
+        ],
+        [
+          6000,
+          245
+        ],
+        [
+          7000,
+          205
+        ],
+        [
+          7500,
+          185
+        ]
+      ],
+      "shift_up": 0.88,
+      "switch_time": 0.3,
+      "autobox_latency": 0.5,
+      "moi": 0.18,
+      "drag": 0.46,
+      "frontal_area_m2": 1.8,
+      "drive": "rear",
+      "_real": {
+        "power": "205 PS @ 6000",
+        "torque": "275 Nm (28.0 kgm) @ 4000",
+        "top_kmh": 230,
+        "0_100_s": 6.8
+      },
+      "_note": "S13/RPS13 SR20DET box; final 4.083 (some lists 4.111). Cd 0.46 effective (real ~0.31)."
+    }
   },
   "rb16": {
     "name": "RedBullRB16",
@@ -689,6 +1093,708 @@
       0.14,
       0.0,
       0.88
-    ]
+    ],
+    "drivetrain": {
+      "transmission": "8-speed seamless sequential (approximate)",
+      "layout": "MR, Honda RA620H 1.6 V6 turbo + MGU-K (combined)",
+      "gears": [
+        4.0,
+        3.02,
+        2.42,
+        2.0,
+        1.7,
+        1.47,
+        1.3,
+        1.16
+      ],
+      "final": 3.4,
+      "reverse": 4.0,
+      "max_rpm": 12500,
+      "torque_curve": [
+        [
+          4000,
+          300
+        ],
+        [
+          7000,
+          420
+        ],
+        [
+          9000,
+          520
+        ],
+        [
+          10500,
+          580
+        ],
+        [
+          11500,
+          565
+        ],
+        [
+          12500,
+          500
+        ]
+      ],
+      "shift_up": 0.94,
+      "switch_time": 0.05,
+      "autobox_latency": 0.2,
+      "moi": 0.2,
+      "clutch": 20,
+      "drag": 0.72,
+      "frontal_area_m2": 1.5,
+      "drive": "rear",
+      "_real": {
+        "power": "~740 kW combined (ICE ~600 kW + MGU-K 120 kW, approx.)",
+        "torque": "~580 Nm combined (approx.)",
+        "top_kmh": 345,
+        "0_100_s": 2.6
+      },
+      "_note": "APPROXIMATE: F1 ratios are secret; set for ~100 km/h in 1st and ~345 km/h in 8th at 12,000-12,500 rpm. No downforce in CARLA. Cd 0.72 x 1.5 m2."
+    }
+  },
+  "sf90": {
+    "name": "FerrariSF90XX",
+    "make": "ferrari",
+    "model": "sf90_xx",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/sf90/source/unzipped/Full_Model.fbx",
+    "forward": "-y",
+    "length_m": 4.85,
+    "wheels": {
+      "materials": [
+        "Ferrari_SF90XXStradale_2024_Wheel1A_3D_3DWheel1C_Material1"
+      ]
+    },
+    "steering_wheel": {
+      "box": {
+        "x": [
+          0.42,
+          0.66
+        ],
+        "y": [
+          0.14,
+          0.54
+        ],
+        "z": [
+          0.55,
+          0.93
+        ],
+        "size": [
+          0,
+          0.45
+        ]
+      },
+      "in": [
+        "Interior_Geo",
+        "Carbon2_Geo",
+        "Badge_Geo"
+      ],
+      "exclude": [
+        "InteriorTilling"
+      ]
+    },
+    "mass": 1660,
+    "tyre_width_m": 0.255,
+    "drive_side": "right",
+    "glass": [
+      "Ferrari_SF90XXStradale_2024Window_Material",
+      "Ferrari_SF90XXStradale_2024WindowInside_Material"
+    ],
+    "rhd_convert": {
+      "move": [
+        {
+          "box": {
+            "x": [
+              0.4,
+              0.95
+            ],
+            "y": [
+              -0.52,
+              -0.16
+            ],
+            "z": [
+              0.5,
+              1.0
+            ],
+            "size": [
+              0,
+              0.45
+            ]
+          },
+          "axis_y": -0.3436
+        },
+        {
+          "box": {
+            "x": [
+              0.95,
+              1.3
+            ],
+            "y": [
+              -0.6,
+              -0.05
+            ],
+            "z": [
+              0.1,
+              0.5
+            ],
+            "size": [
+              0,
+              0.3
+            ]
+          }
+        },
+        {
+          "box": {
+            "x": [
+              0.95,
+              1.3
+            ],
+            "y": [
+              0.05,
+              0.6
+            ],
+            "z": [
+              0.1,
+              0.5
+            ],
+            "size": [
+              0,
+              0.5
+            ]
+          }
+        }
+      ],
+      "mirror": [
+        {
+          "per_face": true,
+          "box": {
+            "x": [
+              0.45,
+              1.45
+            ],
+            "abs_y": [
+              0,
+              0.62
+            ],
+            "z": [
+              0.55,
+              1.1
+            ]
+          },
+          "exclude": [
+            "body_",
+            "Window_Geo",
+            "WindowInside",
+            "GrilleAlpha5",
+            "Base_Geo"
+          ]
+        },
+        {
+          "per_face": true,
+          "box": {
+            "x": [
+              0.45,
+              1.45
+            ],
+            "abs_y": [
+              0.12,
+              0.62
+            ],
+            "z": [
+              0.25,
+              0.55
+            ]
+          },
+          "exclude": [
+            "body_",
+            "Window_Geo",
+            "WindowInside",
+            "GrilleAlpha5",
+            "Base_Geo"
+          ]
+        }
+      ],
+      "flip_uv": [
+        {
+          "name": "Interior",
+          "uv_box": [
+            0.02,
+            0.71,
+            0.95,
+            0.84
+          ]
+        }
+      ]
+    },
+    "mirrors": [
+      {
+        "material": [
+          "MIRROR"
+        ],
+        "box": {
+          "abs_y": [
+            0.8,
+            1.3
+          ]
+        }
+      }
+    ],
+    "blinkers": [
+      {
+        "name": "Light_Geo",
+        "box": {
+          "x": [
+            1.8,
+            1.93
+          ],
+          "abs_y": [
+            0.74,
+            0.87
+          ],
+          "z": [
+            0.53,
+            0.64
+          ]
+        }
+      },
+      {
+        "name": "Light_Geo",
+        "per_face": true,
+        "box": {
+          "x": [
+            1.93,
+            2.06
+          ],
+          "abs_y": [
+            0.7,
+            0.9
+          ],
+          "z": [
+            0.49,
+            0.555
+          ]
+        }
+      },
+      {
+        "name": "Light_Geo",
+        "box": {
+          "x": [
+            -2.1,
+            -1.95
+          ],
+          "abs_y": [
+            0.6,
+            0.8
+          ],
+          "z": [
+            0.74,
+            0.81
+          ]
+        }
+      }
+    ],
+    "drivetrain": {
+      "transmission": "8DCT (Magna 8DCL900, gear ratios approximate)",
+      "layout": "MR + front e-axle, F154 4.0 V8 twin turbo + 3 motors (combined torque)",
+      "gears": [
+        3.0,
+        2.1,
+        1.62,
+        1.31,
+        1.08,
+        0.92,
+        0.8,
+        0.65
+      ],
+      "final": 3.96,
+      "reverse": 3.0,
+      "max_rpm": 8000,
+      "torque_curve": [
+        [
+          1000,
+          800
+        ],
+        [
+          2500,
+          950
+        ],
+        [
+          4000,
+          1000
+        ],
+        [
+          6250,
+          1050
+        ],
+        [
+          7000,
+          990
+        ],
+        [
+          7900,
+          915
+        ],
+        [
+          8000,
+          880
+        ]
+      ],
+      "shift_up": 0.9,
+      "switch_time": 0.1,
+      "autobox_latency": 0.3,
+      "moi": 0.2,
+      "clutch": 15,
+      "drag": 0.54,
+      "frontal_area_m2": 2.0,
+      "drive": "4wd",
+      "front_rear_split": 0.3,
+      "_real": {
+        "power": "1030 cv combined (V8 797 cv @ 7900)",
+        "torque": "V8 804 Nm @ 6250",
+        "top_kmh": 320,
+        "0_100_s": 2.3
+      },
+      "_note": "Gear ratios APPROXIMATE (Ferrari does not publish them); combined V8 + motor torque in one curve; CARLA can't do the electric front axle, so it is 4wd with 30 % front. No reverse gear on the real car (the front motors reverse it). Cd 0.54 effective; top 357 km/h in CARLA vs 320 km/h real (no limiter)."
+    }
+  },
+  "dawn": {
+    "name": "RollsRoyceDawn",
+    "make": "rollsroyce",
+    "model": "dawn",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/dawn/source/RollsRoyce_Dawn_2016_FM7_Sketchfab.glb",
+    "forward": "-y",
+    "length_m": 5.285,
+    "drop": {
+      "objects": [
+        "Icosphere"
+      ]
+    },
+    "vertex_colour_base": true,
+    "wheels": {
+      "name": "tyre_"
+    },
+    "steering_wheel": {
+      "objects": [
+        "steeringColumn_a_11_[leather_smooth]"
+      ],
+      "exclude": [
+        "steeringColumn_a_5_"
+      ]
+    },
+    "mass": 2560,
+    "tyre_width_m": 0.255,
+    "drive_side": "right",
+    "glass": [
+      "glass_window",
+      "glass_windshield"
+    ],
+    "lenses": [
+      {
+        "name": "[glass]",
+        "exclude": [
+          "glassLTL_",
+          "glassRTL_"
+        ]
+      }
+    ],
+    "mirrors": [
+      {
+        "name": "[mirror_"
+      }
+    ],
+    "blinkers": [
+      {
+        "name": "SideMarkers_a_0_[metal_satin]"
+      },
+      {
+        "objects": [
+          "headlightL_a_1_[emitter_ch1]",
+          "headlightR_a_1_[emitter_ch1]"
+        ]
+      },
+      {
+        "objects": [
+          "taillightL_a_3_[rad_ch1lightsource]",
+          "taillightR_a_3_[rad_ch1lightsource]"
+        ]
+      },
+      {
+        "objects": [
+          "glassLTL_a_0_[glass]",
+          "glassRTL_a_0_[glass]"
+        ],
+        "per_face": true,
+        "box": {
+          "x": [
+            -2.75,
+            -2.3
+          ],
+          "abs_y": [
+            0.5,
+            0.9
+          ],
+          "z": [
+            0.79,
+            0.849
+          ]
+        }
+      }
+    ],
+    "rhd_convert": {
+      "move": [
+        {
+          "name": "steeringColumn",
+          "objects": [
+            "gaugeCluster_a_1_[gaugeface_ch1]",
+            "gaugeCluster_a_2_[metal_smooth]",
+            "gaugeCluster_a_3_[glass]",
+            "dashStructure_a_1_[digitalscreen]",
+            "dashStructure_a_6_[plastic_lgl]",
+            "dashStructure_a_9_[plastic_lgl]",
+            "dashStructure_a_10_[plastic_lgl]",
+            "dashStructure_a_11_[plastic_lgl]",
+            "dashStructure_a_17_[chrome]",
+            "dashStructure_a_18_[chrome]",
+            "dashStructure_a_19_[chrome]",
+            "dashStructure_a_22_[metal_ch1_custom]"
+          ],
+          "box": {
+            "y": [
+              -0.62,
+              -0.15
+            ]
+          },
+          "axis_y": -0.3955
+        },
+        {
+          "name": "pedals_"
+        }
+      ],
+      "mirror": [
+        {
+          "name": "dash",
+          "per_face": true,
+          "box": {
+            "x": [
+              0.3,
+              1.0
+            ],
+            "abs_y": [
+              0.1,
+              0.66
+            ],
+            "z": [
+              0.6,
+              1.2
+            ]
+          }
+        },
+        {
+          "name": "gaugeCluster",
+          "box": {
+            "y": [
+              0.1,
+              0.3
+            ]
+          }
+        },
+        {
+          "name": "wipers_"
+        },
+        {
+          "name": "floor_a_5_",
+          "per_face": true,
+          "box": {
+            "x": [
+              0.6,
+              1.0
+            ],
+            "abs_y": [
+              0.2,
+              0.66
+            ]
+          }
+        }
+      ],
+      "flip_uv": [
+        {
+          "name": "int_symbols",
+          "about": "island"
+        },
+        {
+          "name": "gaugeCluster",
+          "about": "island"
+        },
+        {
+          "name": "keyhole",
+          "about": "island"
+        }
+      ],
+      "unmirror": [
+        {
+          "objects": [
+            "dashStructure_a_7_[plastic_lgl]",
+            "dashStructure_a_8_[plastic_lgl]"
+          ],
+          "axis_y": -0.203
+        }
+      ]
+    },
+    "drivetrain": {
+      "transmission": "8AT (ZF 8HP90, 1st gen ratios)",
+      "layout": "FR, N74 6.6 V12 twin turbo",
+      "gears": [
+        4.714,
+        3.143,
+        2.106,
+        1.667,
+        1.285,
+        1.0,
+        0.839,
+        0.667
+      ],
+      "final": 2.81,
+      "reverse": 3.317,
+      "max_rpm": 6000,
+      "torque_curve": [
+        [
+          800,
+          500
+        ],
+        [
+          1500,
+          820
+        ],
+        [
+          4500,
+          820
+        ],
+        [
+          5250,
+          765
+        ],
+        [
+          6000,
+          640
+        ]
+      ],
+      "shift_up": 0.7,
+      "switch_time": 0.2,
+      "autobox_latency": 0.4,
+      "moi": 0.35,
+      "drag": 0.49,
+      "frontal_area_m2": 2.4,
+      "drive": "rear",
+      "_real": {
+        "power": "570 PS (563 hp) @ 5250",
+        "torque": "820 Nm @ 1500-4500",
+        "top_kmh": 250,
+        "0_100_s": 4.9
+      },
+      "_note": "ZF 8HP90 ratios (as in the Wraith/Ghost on the same platform; Dawn Black Badge uses the 8HP95). Final 2.81 UNVERIFIED (its only source is gone). Cd 0.49 effective; real top speed is limited to 250 km/h, CARLA has no limiter."
+    }
+  },
+  "s800": {
+    "name": "HondaS800",
+    "make": "honda",
+    "model": "s800",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/s800/source/hondas800.glb",
+    "forward": "-y",
+    "length_m": 3.335,
+    "split": true,
+    "wheels": {
+      "materials": [
+        "tires_mat"
+      ]
+    },
+    "steering_wheel": {
+      "materials": [
+        "STW_wood"
+      ]
+    },
+    "mass": 755,
+    "tyre_width_m": 0.145,
+    "drive_side": "right",
+    "glass": [
+      "INT_windshield"
+    ],
+    "mirrors": [
+      {
+        "material": [
+          "mirrors_mat"
+        ],
+        "box": {
+          "abs_y": [
+            0.5,
+            1.0
+          ]
+        }
+      }
+    ],
+    "blinkers": [
+      {
+        "material": [
+          "EXT_headlight_glass"
+        ],
+        "tint": "amber"
+      }
+    ],
+    "drivetrain": {
+      "transmission": "4MT",
+      "layout": "FR, AS800E 791 cc DOHC four",
+      "gears": [
+        3.143,
+        2.05,
+        1.458,
+        1.14
+      ],
+      "final": 4.71,
+      "reverse": 3.5,
+      "max_rpm": 8500,
+      "torque_curve": [
+        [
+          1500,
+          40
+        ],
+        [
+          3000,
+          55
+        ],
+        [
+          4500,
+          63
+        ],
+        [
+          6000,
+          66
+        ],
+        [
+          7000,
+          65
+        ],
+        [
+          8000,
+          61
+        ],
+        [
+          8500,
+          55
+        ]
+      ],
+      "shift_up": 0.92,
+      "switch_time": 0.4,
+      "autobox_latency": 0.5,
+      "moi": 0.15,
+      "drag": 0.59,
+      "frontal_area_m2": 1.4,
+      "drive": "rear",
+      "_real": {
+        "power": "70 PS @ 8000",
+        "torque": "66 Nm (6.7 kgm) @ 6000",
+        "top_kmh": 160,
+        "0_100_s": 13
+      },
+      "_note": "Final 4.71 and 156-160 km/h sourced; ALL four gear ratios APPROXIMATE (no source found; 4th chosen so 160 km/h falls near peak power). Cd 0.59 effective."
+    }
   }
 }

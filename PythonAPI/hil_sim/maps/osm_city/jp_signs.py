@@ -52,6 +52,7 @@ BACK = 0.6                 # post behind the carriageway edge (gutter 0.4 + kerb
 BOTTOM = 1.85              # lowest plate edge over the pavement (1.8 m min) / 板下端の高さ
 GAP = 0.05
 LANE_CAP = 2.0             # lane ends extended this far for the clearance test (carla clamps s) / 端の延長
+GUARD_CLEAR = 0.35         # posts this far behind the ring guardrail's beam (its posts 0.04-0.18) / ガードレール背後
 LANE_CLEAR = 0.3           # every post this far from any xodr driving lane (junction lanes too) / 全車線からの離れ
 PLATE_T = 0.012
 FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
@@ -258,6 +259,13 @@ class Placer(object):
         self.L = layout.Layout(self.meta, os.path.join(out, "lanes.json"), osm)
         self.D = terrain.drape_for(out, self.L)
         self.cw = self.L.carriageway
+        # the ring guardrail (props.py, maps.json "ring_guardrail"): posts stand
+        # behind it, never in the beam / 外周ガードレール: 支柱はその後ろに立てる
+        import props
+        self.meta["ring_guardrail"] = bool(_map_entry(self.meta["name"]).get("ring_guardrail"))
+        self.L.meta["ring_guardrail"] = self.meta["ring_guardrail"]
+        self.guard = props.guard_line(self.L)
+        self.guard_moved = 0
         # every driving lane of the road logic, junction lanes included: posts keep clear
         # 道路情報の全走行車線（交差点内を含む）: 支柱はここから離す
         from shapely.geometry import Polygon
@@ -346,6 +354,7 @@ class Placer(object):
         """A plate at spot facing ``face`` (unit xy): onto a post within 2.5 m
         facing the same way, else a new post. / 近くの同じ向きの支柱に載せる。"""
         face = np.asarray(face, float) / (np.linalg.norm(face) or 1.0)
+        spot = self.behind_guard(spot)
         if stack:
             for p in self.posts:
                 if np.hypot(p["x"] - spot[0], p["y"] - spot[1]) < 2.5 and float(p["face"] @ face) > 0.87 \
@@ -363,6 +372,22 @@ class Placer(object):
         self.posts.append(p)
         return p
 
+    def behind_guard(self, spot):
+        """A post within GUARD_CLEAR m of the ring guardrail's beam line goes
+        GUARD_CLEAR m behind it (away from the road; past the rail's posts).
+        ガードレールに近い支柱はその後ろへ。"""
+        if self.guard is None:
+            return spot
+        pt = Point(float(spot[0]), float(spot[1]))
+        if self.guard.distance(pt) >= GUARD_CLEAR:
+            return spot
+        on = self.guard.interpolate(self.guard.project(pt))
+        q = self.cw.boundary.interpolate(self.cw.boundary.project(on))
+        out = np.array([on.x - q.x, on.y - q.y])
+        out /= np.linalg.norm(out) or 1.0
+        self.guard_moved += 1
+        return np.array([on.x, on.y]) + out * GUARD_CLEAR
+
     # each kind / 種類ごと
     def stops(self):
         for road, j, back in self.extra.get("stop", []):
@@ -375,8 +400,9 @@ class Placer(object):
             if spot is None:
                 self.dropped.append(("tomare", road, j, f))
                 continue
-            self.add("tomare", spot, -f, "stop road %d junction %d" % (road, j))
-            self.stop_posts[road] = spot
+            post = self.add("tomare", spot, -f, "stop road %d junction %d" % (road, j))
+            # the landmark goes where the post is (moved behind a guardrail) / 支柱の実位置
+            self.stop_posts[road] = np.array([post["x"], post["y"]]) if post is not None else spot
 
     def no_turns(self):
         for r in self.rows:
@@ -591,6 +617,17 @@ class Placer(object):
         return len(self.moved)
 
 
+def _map_entry(name):
+    """maps.json entry of the map called ``name`` ({} if none). / maps.json の項目。"""
+    try:
+        for v in json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "maps.json"))).values():
+            if isinstance(v, dict) and v.get("name") == name:
+                return v
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
 def check(placer, rec):
     """Offline checks: posts off the carriageway, 0.3-2.0 m behind its edge, on
     the kerb side, plates facing their traffic, nothing low over a lane.
@@ -610,6 +647,8 @@ def check(placer, rec):
             bad.append(("low plate", r))
         if d < half and r["z"] - r["h"] / 2 - r["ground"] < 4.5:
             bad.append(("plate over the carriageway below 4.5 m", r))
+        if placer.guard is not None and placer.guard.distance(pt) < 0.2 + POLE_R:
+            bad.append(("post %.2f m from the guardrail beam (< 0.2)" % placer.guard.distance(pt), r))
     mesh_dir = os.path.join(placer.out, "meshes")
     road = placer.cw.buffer(-0.02)
     over = 0
@@ -635,6 +674,8 @@ def main():
     n = collections.Counter(r["kind"] for r in rec)
     print("jp_signs: %d posts, %d plates: %s" % (len(P.posts), len(rec), ", ".join("%s %d" % kv for kv in sorted(n.items()))))
     print("jp_signs: %d Stencil_STOP landmarks moved to their 止まれ posts" % n_moved)
+    if P.guard is not None:
+        print("jp_signs: %d posts moved behind the ring guardrail" % P.guard_moved)
     for d in P.dropped:
         print("  dropped: %s" % (d,))
     for m in P.merged:

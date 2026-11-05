@@ -33,6 +33,7 @@ PAINT_Z = 0.008
 LOT_PAINT_Z = RAISED_Z + 0.006
 TILE = 250.0
 DENSE = 2.5            # hilly maps: ground faces cut on this grid to follow the terrain / 地形に沿わせる格子
+APRON_GRID = 50.0      # hilly maps: the apron beyond the map's edge, cut on this grid / 地図外の地面の格子
 
 
 def tiles(meta):
@@ -422,11 +423,19 @@ class Ground(object):
                 cy1 = ty1 if ty1 < oy1 - 1 else 1e6
                 mine = mine.union(q.intersection(box(cx0, cy0, cx1, cy1)))
             if self.drape is not None:
-                # far beyond the map: only its edge is cut to meet the draped ground
-                # 地図の外: 縁だけ分割して地面と合わせる
+                # far beyond the map: its edge cut to meet the draped ground, the
+                # rest on a 50 m grid. One fan of 1.5 km x 2.5 m slivers from the
+                # edge (2026-11-04) came out in CARLA as an invisible collision
+                # sheet over the map's SW corner, 64 x 72 m at the outer terrain's
+                # height (84 m, 4 m over the roads), not in the FBX: no slivers.
+                # 地図の外: 縁は地面に合わせ、残りは 50 m 格子（細長い三角形を作らない）
+                if not mine.is_empty:
+                    mine = shapely.segmentize(mine, DENSE)
+                    grass.dense = APRON_GRID
+                    grass.flat("grass_park", mine, RAISED_Z, uv_scale=8.0)
                 grass.dense = None
-                mine = shapely.segmentize(mine, DENSE) if not mine.is_empty else mine
-            grass.flat("grass_park", mine, BASE_Z if self.drape is None else RAISED_Z, uv_scale=8.0)
+            else:
+                grass.flat("grass_park", mine, BASE_Z, uv_scale=8.0)
         out["Road_Grass"] = grass
 
         out["Terrain_Lots"] = lots

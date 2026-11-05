@@ -17,6 +17,7 @@ and to build_vehicle.log next to this script.
 ``vehicle.delivery.pod`` として登録する。
 """
 
+import json
 import os
 import traceback
 
@@ -40,6 +41,9 @@ BOUNDS = [float(v) for v in os.environ.get("VEH_BOUNDS", "226,107,198,198").spli
 MAKE, MODEL = os.environ.get("VEH_MAKE", "delivery"), os.environ.get("VEH_MODEL", "pod")
 COLOR = [int(v) for v in os.environ.get("VEH_COLOR", "245,245,245").split(",")]
 IMPORT_TEXTURES = os.environ.get("VEH_TEXTURES", "0") == "1"
+# optional real drivetrain (cars/drivetrain.py --emit); unset = the Prius's
+# 実車のドライブトレイン（任意。未指定ならプリウスのまま）
+DRIVETRAIN = os.environ.get("VEH_DRIVETRAIN", "")
 
 EAL = unreal.EditorAssetLibrary
 LOG = open(os.path.join(HERE, os.environ.get("VEH_LOG", "build_vehicle.log")), "w")
@@ -122,6 +126,54 @@ def make_wheels():
     return out
 
 
+def apply_drivetrain(vm, d):
+    """Gears, final drive, engine and drag from cars/drivetrain.py's JSON
+    into the WheeledVehicleMovementComponent4W (UE 4.26 property names,
+    dumped from BP_ToyotaPrius). The structs come back as copies: change
+    them and set them again. The torque curve stays the Prius's here (its
+    keys are not exposed to Python); vehicle_tuning.py applies the real one.
+    ギア・終減速比・エンジン・空気抵抗を設定（構造体はコピーなので設定し直す）。
+    トルクカーブは Python から書けないため vehicle_tuning.py が実行時に適用。
+    """
+    eng = vm.get_editor_property("engine_setup")
+    eng.set_editor_property("max_rpm", d["max_rpm"])
+    eng.set_editor_property("moi", d["moi"])
+    for name, value in zip(("damping_rate_full_throttle", "damping_rate_zero_throttle_clutch_engaged",
+                            "damping_rate_zero_throttle_clutch_disengaged"), d["damping"]):
+        eng.set_editor_property(name, value)
+    vm.set_editor_property("engine_setup", eng)
+    tr = vm.get_editor_property("transmission_setup")
+    gears = []
+    for g in d["gears"]:
+        gd = unreal.VehicleGearData()
+        gd.set_editor_property("ratio", g["ratio"])
+        gd.set_editor_property("down_ratio", g["down"])
+        gd.set_editor_property("up_ratio", g["up"])
+        gears.append(gd)
+    tr.set_editor_property("forward_gears", gears)
+    for name, key in (("final_ratio", "final"), ("reverse_gear_ratio", "reverse"),
+                      ("use_gear_auto_box", "autobox"), ("gear_switch_time", "switch_time"),
+                      ("gear_auto_box_latency", "latency"), ("clutch_strength", "clutch"),
+                      ("neutral_gear_up_ratio", "neutral_up")):
+        tr.set_editor_property(name, d[key])
+    vm.set_editor_property("transmission_setup", tr)
+    diff = vm.get_editor_property("differential_setup")
+    diff.set_editor_property("differential_type", getattr(unreal.VehicleDifferential4W, d["differential"]))
+    diff.set_editor_property("front_rear_split", d["front_rear_split"])
+    vm.set_editor_property("differential_setup", diff)
+    vm.set_editor_property("drag_coefficient", d["drag"])
+    vm.set_editor_property("chassis_width", d["chassis_cm"][0])
+    vm.set_editor_property("chassis_height", d["chassis_cm"][1])
+    tr = vm.get_editor_property("transmission_setup")
+    eng = vm.get_editor_property("engine_setup")
+    log("drivetrain gears", [round(g.get_editor_property("ratio"), 3) for g in tr.get_editor_property("forward_gears")],
+        "final", round(tr.get_editor_property("final_ratio"), 3),
+        "reverse", round(tr.get_editor_property("reverse_gear_ratio"), 3),
+        "max_rpm", eng.get_editor_property("max_rpm"), "moi", eng.get_editor_property("moi"),
+        "diff", vm.get_editor_property("differential_setup").get_editor_property("differential_type"),
+        "drag", round(vm.get_editor_property("drag_coefficient"), 3))
+
+
 def make_vehicle(mesh, wheels):
     path = duplicate(PRIUS_BP, "BP_" + NAME)
     cls = EAL.load_blueprint_class(path)
@@ -145,6 +197,8 @@ def make_vehicle(mesh, wheels):
     vm.set_editor_property("wheel_setups", new)
     setups = vm.get_editor_property("wheel_setups")
     vm.set_editor_property("mass", MASS_KG)
+    if DRIVETRAIN:
+        apply_drivetrain(vm, json.load(open(DRIVETRAIN)))
     # the bounding box CARLA reports (and the traffic manager uses), in cm
     # CARLA が返す（交通マネージャも使う）バウンディングボックス [cm]
     for name in ("vehicle_bounds", "VehicleBounds"):

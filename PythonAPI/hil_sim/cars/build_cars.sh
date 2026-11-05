@@ -86,13 +86,19 @@ print('NAME=%s MAKE=%s MODEL=%s R=%.2f W=%.2f MASS=%.0f BOUNDS=%.1f,%.1f,%.1f,%.
     e[0] * 100, e[1] * 100, e[2] * 100, c["bounds_centre_m"][2] * 100))
 PYEOF
 )"
+    # real gears / engine / drag (cars.json "drivetrain", car_guide ch. 15); none = the Prius's
+    # 実車のギア・エンジン・空気抵抗（cars.json の drivetrain。無ければプリウスのまま）
+    DT="$VEHSTAGE/${k}_drivetrain.json"
+    "$PY" "$HERE/drivetrain.py" --emit "$HERE/cars.json" "$k" "$DT"
+    [ -f "$DT" ] || DT=""
     (cd "$CARLA_SRC/Unreal/CarlaUE4" && POD_VEHICLE_FBX="$VEHSTAGE/${NAME}Vehicle.fbx" \
         VEH_NAME="$NAME" VEH_DEST="/Game/$PKG/Vehicles/$NAME" VEH_MAKE="$MAKE" VEH_MODEL="$MODEL" \
         VEH_WHEEL_R_CM="$R" VEH_WHEEL_W_CM="$W" VEH_MASS="$MASS" VEH_BOUNDS="$BOUNDS" \
-        VEH_TEXTURES=1 VEH_LOG="build_car_$k.log" \
+        VEH_TEXTURES=1 VEH_LOG="build_car_$k.log" VEH_DRIVETRAIN="$DT" \
         "$EDITOR" "$UPROJECT" -run=pythonscript -script="$ASSETS/build_vehicle.py" >/dev/null 2>&1) || true
     cat "$ASSETS/build_car_$k.log"
     tail -1 "$ASSETS/build_car_$k.log" | grep -q '^OK$' || { echo "vehicle build failed: $k"; exit 1; }
+    [ -z "$DT" ] || grep -q '^drivetrain gears' "$ASSETS/build_car_$k.log" || { echo "drivetrain not applied: $k"; exit 1; }
     GLASS="$("$PY" -c "import json,sys; print(','.join(json.load(open(sys.argv[1])).get('glass', [])))" "$VEHSTAGE/$k.json")"
     if [ -n "$GLASS" ]; then          # see-through windows / 窓を半透明に
         rm -f "$HERE/make_glass_$k.log"   # no stale OK / 古い OK を残さない
@@ -144,10 +150,10 @@ for ext in uasset uexp; do        # copy then rename / コピー後に置換
     mv -f "$CARLA_ROOT/$FACTORY_REL.$ext.new" "$CARLA_ROOT/$FACTORY_REL.$ext"
 done
 
-step "8/8 camera / steering-wheel data -> cars/car_views.json"
-"$PY" - "$VEHSTAGE" "$HERE/car_views.json" "${KEYS[@]}" <<'PYEOF'
+step "8/8 camera / steering-wheel data -> cars/car_views.json, factory cache"
+"$PY" - "$VEHSTAGE" "$HERE/car_views.json" "$HERE/../data/vehicle_factory.json" "${KEYS[@]}" <<'PYEOF'
 import json, os, sys
-stage, out, keys = sys.argv[1], sys.argv[2], sys.argv[3:]
+stage, out, cache, keys = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 views = json.load(open(out)) if os.path.exists(out) else {}
 for k in keys:
     c = json.load(open(os.path.join(stage, k + ".json")))
@@ -164,5 +170,16 @@ for k in keys:
     views[c["blueprint"]] = c
 json.dump(views, open(out, "w"), indent=2)
 print("car_views.json:", ", ".join(sorted(views)))
+# vehicle_tuning.py caches each model's factory physics: drop our cars so the
+# next probe reads the new blueprints (gears, max RPM, drag)
+# vehicle_tuning の工場出荷値キャッシュから自作車両を消す（次回再計測）
+if os.path.exists(cache):
+    fac = json.load(open(cache))
+    gone = [b for b in (json.load(open(os.path.join(stage, k + ".json")))["blueprint"] for k in keys)
+            if fac.pop(b, None) is not None]
+    tmp = cache + ".tmp"
+    json.dump(fac, open(tmp, "w"), indent=1)
+    os.replace(tmp, cache)
+    print("vehicle_factory.json: dropped", ", ".join(gone) or "nothing")
 PYEOF
 echo "done: restart CARLA (vehicles and props are read at server start)"

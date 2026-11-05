@@ -31,7 +31,34 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TUNING_PATH = os.path.join(BASE_DIR, "vehicle_tuning.json")
 STATUS_PATH = os.path.join(BASE_DIR, "data", "vehicle_tuning_status.json")
 FACTORY_PATH = os.path.join(BASE_DIR, "data", "vehicle_factory.json")
+CARS_PATH = os.path.join(BASE_DIR, "cars", "cars.json")
 PROBE_ROLE = "vt_probe"         # the factory-value probe car / 検査用車両
+
+
+def own_drivetrains(path=CARS_PATH):
+    """Real torque curve, max RPM and drag of your own cars (cars.json
+    ``drivetrain``, car_guide ch. 15), by blueprint id. The build puts gears,
+    max RPM and drag into the blueprint, but UE Python can't write a torque
+    curve: it comes from here, through ``factory``, whenever a car is tuned.
+    自作車両の実車トルクカーブ・最高回転・空気抵抗（cars.json）。トルクカーブは
+    ブループリントに書けないため、ここから工場出荷値として適用する。
+    """
+    try:
+        with open(path) as f:
+            cars = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for key, c in cars.items():
+        d = c.get("drivetrain") if isinstance(c, dict) else None
+        if d and "make" in c and "model" in c:
+            out["vehicle.%s.%s" % (c["make"], c["model"])] = {
+                "torque_curve": [[float(x), float(y)] for x, y in d["torque_curve"]],
+                "max_rpm": float(d["max_rpm"]), "drag": float(d.get("drag", 0.3))}
+    return out
+
+
+_OWN = None
 
 # (key, default, min, max, step, group, English label, Japanese label, help)
 PARAMS = [
@@ -118,39 +145,92 @@ _FACTORY = {}
 def factory(world, type_id, path=FACTORY_PATH):
     """Factory physics of ``type_id``: cached, else read from a probe car
     spawned 500 m below the map (physics off, destroyed at once; ~50 ms).
+
+    An own car (cars.json ``drivetrain``) whose cached max RPM is not the
+    cars.json one may be a stale probe from before the rebuild (kept in
+    memory by a long-running dashboard / carla_ffb, or written back by one):
+    it is probed again, once per process. A car still on the Prius
+    drivetrain probes 5000 again and keeps it.
     工場出荷値。キャッシュに無ければ地下 500 m に検査用車両を一瞬生成して読む。
+    自作車両でキャッシュの最高回転が cars.json と違えば（再ビルド前の古い値の
+    可能性）、プロセスごとに一度だけ再計測する。
     """
-    if type_id in _FACTORY:
-        return _FACTORY[type_id]
+    global _OWN
+    if _OWN is None:
+        _OWN = own_drivetrains()
+    if type_id not in _FACTORY:
+        try:
+            with open(path) as f:
+                for k, v in json.load(f).items():
+                    _FACTORY.setdefault(k, v)
+        except (OSError, ValueError):
+            pass
+    if type_id not in _FACTORY or _stale(type_id):
+        _REPROBED.add(type_id)
+        _FACTORY[type_id] = _probe(world, type_id)
+        _save_entry(path, type_id, _FACTORY[type_id])
+    return _with_own(type_id, _FACTORY[type_id])
+
+
+_REPROBED = set()
+
+
+def _stale(type_id):
+    """Own car, cached max RPM != cars.json, not re-probed yet in this
+    process. / 自作車両で最高回転が不一致、かつ未再計測。"""
+    own = (_OWN or {}).get(type_id)
+    return (own is not None and type_id not in _REPROBED
+            and abs(_FACTORY[type_id].get("max_rpm", 0.0) - own["max_rpm"]) > 1.0)
+
+
+def _probe(world, type_id):
+    bp = world.get_blueprint_library().find(type_id)
+    if bp.has_attribute("role_name"):
+        bp.set_attribute("role_name", PROBE_ROLE)
+    probe = None
+    for dx in range(5):                 # another probe may be there / 重複回避
+        probe = world.try_spawn_actor(bp, carla.Transform(carla.Location(dx * 20.0, 0.0, -500.0)))
+        if probe is not None:
+            break
+    if probe is None:
+        raise RuntimeError("could not spawn a probe %s" % type_id)
+    try:
+        probe.set_simulate_physics(False)
+        return _read_factory(probe.get_physics_control())
+    finally:
+        probe.destroy()
+
+
+def _save_entry(path, type_id, entry):
+    """Write one entry into the cache file, keeping the file's other entries
+    (never this process's older copies of them).
+    キャッシュファイルの 1 項目だけ更新（他の項目は書き戻さない）。"""
     try:
         with open(path) as f:
-            _FACTORY.update(json.load(f))
+            data = json.load(f)
     except (OSError, ValueError):
+        data = {}
+    data[type_id] = entry
+    try:
+        tmp = path + ".tmp.%d" % os.getpid()
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=1)
+        os.replace(tmp, path)
+    except OSError:
         pass
-    if type_id not in _FACTORY:
-        bp = world.get_blueprint_library().find(type_id)
-        if bp.has_attribute("role_name"):
-            bp.set_attribute("role_name", PROBE_ROLE)
-        probe = None
-        for dx in range(5):                 # another probe may be there / 重複回避
-            probe = world.try_spawn_actor(bp, carla.Transform(carla.Location(dx * 20.0, 0.0, -500.0)))
-            if probe is not None:
-                break
-        if probe is None:
-            raise RuntimeError("could not spawn a probe %s" % type_id)
-        try:
-            probe.set_simulate_physics(False)
-            _FACTORY[type_id] = _read_factory(probe.get_physics_control())
-        finally:
-            probe.destroy()
-        try:
-            tmp = path + ".tmp.%d" % os.getpid()
-            with open(tmp, "w") as f:
-                json.dump(_FACTORY, f, indent=1)
-            os.replace(tmp, path)
-        except OSError:
-            pass
-    return _FACTORY[type_id]
+
+
+def _with_own(type_id, fac):
+    """``fac`` with an own car's real curve and drag on top. Only for a
+    blueprint built with its drivetrain (its probed max RPM is the
+    cars.json one): a car still on the Prius drivetrain keeps the Prius
+    curve, which suits its single gear.
+    自作車両は実車のカーブ・空気抵抗で上書き（drivetrain 付きでビルド済みの
+    車のみ。最高回転が cars.json と一致するかで判定）。"""
+    own = (_OWN or {}).get(type_id)
+    if not own or abs(fac.get("max_rpm", 0.0) - own["max_rpm"]) > 1.0:
+        return fac
+    return dict(fac, **own)
 
 
 def tune(pc, sc, fac, tire_friction=None):

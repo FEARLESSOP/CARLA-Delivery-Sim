@@ -129,9 +129,11 @@ DST="$CARLA_ROOT/CarlaUE4/Content/$PKG"
 rm -rf "$DST/Maps/$NAME" "$DST/Static/"*/"$NAME"        # no stale cooked files / 古い cook 結果を残さない
 mkdir -p "$DST/Config" "$DST/Maps"
 cp -r "$COOKED/CarlaUE4/Content/$PKG/." "$DST/"
-# the road logic (and nav / TM caches if made) are plain files the cook skips
-# 道路情報などの通常ファイルは cook されないのでコピーする
-for d in OpenDrive Nav TM; do
+# the road logic and navmesh are plain files the cook skips. The TM cache the
+# cook makes is NOT installed: on OitaKosen it segfaulted every TM client
+# (traffic and the driving window, rc -11) twice; without it TM builds its own
+# (map guide ch. 21) / 道路情報とナビメッシュをコピー（TM キャッシュは入れない）
+for d in OpenDrive Nav; do
     [ -d "$CONTENT/$PKG/Maps/$NAME/$d" ] && mkdir -p "$DST/Maps/$NAME/$d" && cp -r "$CONTENT/$PKG/Maps/$NAME/$d/." "$DST/Maps/$NAME/$d/"
 done
 # update Package.json to list all maps in the package / パッケージ内の全マップを登録

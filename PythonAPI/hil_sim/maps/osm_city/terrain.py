@@ -290,7 +290,10 @@ class Drape(object):
         # Delaunay of the samples can reach far (a sliver to another road)
         # 車線の輪郭より 1 セル内側（境界では遠くの点と結ぶ細い三角形がある）
         from scipy.ndimage import binary_erosion
-        lane_m = binary_erosion(_raster(L.lane_area, x0, y0, nx, ny, res))
+        # the lanes as drawn (dead-end heads pave beyond them: their extra area
+        # takes the nearest lane value, else it tilted towards a road beside it)
+        # 描かれた車線（袋小路の転回部の外側は最寄り車線の値）
+        lane_m = binary_erosion(_raster(getattr(L, "lane_area_drawn", L.lane_area), x0, y0, nx, ny, res))
         R = np.full(GX.shape, np.nan)
         R[lane_m] = LinearNDInterpolator(P, zz)(GX[lane_m], GY[lane_m])
         have = ~np.isnan(R)

@@ -603,5 +603,218 @@
     ],
     "eye_tuned": true,
     "driver_eye_pitch": -6.0
+  },
+  "vehicle.ferrari.sf90_xx": {
+    "name": "FerrariSF90XX",
+    "blueprint": "vehicle.ferrari.sf90_xx",
+    "drive_side": "right",
+    "wheels": {
+      "Wheel_Front_Left": [
+        1.3266,
+        -0.8454,
+        0.3523
+      ],
+      "Wheel_Front_Right": [
+        1.3266,
+        0.8454,
+        0.3523
+      ],
+      "Wheel_Rear_Left": [
+        -1.3266,
+        -0.8174,
+        0.3605
+      ],
+      "Wheel_Rear_Right": [
+        -1.3266,
+        0.8174,
+        0.3605
+      ]
+    },
+    "wheel_radius_m": 0.3523,
+    "tyre_width_m": 0.255,
+    "bounds_extent_m": [
+      2.425,
+      1.1543,
+      0.6088
+    ],
+    "bounds_centre_m": [
+      0.153,
+      -0.0,
+      0.6166
+    ],
+    "mass_kg": 1660,
+    "steering_wheel": {
+      "prop": "static.prop.ferrarisf90xxsteer",
+      "hub": [
+        0.5361,
+        0.3436,
+        0.7383
+      ],
+      "pitch": -15.19,
+      "yaw": 0.13,
+      "diameter_m": 0.356
+    },
+    "driver_eye": [
+      -0.0839,
+      0.3436,
+      0.9983
+    ],
+    "materials": 30,
+    "glass": [
+      "Ferrari_SF90XXStradale_2024Window_Material",
+      "Ferrari_SF90XXStradale_2024WindowInside_Material"
+    ],
+    "blinker_left": [
+      "FerrariSF90XX_BlinkerL"
+    ],
+    "blinker_right": [
+      "FerrariSF90XX_BlinkerR"
+    ],
+    "mirror": [
+      "FerrariSF90XX_MirrorGlass"
+    ],
+    "light_pieces": 1538
+  },
+  "vehicle.rollsroyce.dawn": {
+    "name": "RollsRoyceDawn",
+    "blueprint": "vehicle.rollsroyce.dawn",
+    "drive_side": "right",
+    "wheels": {
+      "Wheel_Front_Left": [
+        1.5571,
+        -0.6876,
+        0.3743
+      ],
+      "Wheel_Front_Right": [
+        1.5571,
+        0.6872,
+        0.3743
+      ],
+      "Wheel_Rear_Left": [
+        -1.5571,
+        -0.7053,
+        0.372
+      ],
+      "Wheel_Rear_Right": [
+        -1.5571,
+        0.7057,
+        0.372
+      ]
+    },
+    "wheel_radius_m": 0.372,
+    "tyre_width_m": 0.255,
+    "bounds_extent_m": [
+      2.6425,
+      1.0378,
+      0.7441
+    ],
+    "bounds_centre_m": [
+      -0.1599,
+      -0.0003,
+      0.7464
+    ],
+    "mass_kg": 2560,
+    "steering_wheel": {
+      "prop": "static.prop.rollsroycedawnsteer",
+      "hub": [
+        0.2869,
+        0.3955,
+        1.0159
+      ],
+      "pitch": -24.6,
+      "yaw": 0.0,
+      "diameter_m": 0.392
+    },
+    "driver_eye": [
+      -0.3331,
+      0.3955,
+      1.2759
+    ],
+    "materials": 130,
+    "glass": [
+      "glass_window",
+      "glass_windshield",
+      "RollsRoyceDawn_LensGlass"
+    ],
+    "blinker_left": [
+      "RollsRoyceDawn_BlinkerL"
+    ],
+    "blinker_right": [
+      "RollsRoyceDawn_BlinkerR"
+    ],
+    "mirror": [
+      "RollsRoyceDawn_MirrorGlass"
+    ],
+    "light_pieces": 471
+  },
+  "vehicle.honda.s800": {
+    "name": "HondaS800",
+    "blueprint": "vehicle.honda.s800",
+    "drive_side": "right",
+    "wheels": {
+      "Wheel_Front_Left": [
+        1.0074,
+        -0.6063,
+        0.2931
+      ],
+      "Wheel_Front_Right": [
+        1.0062,
+        0.6063,
+        0.2931
+      ],
+      "Wheel_Rear_Left": [
+        -1.0062,
+        -0.595,
+        0.2931
+      ],
+      "Wheel_Rear_Right": [
+        -1.0074,
+        0.595,
+        0.2931
+      ]
+    },
+    "wheel_radius_m": 0.2931,
+    "tyre_width_m": 0.145,
+    "bounds_extent_m": [
+      1.6675,
+      0.7684,
+      0.5978
+    ],
+    "bounds_centre_m": [
+      -0.1113,
+      0.0,
+      0.5978
+    ],
+    "mass_kg": 755,
+    "steering_wheel": {
+      "prop": "static.prop.hondas800steer",
+      "hub": [
+        -0.0939,
+        0.2816,
+        0.7624
+      ],
+      "pitch": -13.12,
+      "yaw": 0.0,
+      "diameter_m": 0.351
+    },
+    "driver_eye": [
+      -0.7139,
+      0.2816,
+      1.0224
+    ],
+    "materials": 39,
+    "glass": [
+      "INT_windshield"
+    ],
+    "blinker_left": [
+      "HondaS800_BlinkerL"
+    ],
+    "blinker_right": [
+      "HondaS800_BlinkerR"
+    ],
+    "mirror": [
+      "HondaS800_MirrorGlass"
+    ],
+    "light_pieces": 22
   }
 }
