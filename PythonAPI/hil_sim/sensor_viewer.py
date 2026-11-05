@@ -32,6 +32,7 @@ examples/visualize_multiple_sensors.py とは異なり、本スクリプトは
 import argparse
 import glob
 import os
+import signal
 import sys
 import time
 import weakref
@@ -405,6 +406,13 @@ def main():
 
     width, height = (int(x) for x in args.res.split('x'))
 
+    # SIGTERM (the pipeline closing this window from the dashboard, or a map
+    # switch) unwinds through `finally`, so the six sensors are destroyed
+    # instead of left rendering on the hero.
+    # SIGTERM（ダッシュボードからの閉じる・マップ切替）でも finally を通し、
+    # 6 つのセンサーを hero に残さず破棄する。
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
     client = carla.Client(args.host, args.port)
     client.set_timeout(10.0)
 
@@ -432,6 +440,11 @@ def main():
     try:
         while True:
             for event in pygame.event.get():
+                # closing the window / Esc / Q exits with code 0, which
+                # run_pipeline treats as "closed on purpose" (no restart);
+                # an exception exits with 1 and is restarted.
+                # 閉じる・Esc・Q は終了コード 0（パイプラインは再起動しない）。
+                # 例外での終了は 1（再起動される）。
                 if event.type == pygame.QUIT:
                     return
                 if event.type == pygame.KEYDOWN:

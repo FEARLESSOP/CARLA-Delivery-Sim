@@ -73,6 +73,7 @@ from delivery import backends  # noqa: E402  (OVERLAYS: the tooltip switch)
 from delivery import boxes  # noqa: E402
 from delivery.lmp_van import LmpVanMixin, LMP_DRONE, LMP_DIRECT  # noqa: E402
 from delivery import yard as yardlib  # noqa: E402
+from delivery import rules as van_rules  # noqa: E402  (Japan profile: 止まれ etc.)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VAN_BLUEPRINTS = ("vehicle.mercedes.sprinter", "vehicle.volkswagen.t2_2021",
@@ -683,6 +684,9 @@ class Van(LmpVanMixin):
         self._stop_recoveries = 0
         self.max_offset = 0.0
         self.reroutes = self.lane_resets = 0
+        # Japan profile maps: delivery/rules.VanRules (set by Fleet), else None
+        # 日本のマップでは交通ルール（Fleet が設定）。他は None
+        self.rules = None
 
     def log(self, *a, **k):
         self._log(*a, van=self.vid, **k)
@@ -1349,6 +1353,9 @@ class Van(LmpVanMixin):
                 self.arrive(t)
             else:
                 control = self.agent.run_step()
+                if self.rules is not None:
+                    # 止まれ / walkers / lane speed (Japan profile) / 日本の交通ルール
+                    control = self.rules.apply(self.car.id, self.agent, self.args.speed, control)
                 self.car.apply_control(control)
                 self.guard(t, dt, control)
         elif self.state == DOCKING:
@@ -1542,6 +1549,29 @@ class Fleet(object):
                 v.pod.set_shell(self.shell_mode)
         self._draw_t = self._pub_t = self._weather_t = -1e9
         self._weather_wind = None
+        self.rules = None        # delivery/rules.VanRules on Japan profile maps
+
+    def set_rules(self, rules):
+        """Japanese rules for the vans (None = off, every other map).
+        / 配送車の交通ルール（None なら無効）。"""
+        was, self.rules = self.rules, rules
+        for v in self.vans:
+            v.rules = rules
+            if rules is None and was is not None:
+                v.agent.set_target_speed(self.args.speed)    # undo a speed cap / 上限を解除
+
+    def rules_step(self):
+        if self.rules is None:
+            return
+        sc = self.showcase
+        ids = [v.car.id for v in self.vans
+               if v.state == DRIVING and not (sc is not None and v is sc["van"])]
+        try:
+            self.rules.update(self.world.get_snapshot(), ids)
+        except Exception as exc:     # never stop the deliveries / 配送は止めない
+            print("  delivery traffic rules off: %s / 配送車の交通ルールを停止" % exc,
+                  flush=True)
+            self.set_rules(None)
 
     @property
     def batches(self):
@@ -1575,6 +1605,7 @@ class Fleet(object):
             if not by_id[vid].assign(b, t):
                 self.dispatcher.push_front(b)
                 by_id[vid].go_charge(t, "not enough for batch %d" % b[0].batch)
+        self.rules_step()
         sc = self.showcase
         for v in self.vans:
             if sc is not None and v is sc["van"]:
@@ -1842,6 +1873,7 @@ class Fleet(object):
             "max_lane_offset_m": max(p["max_lane_offset_m"] for p in per),
             "reroutes": sum(p["reroutes"] for p in per),
             "lane_resets": sum(p["lane_resets"] for p in per),
+            "traffic_rules": self.rules.summary() if self.rules is not None else None,
             "per_van": per,
             "per_drone": [{"drone": u.id, "status": u.status,
                            "battery": round(u.battery.level, 1), "trips": u.trips,
@@ -2139,6 +2171,11 @@ def parse_args(argv=None):
     # car / 車
     p.add_argument("--speed", type=float, default=30.0, help="km/h")
     p.add_argument("--ignore-lights", action="store_true")
+    p.add_argument("--traffic-profile", default="auto",
+                   help="country driving rules for the vans from traffic_profiles.json: "
+                        "auto (maps.json decides: Japanese maps get japan -- 止まれ full stop, "
+                        "yield to walkers, lane speed cap), none, or a profile name "
+                        "/ 配送車の交通ルール（auto / none / 名前）")
     p.add_argument("--handover-s", type=float, default=8.0,
                    help="face-to-face handover time / 対面受け渡し時間 [s]")
     p.add_argument("--jack-s", type=float, default=2.0,
@@ -2585,6 +2622,10 @@ def main(argv=None):
             print("  live state for the dashboard: %s / ダッシュボード用" % livew.dir, flush=True)
         fleet = Fleet(args, world, vans, gen, log, sky, livew)
         fleet.boxes = boxmgr
+        # Japan profile maps only; any other map: None, no extra call
+        # 日本のプロファイルのマップのみ。他のマップでは何もしない
+        fleet.set_rules(van_rules.make(world, wmap, args.traffic_profile,
+                                       lane_type=carla.LaneType.Driving))
         camera = CameraControl(world, args, vans, sky.drones.units)
         fleet.camera = camera
         if use_lmp:

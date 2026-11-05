@@ -32,6 +32,8 @@ except IndexError:
 import carla
 
 from lane_spawns import lane_spawn_points
+import traffic_profile
+import hokousha
 
 from carla import VehicleLightState as vls
 
@@ -191,6 +193,64 @@ def apply_driver_profile(traffic_manager, vehicles, tm_params, scale, rng):
           '/ プロファイル x%.1f を %d 台に適用'
           % (scale, len(vehicles), lights, lead, offset_std, speed_diff,
              scale, len(vehicles)))
+
+
+def setup_traffic_profile(world, traffic_manager, vehicles_list, force='auto',
+                          run_helper=True):
+    """Apply the loaded map's country driving profile (traffic_profiles.json).
+
+    Japanese maps (maps.json "road_style": "japan", or keep_left in the
+    Japan package) get the "japan" profile: per-vehicle Traffic Manager
+    settings plus the RuleKeeper helper (lane speed limits, no lane change
+    before junctions, stop for pedestrians on the road). Any other map
+    returns None without a single Traffic Manager call, so its traffic is
+    exactly what it was. Called once after the spawn; the map is read here,
+    so the pipeline's restart after an F5 switch re-selects.
+    With --driver-profile (study arm B) only the static settings are applied
+    (the profile then overrides them) and the helper stays off.
+
+    ロード中のマップの国別プロファイルを適用する。日本のマップだけが対象で、
+    それ以外のマップでは TM を一切呼ばず None を返す（従来どおり）。
+    """
+    wmap = world.get_map()
+    name, profile = traffic_profile.select_profile(wmap.name, force=force)
+    if profile is None or not vehicles_list:
+        return None
+    actors = list(world.get_actors(vehicles_list))
+    traffic_profile.apply_static(traffic_manager, actors, profile)
+    print(traffic_profile.describe(name, profile))
+    if not run_helper:
+        print('[traffic] --driver-profile: %s helper off / 補助は無効' % name)
+        return None
+    cyclists = [a.id for a in actors if a.attributes.get('base_type') == 'bicycle']
+    return traffic_profile.RuleKeeper(
+        world, wmap, traffic_manager, vehicles_list, profile,
+        driving_lane_type=carla.LaneType.Driving, cyclist_ids=cyclists)
+
+
+def setup_ped_signals(world, walkers_list, all_actors, walker_speed, force='auto'):
+    """Japanese pedestrian signals (hokousha.py): Japan profile maps whose build
+    has hokousha.json only; any other map returns None with no call at all.
+    The heads and the walkers follow one pedestrian phase per crossing,
+    derived from the junction's vehicle signals.
+
+    日本の歩行者用信号（日本のマップで hokousha.json がある場合のみ）。
+    """
+    wmap = world.get_map()
+    name, _profile = traffic_profile.select_profile(wmap.name, force=force)
+    if name != 'japan' or not walkers_list:
+        return None
+    data = hokousha.load(wmap.name)
+    if data is None:
+        print('[hokousha] no hokousha.json for %s: pedestrian signals off / 歩行者用信号なし' % wmap.name)
+        return None
+    walkers = []
+    for i, w in enumerate(walkers_list):
+        con = all_actors[2 * i]
+        walkers.append((w['id'], con, float(walker_speed[i])))
+    ped = hokousha.PedSignals(world, data, walkers, carla_mod=carla)
+    print(ped.describe())
+    return ped
 
 
 def tick_is_flowing(world, timeout=MASTER_PROBE_S):
@@ -497,6 +557,13 @@ def main():
     argparser.add_argument(
         '--runners', type=float, default=0.0,
         help='share of walkers jogging, 0..1 (default: 0) / ジョギングする歩行者の割合')
+    argparser.add_argument(
+        '--traffic-profile', default='auto',
+        help='Country driving profile from traffic_profiles.json: auto (default: '
+             'the map\'s maps.json entry decides; Japanese maps get "japan", every '
+             'other map the default traffic), none, or a profile name '
+             '/ 国別の運転プロファイル。auto（既定：maps.json で日本のマップなら '
+             'japan、他は従来どおり）、none、またはプロファイル名')
     args = argparser.parse_args()
 
     logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
@@ -507,6 +574,8 @@ def main():
     client = carla.Client(args.host, args.port)
     client.set_timeout(10.0)
     synchronous_master = False
+    rule_keeper = None
+    ped_signals = None
     random.seed(args.seed if args.seed is not None else int(time.time()))
 
     try:
@@ -646,6 +715,13 @@ def main():
         if n_cyclists:
             print('[traffic] %d cyclists among the vehicles / 自転車 %d 台' % (n_bikes, n_bikes))
 
+        # Country driving profile (Japanese maps only; any other map: no call)
+        # 国別の運転プロファイル（日本のマップのみ。他のマップでは何もしない）
+        driver_profile_on = bool(args.driver_profile and args.error_scale > 0.0)
+        rule_keeper = setup_traffic_profile(
+            world, traffic_manager, vehicles_list, args.traffic_profile,
+            run_helper=not driver_profile_on)
+
         if args.driver_profile and args.error_scale > 0.0 and vehicles_list:
             prof_key, tm_params = load_driver_profile(
                 args.driver_profile,
@@ -782,6 +858,14 @@ def main():
 
         print('spawned %d vehicles and %d walkers, press Ctrl+C to exit.' % (len(vehicles_list), len(walkers_list)))
 
+        # Japanese pedestrian signals (Japan maps only) / 日本の歩行者用信号（日本のマップのみ）
+        try:
+            ped_signals = setup_ped_signals(world, walkers_list, all_actors, walker_speed,
+                                            args.traffic_profile)
+        except Exception as exc:     # never stop the traffic / 交通を止めない
+            print('[hokousha] pedestrian signals off: %s / 歩行者用信号を停止' % exc)
+            ped_signals = None
+
         # Example of how to use Traffic Manager parameters / Traffic Manager パラメータの使用例
         traffic_manager.global_percentage_speed_difference(30.0)
 
@@ -864,6 +948,26 @@ def main():
                     synchronous_master = become_tick_master(world, args)
                     next_tick = time.time()
 
+            if rule_keeper is not None:
+                try:
+                    rule_keeper.update(world.get_snapshot())
+                except Exception as exc:   # never stop the tick / ティックを止めない
+                    print('[traffic] traffic profile helper off: %s / 補助を停止' % exc)
+                    try:
+                        # no car may stay held at target 0 / 停止中の車を解放
+                        rule_keeper.release_all()
+                    except Exception as exc2:
+                        print('[traffic] could not release held cars: %s / 解放失敗' % exc2)
+                    rule_keeper = None
+
+            if ped_signals is not None:
+                try:
+                    ped_signals.update(world.get_snapshot())
+                except Exception as exc:   # never stop the tick / ティックを止めない
+                    print('[hokousha] pedestrian signals off: %s / 歩行者用信号を停止' % exc)
+                    ped_signals.release_all()
+                    ped_signals = None
+
             now = time.time()
             if now >= next_beat:
                 write_heartbeat(frame, synchronous_master)
@@ -901,6 +1005,8 @@ def main():
         destroy_chunked(client, vehicles_list,
                         args.spawn_chunk, args.spawn_pause)
 
+        if ped_signals is not None:
+            ped_signals.release_all()
         # stop walker controllers (list is [controller, actor, controller, actor ...])
         # 歩行者コントローラを停止（リストは [コントローラ, アクター, ...] の順）
         for i in range(0, len(all_id), 2):

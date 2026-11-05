@@ -1,0 +1,66 @@
+{
+  "_doc": "Traffic Manager driving profiles per country, read by generate_traffic.py (traffic_profile.py) when it starts, so an F5 map switch picks the new map's profile. A map gets a profile when its maps.json entry matches one of the 'select' rules (first match wins), or names one itself with \"traffic_profile\": \"<name>\" (\"none\" = default traffic). Every other map runs the rig's default traffic, unchanged. See README 'Traffic rules (Japan profile)' and map guide ch. 23. / 国別の交通マネージャー運転プロファイル。generate_traffic.py が起動時に読む（F5 の切替後も新しいマップで選び直す）。maps.json の項目が select の条件に合うか、\"traffic_profile\" で名前を指定したマップだけに適用し、それ以外のマップは従来どおり。",
+  "select": [
+    {
+      "profile": "japan",
+      "when": {
+        "road_style": "japan"
+      }
+    },
+    {
+      "profile": "japan",
+      "when": {
+        "package": "Japan",
+        "keep_left": true
+      }
+    }
+  ],
+  "profiles": {
+    "japan": {
+      "_doc": "Japanese road traffic law (道路交通法 / 交通の方法に関する教則) as far as CARLA's Traffic Manager can follow it. Keep left comes from the map's lanes (netconvert --lefthand). / 日本の道路交通法に沿った NPC。左側通行は車線（netconvert --lefthand）による。",
+      "ignore_lights_percentage": 0,
+      "ignore_signs_percentage": 0,
+      "ignore_walkers_percentage": 0,
+      "ignore_vehicles_percentage": 0,
+      "distance_to_leading_vehicle_m": 3.5,
+      "keep_slow_lane_rule_percentage": 0,
+      "update_vehicle_lights": true,
+      "period_s": 0.2,
+      "speed": {
+        "_doc": "Each car's desired speed = the posted limit of the lane it is on (the xodr lane <speed>, which carries the 274 / JARTIC 最高速度 zones and netconvert's slower junction turns) x factor; lanes without one use fallback_kmh (30 km/h: the legal limit on roads without a centre line since 2026-09-01; roads with one should carry 60 or their sign in the xodr). / 各車の目標速度 = 走行中の車線の最高速度 × factor。",
+        "factor": 0.9,
+        "fallback_kmh": 30,
+        "min_kmh": 10,
+        "cyclist_max_kmh": 18
+      },
+      "no_lane_change_before_junction_m": 30,
+      "yield_to_walkers": {
+        "_doc": "Stop for a pedestrian on the carriageway ahead (either half of the road), until they have left it; TM alone brakes only for walkers inside its own path. A walker that has not moved for stuck_s is a navmesh agent stuck on the road and is ignored; a hold ends after max_hold_s. / 前方の車道上（対向側も）に歩行者がいれば渡り終えるまで停止。 waiting_at_crossings: with the map's hokousha.json, also stop for a walker waiting at the kerb of an unsignalised crossing (NPA: stop when a pedestrian is crossing or about to cross, 38 条). / 信号の無い横断歩道で待つ歩行者にも停止。",
+        "enabled": true,
+        "lookahead_s": 2.5,
+        "min_lookahead_m": 12,
+        "lateral_m": 4.5,
+        "release_s": 1.0,
+        "max_hold_s": 15,
+        "stuck_s": 8,
+        "waiting_at_crossings": true
+      },
+      "stop_signs": {
+        "_doc": "止まれ (道交法 43 条): full stop at the stop line of every 206 signal of the map (Stencil_STOP; carla.Map landmarks, lanes in the direction the sign faces), then go when the junction is clear. The TM never does it itself: its all-way stop runs only under a non-green light state, and a car under no light reads Green (TrafficLightStage.cpp). Slow down from approach_m (comfort_decel down to creep_kmh, reached creep_m before the line), brake (target 0) when the TM at hold_decel would stop with the front bumper line_margin_m before the line, stand still (< still_mps) min_stop_s, then go first come first served per junction, follow_gap_s after the last car released, when no vehicle is in the junction or coming towards it within clear_m; a hold ends after max_hold_s (never a deadlock). / 止まれ: 停止線で完全停止（2 秒）し、先着順で交差点が空けば発進。",
+        "enabled": true,
+        "landmark_type": "206",
+        "approach_m": 40,
+        "comfort_decel_mps2": 1.5,
+        "hold_decel_mps2": 4.0,
+        "creep_kmh": 7,
+        "creep_m": 3,
+        "line_margin_m": 0.3,
+        "still_mps": 0.1,
+        "min_stop_s": 2.0,
+        "clear_m": 15,
+        "follow_gap_s": 2.5,
+        "max_hold_s": 12
+      }
+    }
+  }
+}

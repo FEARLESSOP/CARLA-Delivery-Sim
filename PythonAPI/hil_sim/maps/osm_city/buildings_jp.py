@@ -53,6 +53,8 @@ from textures_jp_bld import FULL_ALWAYS, PER_FACE, RENAME as _TEX_RENAME
 
 PATH_CLEAR = 0.1         # projections keep this off footways, drives, car parks / 歩道等からの離れ
 FOOT_CLEAR = 0.4         # footprints keep this off them (AC units, sills, gutters stand out <= 0.35 m) / 外壁の離れ
+NEAR_HEAD = 6.0          # a block this near a dead-end head was cut by it / 転回部に削られた棟
+HEAD_SHED_MAX = 150.0    # ... and this small (m2) becomes a shed when its rectangle reaches a footway / 小さい棟のみ
 LOT_PATH_CLEAR = 0.6     # lots keep this off them (battered stone toes) / 敷地の離れ
 RAISED_Z = 0.15          # ground.RAISED_Z: the ground / pavement surface / 地面の高さ
 BUILD_CLEAR = 2.2        # layout.BUILD_CLEAR / 建物と車道の最小距離
@@ -670,11 +672,24 @@ class JP(object):
                 # one-storey row (storage / garages), not a slab of flats
                 # 道路から切り戻した細長い残り: 平屋の棟（物置・車庫）
                 it.style = "shed"
+            if it.style in ("apaato", "danchi", "mansion") and it.shape == "free" and self.L is not None \
+                    and p.area < HEAD_SHED_MAX and self.near_head(p) and self.foot_off.intersects(it.R.poly()):
+                # an irregular block whose bounding rectangle reaches a footway: its
+                # corridor and slabs follow the rectangle, over the path (a cut-back
+                # wedge at an OitaKosen dead-end head, 2026-11-05): a one-storey row.
+                # Only beside dead-end heads: the rest of the town keeps its types
+                # 外接矩形が歩道に掛かる不整形の棟は廊下が歩道上に出る: 平屋の棟
+                it.style = "shed"
             it.levels = self.levels(it.style, t, p, rng)
             self.items[i] = it
         self.lots()
         self.variants()
         self.terraces()
+
+    def near_head(self, p):
+        """p stands beside a dead-end turning head (layout.dead_end_head_area). / 転回部の横"""
+        h = getattr(self.L, "dead_end_head_area", None)
+        return h is not None and not h.is_empty and h.distance(p) < NEAR_HEAD
 
     def regularise(self, p, st, i):
         """A near-rectangular footprint becomes its rectangle (inset up to 0.6 m

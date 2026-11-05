@@ -23,6 +23,8 @@ import argparse
 import json
 import math
 import os
+import signal
+import sys
 import time
 import weakref
 
@@ -187,6 +189,12 @@ def main():
     size = tuple(int(x) for x in args.res.lower().split("x"))
     tick = 1.0 / args.cam_fps if args.cam_fps > 0 else 0.0
 
+    # SIGTERM (the pipeline closing this window from the dashboard, or a map
+    # switch) unwinds through `finally`, so the drone cameras are destroyed
+    # instead of left rendering on the server.
+    # SIGTERM（ダッシュボードからの閉じる・マップ切替）でも finally を通し、
+    # ドローンカメラをサーバに残さず破棄する。
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     wall = Wall(size)
     client = carla.Client(args.host, args.port)
     client.set_timeout(10.0)
@@ -196,11 +204,13 @@ def main():
     try:
         while True:
             for e in pygame.event.get():
+                # closing the window / Esc / Q: exit code 0, run_pipeline keeps
+                # it closed / 閉じる・Esc・Q は終了コード 0（閉じたままになる）
                 if e.type == pygame.QUIT:
-                    return
+                    return 0
                 if e.type == pygame.KEYDOWN:
                     if e.key in (K_ESCAPE, K_q):
-                        return
+                        return 0
                     if e.key == K_F11:
                         wall.toggle_fullscreen()
             now = time.time()
@@ -254,12 +264,17 @@ def main():
                 pygame.image.save(wall.display, args.save)
             clock.tick(args.fps)
     except RuntimeError as exc:
+        # an error, not the user closing the window: exit code 1 lets
+        # run_pipeline restart it (0 = closed on purpose, stays closed)
+        # エラーでの終了は 1（パイプラインが再起動）。0 は意図的に閉じた場合
         print("[drone_viewer] %s" % exc)
+        return 1
     finally:
         for c in cams.values():
             c.destroy()
         pygame.quit()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

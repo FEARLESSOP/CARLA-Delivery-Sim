@@ -296,6 +296,9 @@ class Drape(object):
         lane_m = binary_erosion(_raster(getattr(L, "lane_area_drawn", L.lane_area), x0, y0, nx, ny, res))
         R = np.full(GX.shape, np.nan)
         R[lane_m] = LinearNDInterpolator(P, zz)(GX[lane_m], GY[lane_m])
+        for j, (hull, zh) in getattr(L, "dead_end_heads_by_j", {}).items():
+            hm = _raster(hull.buffer(0.35, quad_segs=4), x0, y0, nx, ny, res)
+            R[hm] = zh
         have = ~np.isnan(R)
         # beyond the lanes: the nearest lane value (roads are laterally level)
         # 車線の外: 最寄りの車線の値（横断方向は水平）

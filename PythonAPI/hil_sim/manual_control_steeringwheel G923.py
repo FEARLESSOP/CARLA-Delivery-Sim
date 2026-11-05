@@ -19,7 +19,10 @@ Drive with the wheel and pedals. To drive start by pressing the brake pedal.
 Change wheel_config.ini according to your steering wheel
 (use jstest-gtk in Ubuntu to find the axis values).
 
-Without a wheel the keyboard takes over automatically (or pass --keyboard):
+Without a wheel the keyboard takes over automatically (or pass --keyboard).
+The keys and wheel buttons below are the defaults: change them on the
+dashboard (Settings > Keybinds, saved in keybinds.json). In the game, H shows
+the bindings in use, with the wheel buttons by name (Cross, Triangle, R paddle...).
 
     W / Up       : throttle
     S / Down     : brake; once stopped, reverse
@@ -31,7 +34,7 @@ Without a wheel the keyboard takes over automatically (or pass --keyboard):
     Z / X        : glance left / right (hold)
     Ctrl+I/K/J/L/U/O : move the driver's eye fwd/back/left/right/down/up (saved per car)
     Q            : toggle reverse
-    M            : manual / automatic (wheel: button 9)
+    M            : manual / automatic (wheel: Options)
     , / .        : gear down / up (wheel: paddles)
     P            : toggle autopilot
     C / Shift+C  : next / previous weather
@@ -49,7 +52,10 @@ CARLA 手動運転（Logitech G923/G29 ステアリングホイール対応）�
 お使いのホイールに合わせて wheel_config.ini を編集してください
 （Ubuntu では jstest-gtk で軸番号を確認できます）。
 
-ホイールが無い場合は自動でキーボード操作に切り替わります（--keyboard でも可）:
+ホイールが無い場合は自動でキーボード操作に切り替わります（--keyboard でも可）。
+以下のキーとホイールボタンは既定値で、ダッシュボードの 設定 > キー割り当て で
+変更できます（keybinds.json に保存）。ゲーム中の H で現在の割り当てを
+ボタン名（×・△・右パドルなど）付きで表示します。
 
     W / ↑        : アクセル
     S / ↓        : ブレーキ。停止後はリバース
@@ -61,7 +67,7 @@ CARLA 手動運転（Logitech G923/G29 ステアリングホイール対応）�
     Z / X        : 左 / 右をチラ見（押している間）
     Ctrl+I/K/J/L/U/O : 視点を前/後/左/右/下/上へ（車両ごとに保存）
     Q            : リバース切替
-    M            : マニュアルトランスミッション切替
+    M            : マニュアルトランスミッション切替（ホイール：OPTIONS）
     , / .        : シフトダウン / アップ（ホイール：パドル）
     P            : オートパイロット切替
     C / Shift+C  : 次 / 前の天候
@@ -122,6 +128,14 @@ import weakref
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cars'))
 import car_views  # noqa: E402
 
+# key / wheel-button bindings shared with the dashboard (keybinds.json)
+# ダッシュボードと共有するキー・ホイール割り当て
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import keybinds  # noqa: E402
+# F5 map cycle + the map-switch request to run_pipeline.py (map_switch.py)
+# F5 のマップ巡回とパイプラインへのマップ切替依頼
+import map_switch  # noqa: E402
+
 if sys.version_info >= (3, 0):
 
     from configparser import ConfigParser
@@ -132,6 +146,7 @@ else:
 
 try:
     import pygame
+    from pygame.locals import KMOD_ALT
     from pygame.locals import KMOD_CTRL
     from pygame.locals import KMOD_SHIFT
     from pygame.locals import K_0
@@ -203,9 +218,34 @@ EYE_STEP = 0.02
 EYE_KEYS = {pygame.K_i: (EYE_STEP, 0, 0), pygame.K_k: (-EYE_STEP, 0, 0),
             pygame.K_j: (0, -EYE_STEP, 0), pygame.K_l: (0, EYE_STEP, 0),
             pygame.K_u: (0, 0, -EYE_STEP), pygame.K_o: (0, 0, EYE_STEP)}
+# the same nudges by keybinds.py action / keybinds.py の操作ごとの移動量
+EYE_ACTIONS = {'eye_fwd': (EYE_STEP, 0, 0), 'eye_back': (-EYE_STEP, 0, 0),
+               'eye_left': (0, -EYE_STEP, 0), 'eye_right': (0, EYE_STEP, 0),
+               'eye_down': (0, 0, -EYE_STEP), 'eye_up': (0, 0, EYE_STEP)}
 
-MAP_CYCLE = ['Town01', 'Town02', 'Town03', 'Town04', 'Town05',
-             'Town06', 'Town07', 'Town10HD', 'MarinaBay', 'SpaFrancorchamps', 'OitaStation']
+
+_KEY_CODES = {}
+
+
+def key_code(name):
+    """pygame key code of a keybinds.py key name ("w", "up", "f5"), or None.
+    / keybinds.py のキー名から pygame のキーコードへ。"""
+    if name not in _KEY_CODES:
+        try:
+            _KEY_CODES[name] = pygame.key.key_code(name)
+        except (ValueError, AttributeError):
+            _KEY_CODES[name] = None
+    return _KEY_CODES[name]
+
+# Only used when the server cannot list its maps: the real F5 cycle is built
+# from client.get_available_maps() (map_switch.build_cycle), so it holds every
+# installed map -- your own ones too -- and never one that is not installed.
+# サーバがマップ一覧を返せない時だけの予備。F5 の巡回順は通常
+# get_available_maps() から作る（インストール済みのマップのみ、自作含む）。
+MAP_CYCLE = ['Town01', 'Town02', 'Town03', 'Town04', 'Town05', 'Town10HD',
+             'MarinaBay', 'SpaFrancorchamps', 'OitaKosen', 'OitaStation', 'PasirRis']
+CONTENT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            '..', '..', 'CarlaUE4', 'Content'))
 MAPS_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'maps', 'maps.json')
 
 
@@ -226,8 +266,14 @@ def map_start(map_name):
 
 
 class World(object):
-    def __init__(self, client, carla_world, hud, actor_filter, fov=100.0, start_vehicle=''):
+    def __init__(self, client, carla_world, hud, actor_filter, fov=100.0, start_vehicle='',
+                 map_request=None):
         self.client = client
+        # run_pipeline.py's request file: set -> F5 asks the pipeline to switch
+        # the map (see map_switch.py); None (standalone) -> load it here.
+        # パイプラインの依頼ファイル。指定時は F5 で切替を依頼、未指定は自分で読込
+        self.map_request = map_request
+        self.exit_code = 0      # map_switch.MAP_SWITCH_RC after a request / 依頼後の終了コード
         self.world = carla_world
         self.hud = hud
         self.player = None
@@ -249,13 +295,44 @@ class World(object):
     def _current_map_short_name(self):
         return self.world.get_map().name.split('/')[-1].replace('_Opt', '')
 
-    def change_map(self, offset):
-        current = self._current_map_short_name()
+    def map_cycle(self):
+        """Installed drivable maps in F5 order (map_switch.build_cycle).
+        / F5 で巡回するインストール済みマップ"""
         try:
-            idx = MAP_CYCLE.index(current)
-        except ValueError:
-            idx = -1
-        target = MAP_CYCLE[(idx + offset) % len(MAP_CYCLE)]
+            cycle = map_switch.build_cycle(self.client.get_available_maps())
+        except Exception as exc:
+            print('[control] get_available_maps: %s' % exc)
+            cycle = []
+        if not cycle:
+            cycle = map_switch.build_cycle(map_switch.installed_maps(CONTENT_DIR)) or MAP_CYCLE
+        return cycle
+
+    def change_map(self, offset):
+        """F5 (+1) / Shift+F5 (-1). Under run_pipeline.py: write the request
+        and return True, so the window closes and the pipeline switches the
+        map for every client (a load_world from here crashed the rig, see
+        map_switch.py). Standalone: load the map here.
+        F5 / Shift+F5。パイプライン配下では依頼を書いて True を返し（ウィンドウ
+        を閉じ、パイプラインが全クライアントごと切り替える）、単体では自分で読む。"""
+        current = self._current_map_short_name()
+        target = map_switch.step(self.map_cycle(), current, offset)
+        if target is None or target == current:
+            self.hud.notification('No other map installed / 他のマップがありません')
+            return False
+        if self.map_request:
+            model = self._model_id or (self.player.type_id if self.player is not None else '')
+            try:
+                map_switch.write_request(target, hero=model, current=current,
+                                         path=self.map_request)
+            except OSError as exc:
+                self.hud.error('map request failed: %s' % exc)
+                return False
+            print('[control] map switch requested: %s -> %s (hero %s) / マップ切替を依頼'
+                  % (current, target, model))
+            self.hud.notification('Switching to %s... / %s に切替中...' % (target, target),
+                                  seconds=30.0)
+            self.exit_code = map_switch.MAP_SWITCH_RC
+            return True
         self.hud.notification('Loading map %s...' % target, seconds=5.0)
         try:
             new_world = self.client.load_world(target)
@@ -273,6 +350,7 @@ class World(object):
         self.restart(step=0)    # same model on the new map / 新マップでも同じ車種
         self.world.on_tick(self.hud.on_world_tick)
         self.hud.notification('Map: %s' % target)
+        return False
 
     def restart(self, step=1):
         """(Re)spawn the hero as the next model, in alphabetical order of
@@ -426,10 +504,6 @@ class DualControl(object):
                 print("[control] steering wheel: %s" % names[g923_index])
 
         self._keyboard = self._joystick is None
-        if self._keyboard:
-            print("[control] driving with the keyboard: "
-                  "W = throttle, S = brake / reverse, A / D = steer, "
-                  "SPACE = handbrake")
         # Keyboard pedal state: pressing W/S ramps the pedal instead of
         # slamming it fully down, so the car is drivable without a wheel.
         # キーボードのペダル状態。W/S は一気に全踏みせず徐々に立ち上がる。
@@ -453,14 +527,27 @@ class DualControl(object):
         self._steer_idx = _axis('steering_wheel', 0)
         self._throttle_idx = _axis('throttle', 2)
         self._brake_idx = _axis('brake', 1)
-        self._reverse_idx = _axis('reverse', 6)
-        self._handbrake_idx = _axis('handbrake', 7)
-        # Paddle shifters (G29/G923: right paddle 4, left paddle 5) and the
-        # button that switches back to automatic.
-        # パドルシフト（G29/G923：右 4、左 5）と AT に戻すボタン。
-        self._gear_up_idx = _axis('gear_up', 4)
-        self._gear_down_idx = _axis('gear_down', 5)
-        self._transmission_idx = _axis('transmission', 9)
+
+        # Keys and wheel buttons: keybinds.json, edited on the dashboard
+        # (Settings > Keybinds) and re-read ~1x/s while driving. Created on
+        # first run with the old fixed layout; the button numbers that
+        # wheel_config.ini used to set (reverse, handbrake, gear_up,
+        # gear_down, transmission) are its defaults.
+        # キーとホイールボタンは keybinds.json（ダッシュボードの 設定 >
+        # キー割り当て で編集、運転中も約 1 秒ごとに再読込）。初回は従来の
+        # 固定配置で作成し、wheel_config.ini のボタン番号を既定値とする。
+        self._hud = world.hud
+        self._binds_mtime = self._labels_mtime = None
+        self._learn_mtime = None
+        self._learn_until = 0.0
+        self._hat_prev = {}
+        self._reload_binds(force=True)
+        if self._keyboard:
+            print("[control] driving with the keyboard: %s"
+                  % ", ".join("%s = %s" % ("/".join(keybinds.pretty_key(k) for k in
+                                                     self._binds[a]["keys"]) or "-", a)
+                              for a in ("throttle", "brake", "steer_left",
+                                        "steer_right", "handbrake")))
 
         # Pedal direction. PC-mode G923 (046d:c266) rests at +1 and reads -1
         # at full press; PS4-mode (046d:c267) puts the pedals on trigger-style
@@ -554,6 +641,204 @@ class DualControl(object):
         except Exception:
             pass
 
+    # -- bindings / 割り当て -------------------------------------------------
+    def _reload_binds(self, force=False):
+        """(Re)read keybinds.json and g923_buttons.json when they changed and
+        rebuild the lookup tables and the H help. Returns True on a reload.
+        / 割り当てファイルが変わっていれば読み直す。"""
+        def mtime(path):
+            try:
+                return os.path.getmtime(path)
+            except OSError:
+                return None
+        if (not force and mtime(keybinds.KEYBINDS_PATH) == self._binds_mtime
+                and mtime(keybinds.LABELS_PATH) == self._labels_mtime):
+            return False
+        try:
+            binds = keybinds.load()
+            labels = keybinds.load_labels()['labels']
+        except Exception as exc:
+            print("[control] keybinds.json unreadable (%s); keeping the "
+                  "current bindings / keybinds.json を読めません" % exc)
+            if force:
+                binds, labels = keybinds.defaults(), dict(keybinds.DEFAULT_LABELS)
+            else:
+                return False
+        self._binds, self._labels = binds, labels
+        self._binds_mtime = mtime(keybinds.KEYBINDS_PATH)
+        self._labels_mtime = mtime(keybinds.LABELS_PATH)
+
+        # keyboard: key code -> [(modifiers, action)] for presses,
+        # action -> [key codes] for holds; wheel: input -> action (first wins)
+        self._key_press, self._key_hold = {}, {}
+        self._wheel_press, self._wheel_hold = {}, {}
+        for a in keybinds.ACTIONS:
+            cell = binds[a['id']]
+            for spec in cell['keys']:
+                parsed = keybinds.parse_key(spec)
+                code = key_code(parsed[1]) if parsed else None
+                if code is None:
+                    continue
+                if a['kind'] == 'hold':
+                    self._key_hold.setdefault(a['id'], []).append(code)
+                else:
+                    self._key_press.setdefault(code, []).append((parsed[0], a['id']))
+            for spec in cell['wheel']:
+                if a['kind'] == 'hold':
+                    self._wheel_hold.setdefault(a['id'], []).append(
+                        keybinds.parse_wheel(spec))
+                else:
+                    self._wheel_press.setdefault(spec, a['id'])
+        help_text = getattr(self._hud, 'help', None)
+        if help_text is not None and hasattr(help_text, 'set_rows'):
+            try:
+                help_text.set_rows(keybinds.help_rows(binds, labels))
+            except Exception as exc:
+                print("[control] help text: %s" % exc)
+        return True
+
+    @staticmethod
+    def _mods_held():
+        mods = pygame.key.get_mods()
+        held = set()
+        if mods & KMOD_CTRL:
+            held.add('ctrl')
+        if mods & KMOD_SHIFT:
+            held.add('shift')
+        if mods & KMOD_ALT:
+            held.add('alt')
+        return held
+
+    def _key_action(self, key):
+        """The action a released key triggers: among the bindings on this key
+        whose modifiers are all held, the most specific one (Shift+C beats C,
+        Ctrl+Q beats Q). / 離されたキーに対応する操作。"""
+        held = self._mods_held()
+        best, best_n = None, -1
+        for mods, aid in self._key_press.get(key, ()):
+            if mods <= held and len(mods) > best_n:
+                best, best_n = aid, len(mods)
+        return best
+
+    def _held(self, action, keys):
+        """Is a key bound to this hold action down? / 押下中か。"""
+        return any(keys[c] for c in self._key_hold.get(action, ()))
+
+    def _wheel_held(self, action):
+        """Is a wheel button / D-pad direction bound to this hold action down?"""
+        js = self._joystick
+        if js is None or time.time() < self._learn_until:
+            return False
+        for kind, idx, d in self._wheel_hold.get(action, ()):
+            try:
+                if kind == 'button':
+                    if idx < js.get_numbuttons() and js.get_button(idx):
+                        return True
+                elif idx < js.get_numhats():
+                    hx, hy = js.get_hat(idx)
+                    dx, dy = keybinds.HAT_DIRS[d]
+                    if (dx and hx == dx) or (dy and hy == dy):
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def _learning(self):
+        """True while the dashboard is binding / naming wheel buttons: wheel
+        presses are then only reported, not acted on.
+        / ダッシュボードでボタンを識別中は操作を実行しない。"""
+        try:
+            mtime = os.path.getmtime(keybinds.LEARN_PATH)
+        except OSError:
+            self._learn_until = 0.0
+            return False
+        if mtime != self._learn_mtime:
+            self._learn_mtime = mtime
+            self._learn_until = keybinds.learning_until()
+        return time.time() < self._learn_until
+
+    def _wheel_input(self, world, kind, index, direction=None):
+        """A wheel button / D-pad press: tell the dashboard, then act."""
+        spec = keybinds.write_wheel_last(kind, index, direction)
+        if self._learning():
+            return False
+        aid = self._wheel_press.get(spec)
+        return aid is not None and self._do_action(aid, world)
+
+    def _adjust_strength(self, world, key, step):
+        self._tuning[key] = max(0.1, min(1.0, round(self._tuning[key] + step, 2)))
+        self._save_tuning()
+        world.hud.notification('%s strength: %.0f%%' % (
+            'Brake' if key == 'brake_max' else 'Throttle', self._tuning[key] * 100))
+
+    def _do_action(self, aid, world):
+        """Run one keybinds.py action. Returns True to quit.
+        / keybinds.py の操作を実行する。終了なら True。"""
+        vehicle = isinstance(self._control, carla.VehicleControl)
+        if aid in keybinds.VEHICLE_ONLY and not vehicle:
+            return False
+        cam = world.camera_manager
+        if aid == 'quit':
+            return True
+        elif aid == 'car_next':
+            world.restart(step=1)
+        elif aid == 'car_prev':
+            world.restart(step=-1)
+        elif aid == 'hud':
+            world.hud.toggle_info()
+        elif aid == 'help':
+            world.hud.help.toggle()
+        elif aid == 'camera_next':
+            cam.toggle_camera()
+        elif aid == 'mirrors':
+            cam.toggle_mirrors()
+        elif aid == 'weather_next':
+            world.next_weather()
+        elif aid == 'weather_prev':
+            world.next_weather(reverse=True)
+        elif aid == 'sensor_next':
+            cam.next_sensor()
+        elif aid.startswith('sensor_'):
+            cam.set_sensor(int(aid[7:]) - 1)
+        elif aid == 'recording':
+            cam.toggle_recording()
+        elif aid == 'map_next':
+            # True under run_pipeline.py: close for the switch / 切替のため終了
+            return world.change_map(1) is True
+        elif aid == 'map_prev':
+            return world.change_map(-1) is True
+        elif aid == 'fullscreen':
+            self._toggle_fullscreen(world.hud)
+        elif aid in EYE_ACTIONS:
+            cam.nudge_eye(EYE_ACTIONS[aid])
+        elif aid == 'throttle_up':
+            self._adjust_strength(world, 'throttle_max', 0.05)
+        elif aid == 'throttle_down':
+            self._adjust_strength(world, 'throttle_max', -0.05)
+        elif aid == 'brake_up':
+            self._adjust_strength(world, 'brake_max', 0.05)
+        elif aid == 'brake_down':
+            self._adjust_strength(world, 'brake_max', -0.05)
+        elif aid == 'signal_left':
+            self._toggle_signal(world, 'left')
+        elif aid == 'signal_right':
+            self._toggle_signal(world, 'right')
+        elif aid == 'hazard':
+            self._toggle_signal(world, 'hazard')
+        elif aid == 'reverse':
+            self._control.gear = 1 if self._control.reverse else -1
+        elif aid == 'transmission':
+            self._toggle_transmission(world)
+        elif aid == 'gear_up':
+            self._shift(world, 1)
+        elif aid == 'gear_down':
+            self._shift(world, -1)
+        elif aid == 'autopilot':
+            self._autopilot_enabled = not self._autopilot_enabled
+            world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
+            world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
+        return False
+
     def _toggle_transmission(self, world):
         """Automatic <-> manual. Manual starts in the gear the car is in, or
         1st when stopped (the gearbox reports N then, and in manual N doesn't
@@ -569,23 +854,27 @@ class DualControl(object):
                                ('Manual' if c.manual_gear_shift else 'Automatic'))
 
     def _shift(self, world, step):
-        """Paddle / , . shift: ``step`` +1 up, -1 down, between 1st and the
-        car's top gear (reverse stays on its own button; up from R or N goes
-        to 1st). In automatic, the first paddle press switches to manual.
-        パドル（, .）でシフト。1 速〜最高速ギアの範囲（R は専用ボタン、R・N
-        からのシフトアップは 1 速）。AT 中に押すと MT に切り替える。"""
+        """Paddle / , . shift: ``step`` +1 up, -1 down. Gears run R, 1st ..
+        the car's top gear: down from 1st selects reverse, up from R (or N)
+        goes to 1st. In automatic, the first paddle press switches to manual.
+        パドル（, .）でシフト。R・1 速〜最高速ギア。1 速からのシフトダウンで
+        R、R・N からのシフトアップで 1 速。AT 中に押すと MT に切り替える。"""
         c = self._control
         if not c.manual_gear_shift:
             self._toggle_transmission(world)
         top = world.hud.gauge.gears
         if c.gear < 1:
-            c.gear = 1
+            c.gear = 1 if step > 0 else -1
+        elif c.gear == 1 and step < 0:
+            c.gear = -1
         else:
             c.gear = max(1, min(top, c.gear + step))
-        world.hud.notification('Gear %d' % c.gear, seconds=0.8)
+        c.reverse = c.gear < 0
+        world.hud.notification('Gear R' if c.gear < 0 else 'Gear %d' % c.gear, seconds=0.8)
 
     def _toggle_signal(self, world, side):
-        """Toggle a turn signal (left/right). State is shared with the
+        """Toggle a turn signal (left/right) or the hazard lights ('hazard').
+        State is shared with the
         dashboard through turn_signal.json: the dashboard shows the blinking
         indicators and, while a signal is on, logs a broken-line crossing as
         a legal lane change instead of a lane invasion.
@@ -618,15 +907,18 @@ class DualControl(object):
             blink = (int(carla.VehicleLightState.LeftBlinker)
                      | int(carla.VehicleLightState.RightBlinker))
             ls = int(world.player.get_light_state()) & ~blink
-            if new == 'left':
+            if new in ('left', 'hazard'):
                 ls |= int(carla.VehicleLightState.LeftBlinker)
-            elif new == 'right':
+            if new in ('right', 'hazard'):
                 ls |= int(carla.VehicleLightState.RightBlinker)
             world.player.set_light_state(carla.VehicleLightState(ls))
         except Exception:
             pass
-        world.hud.notification(
-            'Turn signal: %s' % ('OFF' if new == 'off' else new.upper()))
+        if side == 'hazard':
+            world.hud.notification('Hazard lights: %s' % ('OFF' if new == 'off' else 'ON'))
+        else:
+            world.hud.notification(
+                'Turn signal: %s' % ('OFF' if new == 'off' else new.upper()))
 
     def _toggle_fullscreen(self, hud):
         self._fullscreen = not self._fullscreen
@@ -642,87 +934,27 @@ class DualControl(object):
             if event.type == pygame.QUIT:
                 return True
             elif event.type == pygame.JOYBUTTONDOWN:
-                if event.button == 0:
-                    world.restart()
-                elif event.button == 1:
-                    world.hud.toggle_info()
-                elif event.button == 2:
-                    world.camera_manager.toggle_camera()
-                elif event.button == 3:
-                    world.next_weather()
-                elif event.button == self._reverse_idx:
-                    self._control.gear = 1 if self._control.reverse else -1
-                elif event.button == self._gear_up_idx:
-                    self._shift(world, 1)
-                elif event.button == self._gear_down_idx:
-                    self._shift(world, -1)
-                elif event.button == self._transmission_idx:
-                    self._toggle_transmission(world)
-                elif event.button in (10, 11):
-                    # Turn signals: 10 = right, 11 = left; same button again
-                    # switches it off (lane change complete).
-                    # ウインカー：10=右・11=左。同じボタンをもう一度押すと
-                    # 消灯（車線変更完了）。
-                    self._toggle_signal(
-                        world, 'right' if event.button == 10 else 'left')
-                elif event.button == 23:
-                    world.camera_manager.next_sensor()
+                # wheel buttons by keybinds.json; the press is also written
+                # to wheel_last.json for the dashboard's press-to-bind
+                # ホイールボタンは keybinds.json に従う。押下はダッシュボードの
+                # 割り当て用に wheel_last.json にも書く
+                if self._wheel_input(world, 'button', event.button):
+                    return True
+            elif event.type == pygame.JOYHATMOTION:
+                # D-pad: a direction fires when it becomes pressed
+                # 十字キー：押された方向ごとに 1 回
+                prev = self._hat_prev.get(event.hat, (0, 0))
+                self._hat_prev[event.hat] = event.value
+                for d, (dx, dy) in keybinds.HAT_DIRS.items():
+                    on = (dx and event.value[0] == dx) or (dy and event.value[1] == dy)
+                    was = (dx and prev[0] == dx) or (dy and prev[1] == dy)
+                    if on and not was and self._wheel_input(world, 'hat', event.hat, d):
+                        return True
 
             elif event.type == pygame.KEYUP:
-                if self._is_quit_shortcut(event.key):
+                aid = self._key_action(event.key)
+                if aid is not None and self._do_action(aid, world):
                     return True
-                elif event.key == K_BACKSPACE:
-                    # next model; Shift = previous / 次の車種、Shift で前の車種
-                    world.restart(step=-1 if pygame.key.get_mods() & KMOD_SHIFT else 1)
-                elif event.key == K_F1:
-                    world.hud.toggle_info()
-                elif event.key == K_h or (event.key == K_SLASH and pygame.key.get_mods() & KMOD_SHIFT):
-                    world.hud.help.toggle()
-                elif event.key == K_TAB:
-                    world.camera_manager.toggle_camera()
-                elif event.key == K_n:
-                    world.camera_manager.toggle_mirrors()
-                elif event.key == K_c and pygame.key.get_mods() & KMOD_SHIFT:
-                    world.next_weather(reverse=True)
-                elif event.key == K_c:
-                    world.next_weather()
-                elif event.key == K_BACKQUOTE:
-                    world.camera_manager.next_sensor()
-                elif event.key > K_0 and event.key <= K_9:
-                    world.camera_manager.set_sensor(event.key - 1 - K_0)
-                elif event.key == K_r:
-                    world.camera_manager.toggle_recording()
-                elif event.key == K_F5:
-                    offset = -1 if pygame.key.get_mods() & KMOD_SHIFT else 1
-                    world.change_map(offset)
-                elif event.key == K_F11:
-                    self._toggle_fullscreen(world.hud)
-                elif (pygame.key.get_mods() & KMOD_CTRL) and event.key in EYE_KEYS:
-                    world.camera_manager.nudge_eye(EYE_KEYS[event.key])
-                elif event.key in (K_LEFTBRACKET, K_RIGHTBRACKET):
-                    step = 0.05 if event.key == K_RIGHTBRACKET else -0.05
-                    key = ('brake_max'
-                           if pygame.key.get_mods() & KMOD_SHIFT
-                           else 'throttle_max')
-                    self._tuning[key] = max(
-                        0.1, min(1.0, round(self._tuning[key] + step, 2)))
-                    self._save_tuning()
-                    world.hud.notification('%s strength: %.0f%%' % (
-                        'Brake' if key == 'brake_max' else 'Throttle',
-                        self._tuning[key] * 100))
-                if isinstance(self._control, carla.VehicleControl):
-                    if event.key == K_q:
-                        self._control.gear = 1 if self._control.reverse else -1
-                    elif event.key == K_m:
-                        self._toggle_transmission(world)
-                    elif event.key == K_COMMA:
-                        self._shift(world, -1)
-                    elif event.key == K_PERIOD:
-                        self._shift(world, 1)
-                    elif event.key == K_p:
-                        self._autopilot_enabled = not self._autopilot_enabled
-                        world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
-                        world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
 
         # Pick up pedal-tuning changes made on the dashboard (~1x/second).
         # ダッシュボードで行われたペダル設定変更を取り込む（約1回/秒）。
@@ -731,6 +963,9 @@ class DualControl(object):
             self._tuning_check = 0
             if self._load_tuning():
                 world.hud.notification('Pedal tuning updated from dashboard')
+            if self._reload_binds():
+                world.hud.notification('Keybinds updated from dashboard')
+            self._learning()
 
         # Glance left/right with Z / X (works in every camera, strongest in
         # the driver-eye view where it emulates a head check).
@@ -738,7 +973,9 @@ class DualControl(object):
         # ドライバー視点で最も効果が大きい）。
         keys = pygame.key.get_pressed()
         world.camera_manager.look_input = (
-            -1.0 if keys[K_z] else (1.0 if keys[K_x] else 0.0))
+            -1.0 if (self._held('glance_left', keys) or self._wheel_held('glance_left'))
+            else (1.0 if (self._held('glance_right', keys)
+                          or self._wheel_held('glance_right')) else 0.0))
 
         if not self._autopilot_enabled:
             if isinstance(self._control, carla.VehicleControl):
@@ -777,8 +1014,8 @@ class DualControl(object):
         ペダルと同じ強度上限（pedal_tuning.json、[ / ] やダッシュボードから
         走行中に調整可）に従うため、ホイール運転と比較可能なテレメトリになる。
         """
-        forward = keys[K_UP] or keys[K_w]
-        backward = keys[K_DOWN] or keys[K_s]
+        forward = self._held('throttle', keys)
+        backward = self._held('brake', keys)
 
         speed = 0.0
         if world is not None:
@@ -821,9 +1058,9 @@ class DualControl(object):
         # Steering: hold A / D to wind the wheel on, release to unwind it.
         # 操舵: A / D を押し続けて切り増し、離すと戻る。
         steer_increment = 8e-4 * milliseconds
-        if keys[K_LEFT] or keys[K_a]:
+        if self._held('steer_left', keys):
             self._steer_cache -= steer_increment
-        elif keys[K_RIGHT] or keys[K_d]:
+        elif self._held('steer_right', keys):
             self._steer_cache += steer_increment
         elif self._steer_cache > 0.0:
             self._steer_cache = max(0.0, self._steer_cache - steer_increment)
@@ -833,7 +1070,7 @@ class DualControl(object):
         limit = min(0.7, self._steer_clamp)
         self._steer_cache = min(limit, max(-limit, self._steer_cache))
         self._control.steer = round(self._steer_cache, 3)
-        self._control.hand_brake = keys[K_SPACE]
+        self._control.hand_brake = self._held('handbrake', keys)
 
     def _autodetect_pedal_direction(self):
         """Infer pedal polarity from the resting axis values.
@@ -892,8 +1129,6 @@ class DualControl(object):
         numAxes = self._joystick.get_numaxes()
         jsInputs = [float(self._joystick.get_axis(i)) for i in range(numAxes)]
         # print(jsInputs)  # uncomment to debug axis values / 軸の値のデバッグ時はコメント解除
-        jsButtons = [float(self._joystick.get_button(i)) for i in
-                     range(self._joystick.get_numbuttons())]
 
         # Input range: [1, -1] where 1 = released, -1 = fully pressed.
         # Sensitivity values live in wheel_config.ini under [Sensitivity].
@@ -928,29 +1163,28 @@ class DualControl(object):
         self._control.brake = brakeCmd
         self._control.throttle = throttleCmd
 
-        #toggle = jsButtons[self._reverse_idx]
-
-        self._control.hand_brake = bool(jsButtons[self._handbrake_idx])
+        # handbrake: the wheel input(s) bound in keybinds.json (L2 by default)
+        # ハンドブレーキ：keybinds.json の割り当て（既定は L2）
+        self._control.hand_brake = self._wheel_held('handbrake')
 
     def _parse_walker_keys(self, keys, milliseconds):
         self._control.speed = 0.0
-        if keys[K_DOWN] or keys[K_s]:
+        if self._held('brake', keys):
             self._control.speed = 0.0
-        if keys[K_LEFT] or keys[K_a]:
+        if self._held('steer_left', keys):
             self._control.speed = .01
             self._rotation.yaw -= 0.08 * milliseconds
-        if keys[K_RIGHT] or keys[K_d]:
+        if self._held('steer_right', keys):
             self._control.speed = .01
             self._rotation.yaw += 0.08 * milliseconds
-        if keys[K_UP] or keys[K_w]:
+        if self._held('throttle', keys):
             self._control.speed = 5.556 if pygame.key.get_mods() & KMOD_SHIFT else 2.778
-        self._control.jump = keys[K_SPACE]
+        self._control.jump = self._held('handbrake', keys)
         self._rotation.yaw = round(self._rotation.yaw, 1)
         self._control.direction = self._rotation.get_forward_vector()
 
-    @staticmethod
-    def _is_quit_shortcut(key):
-        return (key == K_ESCAPE) or (key == K_q and pygame.key.get_mods() & KMOD_CTRL)
+    def _is_quit_shortcut(self, key):
+        return self._key_action(key) == 'quit'
 
 
 # ==============================================================================
@@ -1503,9 +1737,15 @@ class FadingText(object):
 
 
 class HelpText(object):
+    """The H overlay. Starts as the module docstring; DualControl replaces
+    it with the live key / wheel bindings (set_rows) once keybinds.json is read.
+    / H キーのヘルプ。keybinds.json を読んだ後は現在の割り当て一覧になる。"""
+
     def __init__(self, font, width, height):
         lines = __doc__.split('\n')
         self.font = font
+        self._screen = (width, height)
+        self._render = False
         self.dim = (680, len(lines) * 22 + 12)
         self.pos = (0.5 * width - 0.5 * self.dim[0], 0.5 * height - 0.5 * self.dim[1])
         self.seconds_left = 0
@@ -1516,6 +1756,77 @@ class HelpText(object):
             self.surface.blit(text_texture, (22, n * 22))
             self._render = False
         self.surface.set_alpha(220)
+
+    @staticmethod
+    def _table_font(size):
+        # a CJK-capable font so the Japanese labels render; mono otherwise
+        # 日本語を表示できるフォント（無ければ等幅）
+        path = pygame.font.match_font(
+            'notosanscjkjp,notosanscjk,notosanscjksc,droidsansfallbackfull,'
+            'takaopgothic,ipagothic,ubuntumono,dejavusansmono')
+        return pygame.font.Font(path, size)
+
+    def set_rows(self, rows):
+        """Draw keybinds.help_rows() as a table: action | keyboard | wheel,
+        split into columns to fit the window. / 割り当て一覧を表として描画。"""
+        W, H = self._screen
+        title = ('Keys and wheel buttons - change them on the dashboard: Settings > Keybinds',
+                 'キーとホイールボタン（ダッシュボードの 設定 > キー割り当て で変更）')
+        head = ('Action / 操作', 'Keyboard / キー', 'Wheel / ホイール')
+        for size in (17, 16, 15, 14, 13, 12):
+            font = self._table_font(size)
+            line = font.get_linesize() + 1
+            usable = max(10, (H - 40 - 3 * line) // line - 1)
+            # split into columns at group boundaries / グループ単位で段組み
+            cols, cur = [], []
+            for r in rows:
+                if r[0] == 'group' and len(cur) >= usable - 2:
+                    cols.append(cur)
+                    cur = []
+                elif len(cur) >= usable:
+                    cols.append(cur)
+                    cur = []
+                cur.append(r)
+            if cur:
+                cols.append(cur)
+            widths = [max([font.size(head[i])[0]] +
+                          [font.size(r[i + 1])[0] for r in rows if r[0] == 'row']) + 18
+                      for i in range(3)]
+            col_w = sum(widths) + 26
+            total_w = len(cols) * col_w + 30
+            if total_w <= W - 20 or size == 12:
+                break
+        n_lines = max(len(c) for c in cols) + 1
+        dim = (min(W, max(total_w, font.size(title[0])[0] + 44)),
+               min(H, (n_lines + 2) * line + 24))
+        surf = pygame.Surface(dim)
+        surf.fill((0, 0, 0))
+        y0 = 10
+        for t in title:
+            surf.blit(font.render(t, True, (255, 210, 120)), (22, y0))
+            y0 += line
+        y0 += 4
+        for ci, col in enumerate(cols):
+            x0 = 22 + ci * col_w
+            x = x0
+            for i, h in enumerate(head):
+                surf.blit(font.render(h, True, (140, 150, 165)), (x, y0))
+                x += widths[i]
+            y = y0 + line
+            for r in col:
+                if r[0] == 'group':
+                    surf.blit(font.render(r[1], True, (120, 180, 255)), (x0, y))
+                else:
+                    x = x0 + 10
+                    for i, txt in enumerate(r[1:]):
+                        color = (255, 255, 255) if i else (215, 222, 230)
+                        surf.blit(font.render(txt, True, color), (x, y))
+                        x += widths[i] - (10 if i == 0 else 0)
+                y += line
+        surf.set_alpha(225)
+        self.surface = surf
+        self.dim = dim
+        self.pos = (0.5 * W - 0.5 * dim[0], 0.5 * H - 0.5 * dim[1])
 
     def toggle(self):
         self._render = not self._render
@@ -2125,7 +2436,7 @@ def game_loop(args):
 
         hud = HUD(args.width, args.height)
         world = World(client, client.get_world(), hud, args.filter, args.fov,
-                      start_vehicle=args.start_vehicle)
+                      start_vehicle=args.start_vehicle, map_request=args.map_request)
         controller = DualControl(world, args.autopilot, args.keyboard, args.tm_port)
 
         clock = pygame.time.Clock()
@@ -2136,7 +2447,17 @@ def game_loop(args):
             # CPU をスピンさせ、同じ60FPSのために1コアを占有してしまう。
             clock.tick(args.fps)
             if controller.parse_events(world, clock):
-                return
+                if world.exit_code == map_switch.MAP_SWITCH_RC:
+                    # show "Switching to ..." once before the window closes
+                    # 閉じる前に「切替中」を一度表示する
+                    try:
+                        pygame.display.set_caption('CARLA - switching map / マップ切替中')
+                        world.tick(clock)
+                        world.render(display)
+                        pygame.display.flip()
+                    except Exception:
+                        pass
+                return world.exit_code
             world.tick(clock)
             world.render(display)
             pygame.display.flip()
@@ -2207,6 +2528,14 @@ def main():
         default='',
         help='first car, e.g. vehicle.mazda.rx7 (Backspace still cycles through --filter)')
     argparser.add_argument(
+        '--map-request',
+        metavar='PATH',
+        default=None,
+        help='run_pipeline.py sets this: F5 then writes the map-switch request '
+             'here and exits with code %d instead of loading the map itself '
+             '(see map_switch.py) / パイプラインが指定。F5 で切替依頼を書いて終了'
+             % map_switch.MAP_SWITCH_RC)
+    argparser.add_argument(
         '--fov',
         metavar='DEG',
         default=100.0,
@@ -2244,12 +2573,16 @@ def main():
 
     print(__doc__)
 
+    rc = 0
     try:
 
-        game_loop(args)
+        rc = game_loop(args) or 0
 
     except KeyboardInterrupt:
         print('\nCancelled by user. Bye!')
+    # MAP_SWITCH_RC tells run_pipeline.py to switch the map and start us again
+    # MAP_SWITCH_RC はパイプラインへの「マップを切り替えて再起動」の合図
+    sys.exit(rc)
 
 
 if __name__ == '__main__':

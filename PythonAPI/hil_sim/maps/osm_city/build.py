@@ -203,6 +203,7 @@ def main():
         keep.append(lm.keepout())
     if getattr(L, "terraces", None) is not None:
         keep.append(L.terraces.buffer(0.3))
+    L.drape = D                  # props.py: lamps by dead-end heads not on lower ground / 低い地面に置かない
     P = props.Props(L, M.crossings, keepout=unary_union(keep))
     P.drape = D
     # Japan-style maps draw every tree as a seasonal Japanese species (jtrees.py)
@@ -227,9 +228,14 @@ def main():
                                                     else ko.contains(Point(it[1][0], it[1][1])))]
     print("trees %d, furniture %d" % (len(P.trees), len(P.items))
           + (", lamps left out (pinched mouths, dead ends, narrow islands) %d" % P.lamps_skipped
-             if getattr(P, "lamps_skipped", 0) else ""), flush=True)
+             if getattr(P, "lamps_skipped", 0) else "")
+          + (", lamps placed behind dead-end head kerbs %d" % P.lamps_moved if getattr(P, "lamps_moved", 0) else "")
+          + (" (%d of them by dead-end heads)" % P.lamps_head_dropped if getattr(P, "lamps_head_dropped", 0) else ""),
+          flush=True)
     if P.guard is not None:
         print("ring guardrail: %.0f m, %d openings" % (P.guard_len, P.guard_openings), flush=True)
+    if getattr(P, "head_rail_len", 0):
+        print("dead-end head guardrails: %.0f m" % P.head_rail_len, flush=True)
     mesh_dir = os.path.join(out, "meshes")
     os.makedirs(mesh_dir, exist_ok=True)
     for f in os.listdir(mesh_dir):

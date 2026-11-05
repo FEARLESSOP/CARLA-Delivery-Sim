@@ -80,6 +80,17 @@ class KeyState(object):
 mc.pygame.key.get_pressed = lambda: KeyState()
 mc.pygame.key.get_mods = lambda: 0
 mc.pygame.event.get = lambda: []
+# "no wheel attached" even when the G923 is plugged into this machine
+# 実機の G923 が接続されていても「ホイール無し」として試験する
+mc.pygame.joystick.get_count = lambda: 0
+
+# keybinds in a temp folder: the defaults, whatever the user saved
+# 割り当ては一時フォルダの既定値を使う（利用者の保存内容に依存しない）
+import tempfile
+_kbdir = tempfile.mkdtemp(prefix="kb_test_")
+for _name, _attr in (("keybinds.json", "KEYBINDS_PATH"), ("g923_buttons.json", "LABELS_PATH"),
+                     ("wheel_last.json", "WHEEL_LAST_PATH"), ("learn.json", "LEARN_PATH")):
+    setattr(mc.keybinds, _attr, os.path.join(_kbdir, _name))
 
 K = mc
 world = FakeWorld()

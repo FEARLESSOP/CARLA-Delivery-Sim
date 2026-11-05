@@ -97,13 +97,14 @@ tuning (`pedal_tuning.json`), driver alerts and the turn-signal file.
 │   ├── Singapore/                       map PasirRis (added)
 │   └── Circuits/                        maps MarinaBay, SpaFrancorchamps (added)
 └── PythonAPI/hil_sim/                   THE RIG (all code, must sit exactly here)
+    └── FILES.md                         where is what: every important file by topic (start here)
 
 ~/Documents/Dinesh-carla-copy/carla    <- CARLA 0.9.16 SOURCE tree, branch ue4/0.9.16, with a built editor
                                           (used only to import + cook new assets; small local patches)
 ~/UnrealEngine_4.26                    <- Unreal Engine 4.26, CarlaUnreal fork, branch carla (built from source)
 ~/Downloads/carla                      <- a UE5 CARLA git checkout (branch ue5-dev). NOT used by the rig.
 ~/.claude/skills                       <- git repo FEARLESSOP/carla-skills (map + car skills)
-~/.claude/agents                       <- the 12 agent definitions copied out of the skills
+~/.claude/agents                       <- the 14 agent definitions copied out of the skills
 ```
 
 **Which "carla" folder is the real one.** The memory note
@@ -142,8 +143,9 @@ share small JSON files next to the scripts: `pedal_tuning.json`,
 `vehicle_tuning.json`, `season.json`, and `data/ffb_status.json` and
 `data/delivery_live/`.
 
-Not started by the pipeline: `signal_timing.py` (run it by hand) and
-`seasons.py` (the dashboard applies seasons itself; the CLI is optional).
+Started per map: `signal_timing.py apply --watch --only-map <Map>` on maps
+whose maps.json entry has `"signal_timing"` (OitaKosen; 5.14).
+Not started by the pipeline: `seasons.py` (the dashboard applies seasons itself; the CLI is optional).
 
 ---
 
@@ -1275,7 +1277,11 @@ green = cycle × share − 5 s.
 ../../carla-venv/bin/python signal_timing.py test
 ```
 (Expand `~` yourself if the shell doesn't do it inside quotes.)
-`run_pipeline.py` doesn't start it yet. The holiday table covers 2026–2027.
+Since 2026-11-06 `run_pipeline.py` starts `apply --watch --only-map <Map>` on
+maps with maps.json `"signal_timing"` (the profile path; OitaKosen), at every
+start and again after F5 back onto that map; other maps keep CARLA's times.
+`data/signal_timing_oita.json` is git-ignored: without it the helper is
+simply not started. The holiday table covers 2026–2027.
 **Known issue:** the cluster 54/55/252 runs at 6 phases; the real fix is to
 merge it in the road logic.
 
@@ -1308,6 +1314,24 @@ season swap reports "no texture".
 prop (that needs the props list plus a prop cook). The user's SketchUp
 reference packs (maple, cone, `~/Downloads/oita kosen/3Dmodel-sketchup`,
 `maple-tree`) are **study material only**: never import or copy them.
+
+### 5.16 Japanese rules, signals, speed posts and pedestrian signals (Japan maps only)
+
+**What (2026-11-05/06, live on OitaKosen):** four parts, each only on maps
+with `road_style: japan` / package Japan; every other map is unchanged.
+
+| Part | Files | Guide |
+|---|---|---|
+| NPC rules: 止まれ full stop, yield to walkers, lane speed × 0.9, no lane change 30 m before junctions; the same for delivery vans | `traffic_profile.py`, `traffic_profiles.json`, `delivery/rules.py` | ch. 23 |
+| Signal model BP_JpShingo: horizontal LED head (green-yellow-red from the left), cantilever arm; still a CARLA TrafficLight | `maps/osm_city/jp_shingo.py`, `maps/ue_jp_shingo*.py`, build_map step 2d | ch. 24 |
+| Speed posts BP_JpSokudo20–80 (blue numerals) | `maps/osm_city/jp_sokudo.py`, `maps/ue_jp_sokudo*.py`, step 2e | ch. 25 |
+| Pedestrian signals: two-lamp heads with countdown, phase from the car lights, walkers wait on red/flash | `hokousha.py`, `maps/osm_city/hokousha_crossings.py`, `jp_hokousha*.py`, `maps/ue_jp_hokousha.py`, step 2f | ch. 26 |
+
+Live checks: `maps/hokousha_live.py`, `maps/jp_sokudo_live.py`,
+`maps/stop_live.py [--role delivery]`. Lessons: the stock light BP scales its
+pole ×1.2, so `ue_jp_shingo.py` sets scale 1 (else the arm floats 1.2 m above
+the head); a walk under 5 s is not started (long police cycles); a BP-only
+change needs just cook + install (build_map steps 3–4).
 
 ---
 
@@ -1641,7 +1665,6 @@ rsync -a $OLD:.claude/projects/-home-inouelab-Downloads-carla ~/.claude/projects
 - Checker notes for akeno: a darker camphor row, and roof plant along the
   north edge.
 - `jp_cone.py` cone is not a spawnable prop yet.
-- `signal_timing.py` is not started by the pipeline.
 - **AirSim / CarlaAir backend** never run. The LMP "Take over" slider has not
   been tested live.
 - RL: the reward lets an agent that stands still score +888 (needs the user's
@@ -1677,6 +1700,7 @@ Dates are JST.
 | 2026-11-02 | Oita Kosen imported (campus, dorm, 7-Eleven; Japanese buildings, road style, road fixes); landmark build order chosen; Pasir Ris large queued |
 | 2026-11-03 | Oita Kosen walker navmesh by hand; pipeline fixes (keep_left key, hero TM port, walker retries); unattended demo with the scratch watchdog |
 | 2026-11-04 | seasonal Japanese trees + wind + dashboard card; JARTIC signs and signal timing (road-sign-creator agent); akeno area features; blinkers, mirrors, lenses on own cars; `carla-car-importer` skill; skills repo renamed `carla-skills`; Pasir Ris large deferred; this document |
+| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder |
 
 ---
 

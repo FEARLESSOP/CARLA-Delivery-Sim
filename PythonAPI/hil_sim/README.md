@@ -12,6 +12,10 @@ Logitech G923ステアリングホイールで運転します。コマンド1つ
 
 ## File structure / ファイル構成
 
+**Looking for a file? See [FILES.md](FILES.md)**: every important file by topic
+(running, traffic and signals, delivery, maps, live checks, cars, tests).
+/ 重要なファイルの一覧は FILES.md（分野別）。
+
 ```
 hil_sim/
 ├── run_pipeline.py                      # start everything / 全プロセス一括起動
@@ -20,10 +24,19 @@ hil_sim/
 ├── sensor_viewer.py                     # multi-camera viewer / マルチカメラビューア
 ├── drone_viewer.py                      # CCTV wall of drone cameras (--drone-cams) / ドローンカメラ一覧
 ├── generate_traffic.py                  # NPC traffic / NPC交通生成
+├── traffic_profile.py                   # Japan driving rules for NPCs / 日本の交通ルール（NPC）
+├── traffic_profiles.json                # which maps get which profile / プロファイルと適用マップ
+├── hokousha.py                          # Japanese pedestrian signals + walkers / 歩行者用信号
+├── signal_timing.py                     # real police signal timing, auto on OitaKosen / 実際の信号時間
 ├── traction_fx.py                       # skid marks when the tyres slide / スキッドマーク
 ├── cars/                                # your own cars: build + per-car driver view / 自作車両
 ├── wheel_config.ini                     # wheel axes & steering feel / ホイール軸・ステア感度
 ├── pedal_tuning.json                    # pedal sensitivity (live) / ペダル感度（走行中変更可）
+├── keybinds.py                          # key + wheel-button bindings / キー・ホイールボタン割り当て
+├── map_switch.py                        # F5 map cycle + switch request / F5 のマップ巡回と切替依頼
+├── windows_control.py                   # open/close viewer windows from the dashboard / ビューアの開閉
+├── keybinds.json                        # bindings in use (dashboard) / 現在の割り当て（ダッシュボードで編集）
+├── g923_buttons.json                    # G923 button names / G923 のボタン名
 ├── agent_drive.py                       # autonomous ego client (RL/autopilot) / 自動運転egoクライアント
 ├── delivery_sim.py                      # car + drone delivery on Town03 (docs/DELIVERY.md) / 車+ドローン配送
 ├── delivery/                            # delivery planner + drone backends / 配送計画・ドローン
@@ -34,6 +47,7 @@ hil_sim/
 │   ├── train_sac.py                     # SAC training / SAC学習
 │   └── smoke_test.py                    # env sanity check / 環境の動作確認
 ├── README.md
+├── FILES.md                             # where is what / ファイルの場所
 └── data/                                # simulation database / 計測データ保存先
     ├── scenarios/                       # mined clips + driver profiles / 抽出クリップ・プロファイル
     └── 2026-07-07/                      # one folder per day / 日付ごとのフォルダ
@@ -83,14 +97,14 @@ Useful options / 主なオプション:
 | `--vehicle-filter vehicle.tesla.model3` | hero vehicle model / 自車の車種 |
 | `--start-vehicle vehicle.mazda.rx7` | first hero car; Backspace still cycles through all / 最初の車種（Backspace で切替可） |
 | `--no-sim` | reuse an already-running CARLA / 起動済みCARLAを再利用 |
-| `--no-traffic` / `--no-dashboard` / `--no-sensor-viewer` | skip a component / 各コンポーネントを起動しない |
+| `--no-traffic` / `--no-dashboard` / `--no-sensor-viewer` | skip a component (the sensor viewer can still be opened later from the dashboard) / 各コンポーネントを起動しない（センサービューアは後からダッシュボードで開ける） |
 | `--no-traction-fx` | no skid marks / スキッドマークなし |
 | `--res 1080p` (or `--control-res`) | driving window resolution: `720p`, `1080p` (default), `1440p`, `4k` or `WxH` / 運転ウィンドウの解像度 |
 | `--fov 100` | driver-view field of view / ドライバー視点の視野角 |
 | `--no-log` | disable CSV logging / CSV記録を無効化 |
 | `--keyboard` | drive with W/A/S/D instead of the wheel / ホイールの代わりにW/A/S/Dで運転 |
 | `--delivery N` | also run N car + drone delivery vans; each order goes to exactly one van (docs/DELIVERY.md) / 車+ドローンの配送車を N 台追加（各注文は 1 台のみが担当） |
-| `--drone-cams` / `--drone-cams-res 1280x720` | open the drone camera wall (needs `--delivery`) / ドローンカメラ一覧を開く |
+| `--drone-cams` / `--drone-cams-res 1280x720` | open the drone camera wall at start (needs `--delivery`; without the flag it can be opened later from the dashboard) / ドローンカメラ一覧を起動時に開く（後からダッシュボードでも開ける） |
 | `--delivery-args "..."` | extra options for `delivery_sim.py`, e.g. `"--first-now"` / `delivery_sim.py` への追加オプション |
 | `--ffb` / `--ffb-strength X` | also run `carla_ffb.py` (G923 force feedback); skipped if one is already running / `carla_ffb.py`（G923 のフォースフィードバック）も起動（既に起動中なら起動しない） |
 
@@ -228,6 +242,48 @@ script and are the same rules used as RL reward penalties — see
   急ブレーキ。
 - ダッシュボードの警告テスト：`http://localhost:5000/?alerttest=1`
 
+### Opening and closing windows / ウィンドウの開閉
+
+The Drive tab's **Windows** card lists the optional windows: the **sensor
+viewer** and the **drone cameras** (the latter needs `--delivery N`). Each row
+has a status dot (green = open, with its pid), **Open** and **Close**. Started
+with `--no-sensor-viewer`, or without `--drone-cams`? Press Open whenever you
+want it; the pipeline starts it with the same options it would have used at
+launch. Close stops only that window. Closing a window with its own close
+button / Esc / Q is just as safe: the pipeline marks it closed instead of
+restarting it or shutting down. A window that *crashes* is still restarted (3
+times). Which windows are open is kept across F5: after a map switch the same
+ones come back, whatever the launch flags said.
+
+Not offered: the driving window (closing it ends the session), the dashboard
+itself, traffic (the tick master), the delivery vans and force feedback --
+stopping those changes or ends the drive. The controls only work under
+`run_pipeline.py` (the card says so otherwise). Changes to the pipeline take
+effect after its next restart.
+
+How it works: the dashboard writes `pipeline_control.json`
+(`{"drone_cams": {"action": "open", "t": ...}}`), run_pipeline.py carries it
+out within a second and writes `pipeline_status.json` (open windows + pids).
+`POST /windows {"window": "sensor_viewer", "action": "close"}` does the same
+from a script (`windows_control.py`, `tests/test_windows_control.py`).
+
+運転タブの**ウィンドウ**カードに任意ウィンドウ（**センサービューア**と
+**ドローンカメラ**。後者は `--delivery N` が必要）が並び、状態の丸（緑 = 表示中、
+pid 付き）と**開く**・**閉じる**ボタンがあります。`--no-sensor-viewer` や
+`--drone-cams` なしで起動しても、いつでも「開く」で起動時と同じオプションで
+開けます。「閉じる」はそのウィンドウだけを止めます。ウィンドウ自身の閉じる
+ボタン / Esc / Q で閉じても安全で、再起動もシャットダウンもせず「閉じている」
+扱いになります。*クラッシュ*した場合は従来どおり再起動（3 回）します。開閉状態は
+F5 のマップ切替後も維持されます（起動オプションではなく現在の状態に従う）。
+
+対象外：運転ウィンドウ（閉じるとセッション終了）、ダッシュボード自身、交通
+（tick マスタ）、配送車、フォースフィードバック。止めると運転が変わるか終わる
+ためです。操作は `run_pipeline.py` 配下でのみ有効です。パイプライン側の変更は
+次回の再起動から反映されます。
+
+仕組み：ダッシュボードが `pipeline_control.json` を書き、run_pipeline.py が
+1 秒以内に実行して `pipeline_status.json`（表示中のウィンドウと pid）を書きます。
+
 ---
 
 ## Drone cameras / ドローンカメラ
@@ -265,6 +321,60 @@ a handbrake drift is 12–28°; wheelspin or a locked wheel is 0.3–1.0).
 
 タイヤが滑ると路面に黒いスキッドマークが出ます（強く滑るほど太く、25 秒で
 消える）。判定は 5 km/h 以上でスリップ角 9° 超またはスリップ率 0.3 超。
+
+---
+
+## Traffic rules (Japan profile) / 交通ルール（日本プロファイル）
+
+On Japanese maps the NPC cars follow Japanese traffic law as far as CARLA's
+Traffic Manager can. `generate_traffic.py` picks the profile when it starts,
+from `traffic_profiles.json` + `maps/maps.json`. A map gets `japan` when its
+entry has `"road_style": "japan"`, or `"keep_left": true` in the `Japan`
+package (OitaKosen, OitaStation). **Every other map, Pasir Ris included,
+keeps the old traffic: no extra Traffic Manager call is made.** A map entry can
+also name a profile itself (`"traffic_profile": "japan"` / `"none"`), and
+`generate_traffic.py --traffic-profile none|japan` overrides it. After F5 the
+pipeline restarts generate_traffic on the new map, so the profile is chosen again.
+
+| Rule (source) | How the NPCs follow it |
+|---|---|
+| Keep left (道交法 17, 18 条) | the map's lanes (netconvert `--lefthand`); keep-"slow"-lane rule 0, because CARLA counts these roads as right-hand and would push cars into the overtaking lane |
+| Red / yellow / green (NPA signal sheet) | TM stops on red **and** yellow at the stop line; never runs a light (`ignore_lights` 0) |
+| No turn on red | TM treats every movement the same: red = stop |
+| 止まれ: full stop, then go (43 条) | RuleKeeper `stop_signs`, at every 206 stop line of the map (its landmarks, lanes facing the sign): slow down, stop with the front at the line, stand still 2 s, go first come first served once nothing is in the junction or coming along the crossing road (max hold 12 s). The TM itself never stops there: its all-way stop needs a non-green light state, and a car under no light reads green / 止まれ: 停止線で 2 秒完全停止し、交差点が空いてから先着順で発進 |
+| Speed limit (22 条; 60 km/h, 30 km/h without a centre line since 2026-09-01) | desired speed = the limit of the lane the car is on (xodr lane speed) × 0.9; 30 km/h where a lane has none; bicycles ≤ 18 km/h |
+| Following distance (26 条) | gap 3.5 m (other maps: 2.5 m) plus TM's speed-based braking |
+| No overtaking 30 m before a junction (30 条) | auto lane change off within 30 m of a junction |
+| Pedestrians on the road (38 条) | stop while a walker is on the carriageway ahead, either half, until they have left it (held at most 15 s; a walker standing still for 8 s counts as stuck and is ignored) |
+| Blinkers when turning (53 条) | TM drives each car's lights and blinkers |
+| Pedestrians waiting at a crossing without signals (38 条; NPA "Pedestrians First") | with the map's `hokousha.json`: stop when a walker stands at the kerb of an unsignalised crossing or walks into it / 信号の無い横断歩道で待つ歩行者に停止 |
+| Delivery vans (`delivery_sim.py`, own BasicAgent, not TM) | `delivery/rules.py` runs the same RuleKeeper for the vans while they drive: full stop at 止まれ, stop for walkers on the road / waiting at unsignalised crossings, speed capped at the lane limit × 0.9 (never above `--speed`). Vans parked for a delivery, charger or yard are left alone. `delivery_sim.py --traffic-profile none` turns it off; other maps unchanged / 配送車も止まれ・歩行者優先・車線速度に従う |
+| Pedestrian signals 青 → 青点滅 → 赤 (道交法施行令 2 条) | `hokousha.py`: one pedestrian phase per signalised crossing from the junction's vehicle phases; the heads (歩行者用信号機, countdown column) show it and walkers wait at the kerb on red and flashing green, finish when already crossing No walk shorter than 5 s (short side phases stay red); flashing only after a walk / 歩行者用信号: 灯器と歩行者が同じ現示に従う |
+| Real signal timing (JARTIC type C, Oita police) | `run_pipeline.py` starts `signal_timing.py apply --watch --only-map <Map>` on maps with maps.json `"signal_timing"` (OitaKosen): cycle and green / yellow 3 s / all-red 2 s by weekday or holiday and 5-minute slot, re-applied every slot; other maps and F5 switches away keep CARLA's times / 実際の信号時間を自動適用 |
+
+Not possible with the TM (left as they are): yellow-light "go on if you
+cannot stop safely" (the TM always stops), flashing yellow / red (CARLA lights
+have no flashing state), right turns giving way to oncoming traffic (TM only
+avoids collisions), stopping for a pedestrian *waiting* at a crossing
+(`get_crosswalks()` is empty on our maps), level crossings (none on our maps),
+giving way at unsignalised junctions without a 止まれ (TM collision avoidance only).
+Live check of the stops: `carla-venv/bin/python maps/stop_live.py` (read-only;
+`--role delivery` for the vans only, a per-role table at the end).
+With `--driver-profile` (study arm B) only the fixed settings apply, then the
+human-error profile overrides them; the helper is off.
+Tests: `tests/test_traffic_profile.py`, `tests/test_delivery_rules.py`. Details: map guide ch. 23.
+
+日本のマップ（maps.json の `road_style: japan`、または Japan パッケージの
+`keep_left`）では NPC が日本の交通ルールに従います：信号・標識・歩行者を無視しない、
+車線の最高速度 × 0.9 で走る（標識の無い車線は 30 km/h、自転車は 18 km/h 以下）、
+車間 3.5 m、交差点手前 30 m は車線変更しない、前方の車道を歩行者が渡っている間は
+停止、「止まれ」（206）の停止線で 2 秒完全停止して交差点が空いてから先着順で発進
+（TM 自身は信号の無い交差点で止まらないため補助で行う）、ウインカーは TM が出す。
+黄信号で止まれない場合の進行・点滅信号・右折時の対向車優先・踏切・止まれの無い
+交差点での優先は TM では扱えません。
+配送車（delivery_sim.py）も走行中は同じ補助で止まれ・歩行者・車線速度に従います（配送の停車には干渉しない）。
+他のマップ（Pasir Ris を含む）の交通は従来どおりです。`--traffic-profile none` で無効。
+パイプラインの次の起動（または F5 のマップ切替）から有効になります。
 
 ---
 
@@ -336,6 +446,12 @@ run it as `hero`: `python agent_drive.py --rolename hero --policy model:...`.
 
 ## Driving controls / 運転操作
 
+These are the **default** bindings. Change them on the dashboard
+(Settings > Keybinds, see below); H in the driving window always shows the
+bindings in use. / 以下は **既定の** 割り当てです。ダッシュボードの
+設定 > キー割り当て で変更できます（下記）。運転ウインドウの H で現在の
+割り当てを表示します。
+
 | Key / キー | Action / 動作 |
 |---|---|
 | Wheel + pedals / ホイールとペダル | steer, throttle, brake / 操舵・加速・制動 |
@@ -352,11 +468,98 @@ run it as `hero`: `python agent_drive.py --rolename hero --policy model:...`.
 | C / Shift+C | weather / 天候切替 |
 | `[` `]` (Shift: brake) | pedal strength / ペダル強度調整 |
 | Backspace | next vehicle model, alphabetical (Shift = previous) / 次の車種（アルファベット順、Shift で前） |
-| F5 | cycle map / マップ切替 |
+| F5 / Shift+F5 | next / previous map (see below) / 次・前のマップ（下記） |
 | F11 | fullscreen / フルスクリーン |
 | F1 | HUD info / HUD情報 |
 | H | help / ヘルプ |
 | ESC | quit / 終了 |
+
+Wheel buttons (G923, PlayStation version) by default / ホイールボタンの既定値:
+Cross (×) next car / 次の車種 · Square (□) HUD · Circle (○) camera / カメラ ·
+Triangle (△) weather / 天候 · R / L paddle gear up / down / シフト ·
+R2 reverse / リバース · L2 handbrake / ハンドブレーキ · Options automatic / AT ·
+R3 / L3 right / left signal / 右・左ウインカー · Enter next sensor / 次のセンサー.
+
+### Changing the map (F5) / マップ切替（F5）
+
+F5 goes to the next installed map, Shift+F5 to the previous one. The cycle is
+built from the server's own map list, installed maps only, in a fixed order:
+Town01 … Town10HD, then your own maps by package (MarinaBay,
+SpaFrancorchamps, OitaKosen, OitaStation, PasirRis …). Maps that are not
+installed (e.g. Town06/07 in this package) never appear.
+
+Under `run_pipeline.py` the driving window does **not** load the map itself:
+it shows "Switching to <map>…", writes `map_request.json` and closes (exit
+code 75). The pipeline then stops every client (traffic first), loads the
+map with CarlaUE4 still running, and starts them all again with the same
+options and the **same car** (`--start-vehicle` = the car you were driving).
+Left-hand traffic / hybrid physics, the map's start position, delivery,
+season and wind are set for the new map as at startup. The windows are gone
+for ~20–60 s while that happens. If the load fails, the pipeline restarts
+CarlaUE4 on that map (never a second one beside it). Run standalone, the
+driving window still loads the map itself.
+
+F5 で次、Shift+F5 で前のインストール済みマップへ切り替える。巡回順はサーバの
+マップ一覧から作り（インストール済みのみ）、順序は固定：Town01〜Town10HD、
+次に自作マップをパッケージ順に（MarinaBay、SpaFrancorchamps、OitaKosen、
+OitaStation、PasirRis …）。未インストールのマップ（本パッケージの Town06/07
+など）は出てこない。
+
+`run_pipeline.py` 配下では運転ウインドウ自身はマップを読み込まない。
+「Switching to <map>…」を表示し、`map_request.json` を書いて終了する（終了
+コード 75）。パイプラインが全クライアントを止め（交通を最初に）、CarlaUE4 は
+動かしたままマップを読み込み、同じオプション・**同じ車**（`--start-vehicle`
+= 運転していた車）で全てを再起動する。左側通行・ハイブリッド物理、マップの
+スタート位置、配送、季節と風は起動時と同様に新しいマップに合わせる。切替中の
+約 20〜60 秒はウインドウが消える。読込に失敗した場合は CarlaUE4 をそのマップで
+再起動する（2 つ目を並べて起動はしない）。単体起動の運転ウインドウは従来どおり
+自分でマップを読み込む。
+
+### Keybinds page / キー割り当てページ
+
+Dashboard **Settings > Keybinds** (`http://localhost:5000/#settings-keybinds`)
+lists every action of the driving window with two columns, **Keyboard** and
+**Wheel (G923)**. Wheel buttons are shown by the name printed on the wheel
+(Cross, Triangle, R paddle, Options, D-pad up...), never by number.
+
+- Click a binding to change it, **+** to add a second one, **×** to remove it.
+  Keyboard: press the key (Ctrl / Shift / Alt combinations work; actions you
+  hold, like throttle, ignore modifiers). Wheel: press the button on the wheel.
+  The driving window reads the wheel and reports the press, so it must be running.
+- Two actions on the same input are flagged in yellow. **↺** resets one row,
+  **reset all** every row; nothing changes until **save**.
+- The driving window re-reads `keybinds.json` about once a second, so a saved
+  change applies while driving.
+- **Wheel button names** card: turn **identify buttons** on and press each
+  button once. If the name shown is right click **Correct**, otherwise pick the
+  right name (or type one) and **Rename**. While identifying, wheel buttons do
+  nothing in the driving window. The names live in `g923_buttons.json`.
+- Files: `keybinds.json` (bindings, created on first run from the defaults;
+  the five button numbers in `wheel_config.ini` are the defaults for reverse,
+  handbrake, gear up / down and automatic), `g923_buttons.json` (names),
+  `wheel_last.json` (last wheel press) and `keybind_learn.json` (identify mode).
+  All are regenerated when deleted. Throttle, brake and steering on the wheel
+  are axes and stay in `wheel_config.ini`.
+- Besides the old actions there are **Hazard lights** and keyboard keys for the
+  turn signals; they are unbound until you bind them.
+
+ダッシュボードの **設定 > キー割り当て** に運転ウインドウの全操作が
+**キーボード** と **ホイール（G923）** の 2 列で並びます。ホイールのボタンは
+番号ではなく刻印の名前（×・△・右パドル・OPTIONS・十字キー ↑ など）で表示します。
+
+- 割り当てをクリックで変更、**＋** で 2 つ目を追加、**×** で削除。キーボードは
+  キーを押す（Ctrl / Shift / Alt 併用可。アクセルなど押し続ける操作では修飾キーは
+  無視）。ホイールはボタンを押す（ホイールを読むのは運転ウインドウなので起動が必要）。
+- 同じ入力が複数の操作に割り当てられると黄色で警告。**↺** で 1 行、
+  **すべて既定に戻す** で全行を既定に戻し、**保存** するまで反映されません。
+- 運転ウインドウは約 1 秒ごとに `keybinds.json` を読み直すため、保存した変更は
+  運転中に反映されます。
+- **ホイールのボタン名** カード：**ボタンを識別** をオンにして各ボタンを 1 回ずつ
+  押し、名前が正しければ **正しい**、違えば正しい名前を選ぶか入力して
+  **名前を変更**。識別中はホイールのボタンを押しても運転ウインドウでは何も
+  起きません。名前は `g923_buttons.json` に保存されます。
+- アクセル・ブレーキ・操舵はホイールの軸なので引き続き `wheel_config.ini` で設定します。
+- 新しく **ハザードランプ** とウインカーのキーボード操作を追加しました（既定は未割り当て）。
 
 ### Keyboard driving (no wheel) / キーボード運転（ホイール無し）
 
@@ -408,6 +611,21 @@ G923/G29 が検出されない場合、運転ウィンドウは自動でキー�
   / ホイールが認識されない場合：終了せずキーボード（W/A/S/D）操作で
   続行します。ホイールを使うには new-lg4ff DKMSドライバが必要です。
   `jstest-gtk` で軸を確認し `wheel_config.ini` の番号を修正してください。
+- **F5 (change map) used to crash everything** — fixed: the pipeline now
+  switches the map for all clients (see *Changing the map (F5)* and
+  `docs/TROUBLESHOOTING.md`). Restart the pipeline once after updating.
+  / F5（マップ切替）で全体が落ちていた件は修正済み。パイプラインが全
+  クライアントごと切り替える（上記と `docs/TROUBLESHOOTING.md` を参照）。
+  更新後に一度パイプラインを再起動すること。
+- **A viewer window keeps coming back after I close it** — that was the old
+  restart-on-exit; now a window closed with its close button / Esc / Q (or the
+  dashboard's Close) stays closed. Restart the pipeline once after updating.
+  The Windows card says "run_pipeline.py is not running" when the dashboard
+  was started on its own: the controls need the pipeline.
+  / ビューアを閉じても再び開く場合：旧版の挙動です。現在は閉じるボタン / Esc /
+  Q（またはダッシュボードの「閉じる」）で閉じたままになります。更新後に一度
+  パイプラインを再起動すること。ダッシュボード単体起動ではカードに
+  「run_pipeline.py が動いていません」と出ます（操作にはパイプラインが必要）。
 - **Dashboard shows "waiting for hero"** — the driving window isn't up yet
   or the hero vehicle died; it recovers automatically.
   / ダッシュボードが「車両待機中」のまま：運転ウィンドウが未起動か

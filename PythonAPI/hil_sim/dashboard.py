@@ -48,8 +48,10 @@ from flask import Flask, Response, jsonify, request
 
 from delivery import live as delivery_live
 import ffb_settings
+import keybinds
 import seasons
 import vehicle_tuning
+import windows_control
 
 
 STATE_LOCK = threading.Lock()
@@ -161,7 +163,8 @@ IMU_DATA = {"ax": 0.0, "ay": 0.0, "az": 0.0,
 OBST_DATA = {"t": 0.0, "d": -1.0}
 
 # Turn-signal state, shared with the G923 wheel script via turn_signal.json
-# (wheel button 11 = left, 10 = right; the dashboard buttons POST /signal).
+# (wheel L3 = left, R3 = right by default, see keybinds.json; the dashboard
+# buttons POST /signal). "hazard" = both blinkers (not a lane-change signal).
 # While a signal is on, crossing a broken lane marking counts as a lane
 # change instead of a lane invasion.
 # ウインカー状態。turn_signal.json を介して G923 スクリプトと共有
@@ -187,7 +190,7 @@ def _load_signal():
     try:
         with open(SIGNAL_PATH) as fh:
             side = json.load(fh).get("side", "off")
-        SIGNAL["side"] = side if side in ("left", "right") else "off"
+        SIGNAL["side"] = side if side in ("left", "right", "hazard") else "off"
     except Exception:
         pass
 
@@ -370,7 +373,7 @@ def attach_sensors(world, hero):
         # With the turn signal on, crossing broken markings is a legal,
         # signalled lane change — don't count it as a violation.
         # ウインカー点灯中の破線跨ぎは合法な車線変更なので違反に数えない。
-        legal = (SIGNAL["side"] != "off" and kinds
+        legal = (SIGNAL["side"] in ("left", "right") and kinds
                  and all(k in ("Broken", "BrokenBroken") for k in kinds))
         if legal:
             add_event("lane_change",
@@ -697,9 +700,9 @@ def telemetry_worker(host, port, log_dir=None):
                     blink = (int(carla.VehicleLightState.LeftBlinker)
                              | int(carla.VehicleLightState.RightBlinker))
                     ls = int(hero.get_light_state()) & ~blink
-                    if SIGNAL["side"] == "left":
+                    if SIGNAL["side"] in ("left", "hazard"):
                         ls |= int(carla.VehicleLightState.LeftBlinker)
-                    elif SIGNAL["side"] == "right":
+                    if SIGNAL["side"] in ("right", "hazard"):
                         ls |= int(carla.VehicleLightState.RightBlinker)
                     hero.set_light_state(carla.VehicleLightState(ls))
                 except Exception:
@@ -1553,6 +1556,36 @@ def _shutdown_worker():
     os._exit(0)
 
 
+# Optional windows of the pipeline (sensor viewer, drone cameras): run_pipeline
+# writes pipeline_status.json about once a second; a click here writes
+# pipeline_control.json, which it carries out (windows_control.py).
+# パイプラインの任意ウィンドウ（センサービューア・ドローンカメラ）：状態は
+# run_pipeline が約 1 秒ごとに pipeline_status.json へ書き、ここでのクリックは
+# pipeline_control.json に書かれてパイプラインが実行する（windows_control.py）。
+@app.route("/windows", methods=["GET", "POST"])
+def windows_route():
+    """GET: every optional window with running / pid / available. POST
+    {"window": "drone_cams", "action": "open"|"close"} queues the request
+    (409 when no pipeline is running). / 任意ウィンドウの状態取得・開閉依頼。"""
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        st = windows_control.read_status()
+        if not st["live"]:
+            st["error"] = "run_pipeline.py is not running"
+            return jsonify(st), 409
+        try:
+            windows_control.write_request(body.get("window"), body.get("action"))
+        except ValueError as exc:
+            st["error"] = str(exc)
+            return jsonify(st), 400
+        except OSError as exc:
+            st["error"] = str(exc)
+            return jsonify(st), 500
+        st["queued"] = {"window": body.get("window"), "action": body.get("action")}
+        return jsonify(st)
+    return jsonify(windows_control.read_status())
+
+
 @app.route("/shutdown", methods=["POST"])
 def shutdown():
     threading.Thread(target=_shutdown_worker, daemon=True).start()
@@ -1570,11 +1603,98 @@ def signal():
     if request.method == "POST":
         body = request.get_json(silent=True) or {}
         side = body.get("side")
-        if side in ("left", "right"):
+        if side in ("left", "right", "hazard"):
             _save_signal("off" if SIGNAL["side"] == side else side)
         elif side == "off":
             _save_signal("off")
     return jsonify({"side": SIGNAL["side"]})
+
+
+# Key / wheel-button bindings shared with the driving window (keybinds.py):
+# keybinds.json holds the bindings, g923_buttons.json the wheel's button names,
+# wheel_last.json the last wheel press (for press-to-bind), keybind_learn.json
+# tells the driving window to ignore wheel presses while we are listening.
+# 運転ウインドウと共有するキー・ホイール割り当て（keybinds.py）。
+def _keybinds_payload(bindings=None):
+    bindings = bindings if bindings is not None else keybinds.load()
+    lab = keybinds.load_labels()
+    return {
+        "actions": keybinds.ACTIONS,
+        "groups": [{"key": g[0], "en": g[1], "ja": g[2]} for g in keybinds.GROUPS],
+        "bindings": bindings,
+        "defaults": keybinds.defaults(),
+        "conflicts": keybinds.conflicts(bindings),
+        "labels": lab["labels"],
+        "confirmed": lab["confirmed"],
+        "label_ja": keybinds.LABEL_JA,
+        "stock_labels": keybinds.DEFAULT_LABELS,
+        "stock_order": list(keybinds.DEFAULT_LABELS.values()),
+        "known_keys": sorted(keybinds.KNOWN_KEYS),
+    }
+
+
+@app.route("/keybinds", methods=["GET", "POST"])
+def keybinds_route():
+    """GET: actions, bindings, defaults, conflicts, wheel names.
+    POST {"bindings": {...}} saves (cleaned); {"reset": true} restores the
+    defaults. / 割り当ての取得・保存・既定値に戻す。"""
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        try:
+            if body.get("reset"):
+                saved = keybinds.save(keybinds.defaults())
+            else:
+                saved = keybinds.save(keybinds.clean(body.get("bindings") or {}))
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify(_keybinds_payload(saved))
+    return jsonify(_keybinds_payload())
+
+
+@app.route("/keybinds/wheel")
+def keybinds_wheel():
+    """The last wheel button / D-pad press reported by the driving window,
+    with its name. / 運転ウインドウが報告した最後のホイール入力。"""
+    last = keybinds.read_wheel_last()
+    if last is None:
+        return jsonify({"last": None, "now": time.time()})
+    labels = keybinds.load_labels(create=False)["labels"]
+    last["label"] = labels.get(last["spec"])     # None = unknown / 未登録
+    return jsonify({"last": last, "now": time.time(),
+                    "learning": keybinds.learning_until() > time.time()})
+
+
+@app.route("/keybinds/learn", methods=["POST"])
+def keybinds_learn():
+    """POST {"seconds": 30} asks the driving window to only report wheel
+    presses for that long; {"seconds": 0} ends it. / 識別モードの開始・終了。"""
+    body = request.get_json(silent=True) or {}
+    try:
+        secs = max(0.0, min(120.0, float(body.get("seconds", 0))))
+        until = keybinds.set_learning(secs)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"until": until, "now": time.time()})
+
+
+@app.route("/keybinds/label", methods=["POST"])
+def keybinds_label():
+    """Name a wheel input: {"spec": "button:3", "label": "Triangle"};
+    {"spec": ..., "confirm": true} marks the current name right;
+    {"reset": true} restores the stock G923 names. / ボタン名の修正・確認。"""
+    body = request.get_json(silent=True) or {}
+    try:
+        if body.get("reset"):
+            keybinds.save_labels({"labels": dict(keybinds.DEFAULT_LABELS), "confirmed": []})
+        elif body.get("confirm"):
+            keybinds.confirm_label(body.get("spec"))
+        else:
+            keybinds.set_label(body.get("spec"), body.get("label", ""))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(_keybinds_payload())
 
 
 @app.route("/sessions")
@@ -1663,6 +1783,15 @@ HTML = r"""<!doctype html>
   .dot { width:9px; height:9px; border-radius:50%; background:var(--good);
          display:inline-block; margin-right:6px; box-shadow:0 0 6px var(--good); }
   .dot.bad { background:var(--crit); box-shadow:0 0 6px var(--crit); }
+  .dot.off { background:var(--sec); box-shadow:none; opacity:.55; }
+  .winrow { display:grid; grid-template-columns:auto 1fr auto; gap:4px 8px;
+            align-items:center; padding:8px 0; border-bottom:1px solid var(--line); }
+  .winrow:last-of-type { border-bottom:0; }
+  .winrow .wname { font-weight:600; font-size:13px; }
+  .winrow .wst { color:var(--sec); font-size:11.5px; margin-left:6px; font-weight:400; }
+  .winrow .wdesc { grid-column:2 / 4; color:var(--sec); font-size:11.5px; }
+  .winrow .wbtns { display:flex; gap:6px; }
+  .winrow .rbtn:disabled { opacity:.4; cursor:default; border-color:var(--line); color:var(--sec); }
   #status { color:var(--sec); font-size:12px; }
   nav.tabs { display:flex; background:var(--panel); border:1px solid var(--line);
              border-radius:9px; padding:3px; gap:2px; }
@@ -2121,6 +2250,65 @@ HTML = r"""<!doctype html>
             overflow:hidden; box-shadow:inset 0 0 0 1px #ffffff10; margin:4px 0 10px; }
   .fmeter > i { position:absolute; top:0; bottom:0; background:var(--blue); }
   .fmeter > s { position:absolute; left:50%; top:0; bottom:0; width:1px; background:var(--mute); }
+  /* ---- keybinds ---- */
+  .kbtools { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .kbsave { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .kbsave:hover { color:#fff; box-shadow:0 0 12px #3987e566; }
+  .kbdirty { font-family:var(--sans, inherit); text-transform:none; letter-spacing:0;
+             color:var(--warn); font-size:12px; font-weight:600; }
+  .kbwarn { border:1px solid #fab21966; background:#fab2191a; color:var(--ink);
+            border-radius:8px; padding:8px 12px; font-size:12.5px; margin-bottom:10px; }
+  .kbwarn b { color:var(--warn); }
+  .kbcap { display:flex; align-items:center; gap:12px; border:1px solid var(--blue);
+           background:#3987e522; border-radius:8px; padding:9px 12px; margin-bottom:10px;
+           font-size:13px; color:var(--ink); }
+  .kbcap span { flex:1; }
+  .kbcap[hidden], .kbwarn[hidden] { display:none; }
+  table.kbt td { white-space:normal; vertical-align:middle; }
+  table.kbt td.kbact { color:var(--ink); min-width:180px; }
+  table.kbt td.kbact small { display:block; color:var(--mute); font-size:11.5px; }
+  table.kbt tr.kbg th { color:var(--blue); padding-top:14px; font-size:11.5px; }
+  table.kbt th.kbcol { width:34%; }
+  .kchip { display:inline-flex; align-items:stretch; margin:2px 6px 2px 0; border:1px solid var(--line);
+           border-radius:7px; background:var(--panel2); overflow:hidden; vertical-align:middle; }
+  .kchip button { border:0; background:none; color:var(--ink); font:inherit; cursor:pointer;
+                  min-height:28px; }
+  .kchip .kcb { padding:3px 9px; font-family:var(--mono); font-size:12.5px; }
+  .kchip.wheel .kcb { font-family:inherit; font-weight:600; }
+  .kchip .kcb.unk { color:var(--mute); font-weight:400; font-style:italic; }
+  .kchip .kx { padding:0 7px; color:var(--mute); border-left:1px solid var(--line); }
+  .kchip .kx:hover { color:var(--red); }
+  .kchip:hover { border-color:var(--blue); }
+  .kchip.conf { border-color:var(--warn); box-shadow:0 0 0 1px #fab21955 inset; }
+  .kchip.cap { border-color:var(--blue); background:#3987e533; animation:kbpulse 1s infinite; }
+  @keyframes kbpulse { 50% { box-shadow:0 0 12px #3987e588; } }
+  @media (prefers-reduced-motion: reduce) { .kchip.cap { animation:none; } }
+  .kadd { border:1px dashed var(--line); background:none; color:var(--mute); border-radius:7px;
+          min-width:28px; min-height:28px; cursor:pointer; font:inherit; vertical-align:middle; }
+  .kadd:hover { color:var(--ink); border-color:var(--blue); }
+  .kadd.cap { border-style:solid; border-color:var(--blue); color:var(--ink); }
+  .knone { color:var(--mute); font-size:12px; margin-right:6px; }
+  .kaxis { color:var(--mute); font-size:12px; font-style:italic; }
+  .krst { border:0; background:none; color:var(--mute); cursor:pointer; min-width:28px;
+          min-height:28px; border-radius:6px; font-size:15px; }
+  .krst:hover { color:var(--blue); }
+  .kbid { display:flex; flex-wrap:wrap; align-items:center; gap:10px 14px; margin:12px 0 6px;
+          padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--panel2);
+          min-height:58px; font-size:13px; color:var(--sec); }
+  .kbid .kbname { font-size:22px; font-weight:700; color:var(--ink); }
+  .kbid .kbname.unk { font-size:15px; color:var(--mute); font-style:italic; font-weight:500; }
+  .kbid .kbst { font-size:12px; padding:1px 9px; border-radius:999px; border:1px solid var(--line); }
+  .kbid .kbst.ok { color:var(--green); border-color:#199e7066; }
+  .kbid select, .kbid input { background:var(--panel); border:1px solid var(--line); color:var(--ink);
+          font:inherit; font-size:12.5px; border-radius:7px; padding:5px 8px; min-height:30px; }
+  .kbid input { width:160px; }
+  .kbprog { font-size:12px; color:var(--mute); margin:4px 0 6px; }
+  .kbgrid { display:flex; flex-wrap:wrap; gap:6px; }
+  .kbgrid span { border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-size:12.5px;
+                 color:var(--sec); background:var(--panel2); transition:background .2s; }
+  .kbgrid span.ok { color:var(--ink); border-color:#199e7066; }
+  .kbgrid span.ok::before { content:'\2713  '; color:var(--green); }
+  .kbgrid span.now { border-color:var(--blue); background:#3987e533; color:var(--ink); }
 </style></head>
 <body>
 <header>
@@ -2352,6 +2540,12 @@ HTML = r"""<!doctype html>
   </div>
 
   <div class="card">
+    <h3 data-i18n="card_windows">Windows</h3>
+    <div id="win-rows" role="list"></div>
+    <div class="sub" id="win-msg"></div>
+  </div>
+
+  <div class="card">
     <h3 data-i18n="card_trip">Trip</h3>
     <div class="big"><span id="tripkm">0.00</span><span class="unit">km</span></div>
     <div class="sub"><span data-i18n="lbl_elapsed">elapsed</span> <b id="tripsec">00:00</b></div>
@@ -2496,7 +2690,7 @@ HTML = r"""<!doctype html>
           ▶</button>
       </div>
       <div class="legend" style="justify-content:center; margin-top:7px"
-           data-i18n="sig_hint">turn signal · wheel button 11 (L) / 10 (R)</div>
+           id="sig-hint" data-i18n="sig_hint">turn signal</div>
     </div>
     <div class="card">
       <h3><span data-i18n="veh_sensors">Sensors</span>
@@ -3257,6 +3451,7 @@ HTML = r"""<!doctype html>
   <button id="set-btn-driving" role="tab" aria-controls="set-driving" aria-selected="true" data-sec="driving" class="active" data-i18n="set_driving">Driving</button>
   <button id="set-btn-ffb" role="tab" aria-controls="set-ffb" data-sec="ffb" data-i18n="set_ffb">Force feedback</button>
   <button id="set-btn-delivery" role="tab" aria-controls="set-delivery" data-sec="delivery" data-i18n="set_delivery">Delivery sim</button>
+  <button id="set-btn-keybinds" role="tab" aria-controls="set-keybinds" data-sec="keybinds" data-i18n="set_keybinds">Keybinds</button>
   <span class="setnote" data-i18n="set_note">Every setting applies live and is saved for the next run.</span>
 </div>
 <section id="set-driving">
@@ -3390,6 +3585,35 @@ HTML = r"""<!doctype html>
   </div>
 </div>
 </section>
+<section id="set-keybinds" hidden>
+<div class="fgrid">
+  <div class="card fwide">
+    <h3><span data-i18n="kb_card">Keybinds</span>
+      <span class="kbtools">
+        <span class="kbdirty" id="kb-dirty" hidden data-i18n="kb_unsaved">unsaved changes</span>
+        <button class="rbtn" id="kb-reset-all" data-i18n="kb_reset_all">reset all</button>
+        <button class="rbtn kbsave" id="kb-save" data-i18n="kb_save">save</button></span></h3>
+    <div class="kbwarn" id="kb-conf" role="alert" hidden></div>
+    <div class="kbcap" id="kb-cap" role="status" aria-live="polite" hidden>
+      <span id="kb-cap-msg"></span>
+      <button class="rbtn" id="kb-cap-cancel" data-i18n="kb_cancel">cancel</button></div>
+    <div class="dmsg" id="kb-msg" role="status" aria-live="polite"></div>
+    <div style="overflow-x:auto"><table class="dt kbt" id="kb-table"></table></div>
+    <div class="legend" style="margin-top:8px" data-i18n="kb_hint">Click a binding to change it.</div>
+  </div>
+  <div class="card fwide">
+    <h3><span data-i18n="kb_id_card">Wheel button names (G923)</span>
+      <span class="kbtools">
+        <button class="rbtn" id="kb-lab-reset" data-i18n="kb_lab_reset">stock names</button>
+        <button class="rbtn kbsave" id="kb-id-toggle" data-i18n="kb_id_start">identify buttons</button></span></h3>
+    <div class="legend" data-i18n="kb_id_hint">Turn on identify, then press each button on the wheel.</div>
+    <div class="kbid" id="kb-id-now" aria-live="polite"></div>
+    <div class="kbprog" id="kb-id-prog"></div>
+    <div class="kbgrid" id="kb-id-grid"></div>
+    <div class="legend" style="margin-top:8px" data-i18n="kb_id_shifter">Shifter 1-6 / R exist only with the Driving Force Shifter attached.</div>
+  </div>
+</div>
+</section>
 </main>
 
 <div id="tooltip"></div>
@@ -3410,6 +3634,26 @@ const I18N = {
   nav_dash:'Drive', nav_stats:'Statistics', nav_veh:'Vehicle',
   nav_drone:'Delivery', nav_settings:'Settings', nav_ffb:'Force Feedback', nav_pod:'Pod',
   set_driving:'Driving', set_ffb:'Force feedback', set_delivery:'Delivery sim',
+  set_keybinds:'Keybinds', kb_card:'Keybinds', kb_col_action:'Action', kb_col_keys:'Keyboard',
+  kb_col_wheel:'Wheel (G923)', kb_save:'save', kb_reset_all:'reset all', kb_reset_row:'reset to default',
+  kb_unsaved:'unsaved changes', kb_saved:'Saved. The driving window applies it within a second.',
+  kb_save_fail:'Could not save: ', kb_cancel:'cancel', kb_none:'none', kb_add:'add a binding',
+  kb_remove:'remove', kb_change:'change',
+  kb_press_key:'Press a key for \u201c{a}\u201d (with Ctrl / Shift / Alt if you like)\u2026',
+  kb_press_key_hold:'Press a key for \u201c{a}\u201d (held actions ignore Ctrl / Shift / Alt)\u2026',
+  kb_press_wheel:'Press the button on the wheel for \u201c{a}\u201d\u2026 {s} s',
+  kb_no_driver:'Nothing arrived. The driving window must be running: it is what reads the wheel.',
+  kb_axis:'wheel / pedal axis (wheel_config.ini)', kb_unknown:'unknown button (press to name)',
+  kb_conflict:'Used by more than one action (the first one in the list wins):',
+  kb_hint:'Click a binding to change it, + to add another, \u00d7 to remove it. Keyboard: press the key, with Ctrl / Shift / Alt if you want a combination. Wheel: press the button on the wheel (the driving window must be running). Save, and the driving window picks the change up within a second; H in the driving window lists the bindings.',
+  kb_id_card:'Wheel button names (G923)', kb_id_start:'identify buttons', kb_id_stop:'stop identifying',
+  kb_lab_reset:'stock names', kb_lab_reset_sure:'click again to reset the names',
+  kb_id_hint:'Turn identify on and press each button on the wheel once. If the name shown is the one printed on the button, click \u201cCorrect\u201d; if not, pick the right name and click \u201cRename\u201d. While identifying, wheel buttons do nothing in the driving window.',
+  kb_id_wait:'Press a button on the wheel\u2026', kb_id_off:'Identify is off. Turn it on, then press a button on the wheel.',
+  kb_id_confirmed:'confirmed', kb_id_unconfirmed:'not confirmed yet', kb_id_correct:'Correct',
+  kb_id_rename:'Rename', kb_id_custom:'other name\u2026', kb_id_custom_ph:'name on the button',
+  kb_id_progress:'{n} of {m} names confirmed', kb_id_bound:'does: {a}', kb_id_free:'not bound to anything',
+  kb_id_shifter:'Shifter 1-6 / R exist only with the Driving Force Shifter attached. If a name is missing or wrong, press that button in identify mode and rename it.',
   set_note:'Every setting applies live and is saved for the next run.', sect_pod:'LastMile pod',
   pd_title:'LastMile pod', pd_none:"No LastMile pod in the delivery sim (it runs the earlier pod, or isn't running).",
   pd_chip_shell:'Shell', pd_chip_on:'Showcase', pd_chip_scen:'Scenario', pd_chip_step:'Step',
@@ -3486,7 +3730,7 @@ const I18N = {
   sn_ultra:'Ultrasonic', sn_lidar:'LiDAR', sn_semlidar:'Sem. LiDAR',
   sn_radar:'Radar', sn_cam:'Camera', sn_other:'Sensor', sn_active:'active',
   lg_bike:'bike / motorcycle', lg_walker:'pedestrian',
-  sig_hint:'turn signal \u00b7 wheel button 11 (L) / 10 (R)',
+  sig_hint:'turn signal', sig_hint_fmt:'turn signal \u00b7 {l} (L) / {r} (R)',
   ev_lane_change:'lane change',
   btn_shutdown:'Shutdown',
   shutdown_confirm:'Shut down the whole simulation? This stops CARLA, traffic, the driving window and this dashboard, and frees their ports.',
@@ -3537,6 +3781,12 @@ const I18N = {
   lbl_lanew:'Lane width', lbl_laneoff:'Lane offset', lbl_junction:'Junction',
   yes:'yes', no:'no', offroad:'OFF ROAD',
   card_season:'Season & wind', season_wind:'Wind (trees sway)', season_now:'Showing',
+  card_windows:'Windows', win_open:'Open', win_close:'Close', win_running:'open',
+  win_closed:'closed', win_opening:'opening…', win_closing:'closing…',
+  win_unavail:'not available', win_offline:'run_pipeline.py is not running: windows can only be opened under the pipeline',
+  win_switching:'switching map… open windows come back on the new map',
+  win_hint:'Closing a window here or with its own close button never stops the drive.',
+  win_need_delivery:'needs --delivery N',
   season_pending:'applying…', season_ok:'applied to {n} leaf objects at {at}',
   card_weather:'Weather', lbl_cloud:'Cloud', lbl_rain:'Rain', lbl_wet:'Wetness',
   lbl_fog:'Fog', lbl_wind:'Wind', lbl_sunalt:'Sun altitude',
@@ -3566,6 +3816,26 @@ const I18N = {
   nav_dash:'運転', nav_stats:'統計', nav_veh:'車両状態',
   nav_drone:'配送', nav_settings:'設定', nav_ffb:'フォースフィードバック', nav_pod:'ポッド',
   set_driving:'運転', set_ffb:'フォースフィードバック', set_delivery:'配送シミュ',
+  set_keybinds:'キー割り当て', kb_card:'キー割り当て', kb_col_action:'操作', kb_col_keys:'キーボード',
+  kb_col_wheel:'ホイール（G923）', kb_save:'保存', kb_reset_all:'すべて既定に戻す', kb_reset_row:'既定に戻す',
+  kb_unsaved:'未保存の変更があります', kb_saved:'保存しました。運転ウインドウに 1 秒以内に反映されます。',
+  kb_save_fail:'保存できませんでした: ', kb_cancel:'キャンセル', kb_none:'なし', kb_add:'割り当てを追加',
+  kb_remove:'削除', kb_change:'変更',
+  kb_press_key:'\u300c{a}\u300dに割り当てるキーを押してください（Ctrl / Shift / Alt 併用可）\u2026',
+  kb_press_key_hold:'\u300c{a}\u300dに割り当てるキーを押してください（押し続ける操作では Ctrl / Shift / Alt は無視）\u2026',
+  kb_press_wheel:'\u300c{a}\u300dに割り当てるホイールのボタンを押してください\u2026 残り {s} 秒',
+  kb_no_driver:'入力がありませんでした。ホイールを読み取るのは運転ウインドウなので、起動している必要があります。',
+  kb_axis:'ハンドル・ペダルの軸（wheel_config.ini）', kb_unknown:'未登録のボタン（押して名前を付ける）',
+  kb_conflict:'複数の操作に割り当てられています（一覧で先の操作が優先）:',
+  kb_hint:'割り当てをクリックで変更、＋で追加、×で削除。キーボード：キーを押す（Ctrl / Shift / Alt との組み合わせ可）。ホイール：ホイールのボタンを押す（運転ウインドウの起動が必要）。保存すると運転ウインドウに 1 秒以内に反映され、運転ウインドウの H で一覧を表示できます。',
+  kb_id_card:'ホイールのボタン名（G923）', kb_id_start:'ボタンを識別', kb_id_stop:'識別を終了',
+  kb_lab_reset:'既定の名前に戻す', kb_lab_reset_sure:'もう一度クリックで名前をリセット',
+  kb_id_hint:'識別をオンにして、ホイールの各ボタンを 1 回ずつ押してください。表示された名前がボタンの刻印と同じなら「正しい」を、違えば正しい名前を選んで「名前を変更」をクリック。識別中はホイールのボタンを押しても運転ウインドウでは何も起きません。',
+  kb_id_wait:'ホイールのボタンを押してください\u2026', kb_id_off:'識別モードはオフです。オンにしてからホイールのボタンを押してください。',
+  kb_id_confirmed:'確認済み', kb_id_unconfirmed:'未確認', kb_id_correct:'正しい',
+  kb_id_rename:'名前を変更', kb_id_custom:'その他の名前\u2026', kb_id_custom_ph:'ボタンの刻印',
+  kb_id_progress:'{m} 個中 {n} 個の名前を確認済み', kb_id_bound:'操作: {a}', kb_id_free:'未割り当て',
+  kb_id_shifter:'シフター 1〜6 速・R は Driving Force シフター接続時のみ。名前が無い・違う場合は、識別モードでそのボタンを押して名前を変更してください。',
   set_note:'設定はすべて即時に反映され、次回も保持されます。', sect_pod:'LastMile ポッド',
   pd_title:'LastMile ポッド', pd_none:'配送シミュに LastMile ポッドがありません（以前のポッドを使用中、または停止中）。',
   pd_chip_shell:'外殻', pd_chip_on:'ショーケース', pd_chip_scen:'シナリオ', pd_chip_step:'手順',
@@ -3642,7 +3912,7 @@ const I18N = {
   sn_ultra:'超音波', sn_lidar:'LiDAR', sn_semlidar:'セマンティックLiDAR',
   sn_radar:'レーダー', sn_cam:'カメラ', sn_other:'センサー', sn_active:'稼働中',
   lg_bike:'二輪車', lg_walker:'歩行者',
-  sig_hint:'ウインカー・ホイールボタン 11（左）／10（右）',
+  sig_hint:'ウインカー', sig_hint_fmt:'ウインカー・{l}（左）／{r}（右）',
   ev_lane_change:'車線変更',
   btn_shutdown:'終了',
   shutdown_confirm:'シミュレーション全体を終了しますか？ CARLA・交通・運転ウィンドウ・このダッシュボードを停止し、使用中のポートを解放します。',
@@ -3692,6 +3962,12 @@ const I18N = {
   lbl_lanew:'車線幅', lbl_laneoff:'横オフセット', lbl_junction:'交差点',
   yes:'はい', no:'いいえ', offroad:'車線外',
   card_season:'季節と風', season_wind:'風（木が揺れる）', season_now:'表示中',
+  card_windows:'ウィンドウ', win_open:'開く', win_close:'閉じる', win_running:'表示中',
+  win_closed:'閉じている', win_opening:'起動中…', win_closing:'終了中…',
+  win_unavail:'利用不可', win_offline:'run_pipeline.py が動いていません（ウィンドウの開閉はパイプライン配下のみ）',
+  win_switching:'マップ切替中… 開いていたウィンドウは新しいマップでも開きます',
+  win_hint:'ここでもウィンドウ自身の閉じるボタンでも、閉じても運転は止まりません。',
+  win_need_delivery:'--delivery N が必要',
   season_pending:'適用中…', season_ok:'{at} に葉オブジェクト {n} 個へ適用',
   card_weather:'天候', lbl_cloud:'雲量', lbl_rain:'雨', lbl_wet:'路面湿潤',
   lbl_fog:'霧', lbl_wind:'風', lbl_sunalt:'太陽高度',
@@ -3751,6 +4027,8 @@ function applyLang() {
   $('lang-ja').classList.toggle('active', LANG === 'ja');
   renderSessTable(); renderHist(); if (FF.params) ffBuild(); if (VT.params) vtBuild();
   if (typeof seasonRender === 'function') seasonRender();
+  if (typeof winRender === 'function') winRender();
+  if (typeof kbRender === 'function') kbRender();
 }
 function setLang(l) { LANG = l; localStorage.setItem('carla_lang', l); applyLang(); }
 $('lang-en').onclick = () => setLang('en');
@@ -3761,7 +4039,7 @@ $('lang-ja').onclick = () => setLang('ja');
 // and Settings -- every control, in three sections. Displays and controls are
 // kept apart. / 表示タブと設定タブを分ける（操作はすべて設定タブに集約）。
 const VIEWS = ['dash', 'veh', 'drone', 'stats', 'settings'];
-const SECTIONS = ['driving', 'ffb', 'delivery'];
+const SECTIONS = ['driving', 'ffb', 'delivery', 'keybinds'];
 let SECTION = 'driving';
 function secVisible(name) { return !$('view-settings').hidden && SECTION === name; }
 function showSection(name) {
@@ -3775,6 +4053,7 @@ function showSection(name) {
   if (name === 'ffb') setTimeout(ffTick, 0);
   if (name === 'delivery') { setTimeout(drTick, 0); setTimeout(podTick, 0); }
   if (name === 'driving') { setTimeout(vtTick, 0); setTimeout(renderTuneCurve, 0); }
+  if (name === 'keybinds') kbLoad(); else if (typeof kbStopListen === 'function') kbStopListen();
 }
 function showView(which, section) {
   if (!VIEWS.includes(which)) which = 'dash';
@@ -3784,6 +4063,7 @@ function showView(which, section) {
     $('tab-' + v).setAttribute('aria-selected', v === which ? 'true' : 'false');
   });
   if (which === 'settings') showSection(section || SECTION);
+  else if (typeof kbStopListen === 'function') kbStopListen();
   if (history.replaceState)
     history.replaceState(null, '', which === 'dash' ? '#' :
       '#' + which + (which === 'settings' ? '-' + SECTION : ''));
@@ -4147,8 +4427,8 @@ function renderVeh(s) {
   const sig = s.turn_signal || 'off';
   $('sig-l').classList.toggle('on', sig === 'left');
   $('sig-r').classList.toggle('on', sig === 'right');
-  $('vsig-l').classList.toggle('on', sig === 'left');
-  $('vsig-r').classList.toggle('on', sig === 'right');
+  $('vsig-l').classList.toggle('on', sig === 'left' || sig === 'hazard');
+  $('vsig-r').classList.toggle('on', sig === 'right' || sig === 'hazard');
   $('vsigarr-l').classList.toggle('on', sig === 'left');
   $('vsigarr-r').classList.toggle('on', sig === 'right');
 
@@ -4658,6 +4938,73 @@ $('r-swind').addEventListener('pointerdown', () => { seasonDragging = true; });
 $('r-swind').addEventListener('pointerup', () => { seasonDragging = false; });
 seasonTick();
 setInterval(seasonTick, 2000);
+
+// Windows card: open / close the pipeline's optional windows (windows_control.py)
+// ウィンドウカード：パイプラインの任意ウィンドウを開閉する
+var WIN = null, WIN_PENDING = {};   // name -> {action, until} / 応答待ちの操作
+function winRender() {
+  if (!WIN) return;
+  const box = $('win-rows');
+  if (box.childElementCount !== WIN.windows.length) {
+    box.innerHTML = '';
+    WIN.windows.forEach(w => {
+      const row = document.createElement('div');
+      row.className = 'winrow'; row.setAttribute('role', 'listitem'); row.dataset.name = w.name;
+      row.innerHTML = '<span class="dot off" aria-hidden="true"></span>' +
+        '<span><span class="wname"></span><span class="wst"></span></span>' +
+        '<span class="wbtns"><button class="rbtn wopen"></button>' +
+        '<button class="rbtn wclose"></button></span><span class="wdesc"></span>';
+      row.querySelector('.wopen').onclick = () => winPost(w.name, 'open');
+      row.querySelector('.wclose').onclick = () => winPost(w.name, 'close');
+      box.appendChild(row);
+    });
+  }
+  const now = Date.now();
+  WIN.windows.forEach(w => {
+    const row = box.querySelector('[data-name="' + w.name + '"]');
+    if (!row) return;
+    let p = WIN_PENDING[w.name];
+    // a request is done once the status shows it, or after 15 s
+    // 状態に反映されたか 15 秒経てば応答待ちを解除
+    if (p && (now > p.until || (p.action === 'open') === w.running)) {
+      delete WIN_PENDING[w.name]; p = null;
+    }
+    const name = LANG === 'ja' ? w.ja : w.en;
+    row.querySelector('.wname').textContent = name;
+    row.querySelector('.wdesc').textContent = LANG === 'ja' ? w.desc_ja : w.desc_en;
+    const st = p ? t(p.action === 'open' ? 'win_opening' : 'win_closing')
+      : !WIN.live ? '' : !w.available && !w.running
+        ? t('win_unavail') + (w.reason.startsWith('needs --delivery') ? ' (' + t('win_need_delivery') + ')' : '')
+      : w.running ? t('win_running') + (w.pid ? ' · pid ' + w.pid : '') : t('win_closed');
+    row.querySelector('.wst').textContent = st;
+    const dot = row.querySelector('.dot');
+    dot.classList.toggle('off', !w.running);
+    const bo = row.querySelector('.wopen'), bc = row.querySelector('.wclose');
+    bo.textContent = t('win_open'); bc.textContent = t('win_close');
+    bo.setAttribute('aria-label', t('win_open') + ' ' + name);
+    bc.setAttribute('aria-label', t('win_close') + ' ' + name);
+    bo.disabled = !WIN.live || !w.available || w.running || !!p;
+    bc.disabled = !WIN.live || !w.running || !!p;
+  });
+  $('win-msg').textContent = !WIN.live ? t('win_offline')
+    : WIN.phase === 'switching' ? t('win_switching') : (WIN.error || t('win_hint'));
+}
+async function winTick() {
+  try { WIN = await (await fetch('/windows')).json(); winRender(); } catch (e) {}
+}
+async function winPost(name, action) {
+  WIN_PENDING[name] = {action: action, until: Date.now() + 15000};
+  winRender();
+  try {
+    const r = await fetch('/windows', {method:'POST', headers:{'Content-Type':'application/json'},
+                                       body: JSON.stringify({window: name, action: action})});
+    WIN = await r.json();
+    if (!r.ok) delete WIN_PENDING[name];
+    winRender();
+  } catch (e) { delete WIN_PENDING[name]; winRender(); }
+}
+winTick();
+setInterval(winTick, 1500);
 
 
 /* ---------------------------------------------------- vehicle performance */
@@ -5787,6 +6134,390 @@ $('dmap-fit').onclick = () => { drFit(); drDrawMap(); };
 window.addEventListener('resize', () => { if (!$('view-drone').hidden || secVisible('delivery')) drRender(); });
 drSyncCtl();
 setInterval(drTick, 500);
+
+/* -------------------------------------------------------------- keybinds */
+// Settings > Keybinds: one row per action of the driving window, a Keyboard
+// and a Wheel column. Wheel inputs are always shown by name (g923_buttons.json),
+// never by number. Wheel binding / naming listens for the press the driving
+// window writes to wheel_last.json (it reads the wheel, not the browser).
+// 設定 > キー割り当て。ホイールは番号ではなく名前で表示する。ホイールの
+// 入力は運転ウインドウが wheel_last.json に書いたものを待ち受ける。
+const KB = {data: null, binds: null, dirty: false, cap: null, listen: null,
+            ident: false, last: null, labResetArm: 0};
+const kbClone = o => JSON.parse(JSON.stringify(o));
+const escK = s => String(s).replace(/[<>&"]/g,
+  c => ({'<':'&lt;', '>':'&gt;', '&':'&amp;', '"':'&quot;'}[c]));
+const KB_MODS = ['ctrl', 'shift', 'alt'];
+const KB_PRETTY = {up:'↑ Up', down:'↓ Down', left:'← Left', right:'→ Right',
+  space:'Space', tab:'Tab', 'return':'Enter', enter:'Num Enter', escape:'Esc',
+  backspace:'Backspace', 'delete':'Delete', insert:'Insert', home:'Home', end:'End',
+  'page up':'PgUp', 'page down':'PgDn', 'left shift':'L-Shift', 'right shift':'R-Shift',
+  'left ctrl':'L-Ctrl', 'right ctrl':'R-Ctrl', 'left alt':'L-Alt', 'right alt':'R-Alt',
+  'caps lock':'Caps Lock'};
+// browser KeyboardEvent.code -> pygame key name / ブラウザのキー → pygame のキー名
+const KB_CODE = {ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
+  Space:'space', Tab:'tab', Enter:'return', NumpadEnter:'enter', Escape:'escape',
+  Backspace:'backspace', Delete:'delete', Insert:'insert', Home:'home', End:'end',
+  PageUp:'page up', PageDown:'page down', BracketLeft:'[', BracketRight:']', Comma:',',
+  Period:'.', Slash:'/', Backslash:'\\', IntlRo:'\\', IntlYen:'\\', Semicolon:';', Quote:"'",
+  Backquote:'`', Minus:'-', Equal:'=', ShiftLeft:'left shift', ShiftRight:'right shift',
+  ControlLeft:'left ctrl', ControlRight:'right ctrl', AltLeft:'left alt', AltRight:'right alt',
+  CapsLock:'caps lock', NumpadAdd:'[+]', NumpadSubtract:'[-]', NumpadMultiply:'[*]',
+  NumpadDivide:'[/]', NumpadDecimal:'[.]'};
+const KB_MODKEYS = new Set(['left shift', 'right shift', 'left ctrl', 'right ctrl',
+                            'left alt', 'right alt']);
+function kbParse(spec) {
+  const parts = String(spec).split('+');
+  const mods = [];
+  while (parts.length > 1 && KB_MODS.includes(parts[0])) mods.push(parts.shift());
+  return {mods, key: parts.join('+')};
+}
+function kbPretty(spec) {
+  const {mods, key} = kbParse(spec);
+  let k = KB_PRETTY[key];
+  if (!k) k = (key.length === 1 || /^f\d+$/.test(key)) ? key.toUpperCase()
+            : (/^\[.+\]$/.test(key) ? 'Num ' + key.slice(1, -1) : key);
+  return KB_MODS.filter(m => mods.includes(m))
+    .map(m => m[0].toUpperCase() + m.slice(1)).concat([k]).join('+');
+}
+function kbName(e) {
+  const c = e.code || '';
+  if (/^Key[A-Z]$/.test(c)) return c.slice(3).toLowerCase();
+  if (/^Digit\d$/.test(c)) return c.slice(5);
+  if (/^F([1-9]|1[0-5])$/.test(c)) return c.toLowerCase();
+  if (/^Numpad\d$/.test(c)) return '[' + c.slice(6) + ']';
+  return KB_CODE[c] || null;
+}
+function kbLabel(spec) {
+  const name = KB.data && KB.data.labels[spec];
+  if (!name) return null;
+  return LANG === 'ja' ? (KB.data.label_ja[name] || name) : name;
+}
+function kbWheelText(spec) { return kbLabel(spec) || t('kb_unknown'); }
+const kbActName = a => LANG === 'ja' ? a.ja : a.en;
+function kbAct(id) { return KB.data.actions.find(a => a.id === id); }
+
+// same rules as keybinds.conflicts(): a hold action clashes on its base key
+// 押し続ける操作は修飾キーに関係なく同じキーと衝突する
+function kbConflicts(b) {
+  const keyUsers = {}, wheelUsers = {}, keys = {}, wheel = {};
+  for (const a of KB.data.actions) {
+    for (const s of (b[a.id] || {}).keys || []) {
+      const p = kbParse(s);
+      (keyUsers[p.key] = keyUsers[p.key] || []).push(
+        {id: a.id, mods: p.mods.slice().sort().join('+'), hold: a.kind === 'hold', s});
+    }
+    for (const w of (b[a.id] || {}).wheel || [])
+      (wheelUsers[w] = wheelUsers[w] || []).push(a.id);
+  }
+  for (const users of Object.values(keyUsers))
+    users.forEach((u, i) => users.slice(i + 1).forEach(v => {
+      if (u.id === v.id || !(u.hold || v.hold || u.mods === v.mods)) return;
+      for (const s of [u.s, v.s]) {
+        const l = keys[s] = keys[s] || [];
+        for (const x of [u.id, v.id]) if (!l.includes(x)) l.push(x);
+      }
+    }));
+  for (const [w, u] of Object.entries(wheelUsers))
+    if (new Set(u).size > 1) wheel[w] = [...new Set(u)];
+  return {keys, wheel};
+}
+
+function kbSigHint() {
+  const el = $('sig-hint');
+  if (!el || !KB.data) return;
+  const one = id => {
+    const c = (KB.binds || KB.data.bindings)[id] || {};
+    if (c.wheel && c.wheel.length) return kbWheelText(c.wheel[0]);
+    if (c.keys && c.keys.length) return kbPretty(c.keys[0]);
+    return null;
+  };
+  const l = one('signal_left'), r = one('signal_right');
+  el.textContent = (l || r) ? t('sig_hint_fmt').replace('{l}', l || '-').replace('{r}', r || '-')
+                            : t('sig_hint');
+}
+
+function kbRender() {
+  if (!KB.data) return;
+  kbSigHint();
+  if (!KB.binds) return;
+  const conf = kbConflicts(KB.binds);
+  const defs = KB.data.defaults;
+  let h = '<thead><tr><th>' + escK(t('kb_col_action')) + '</th><th class="kbcol">' +
+    escK(t('kb_col_keys')) + '</th><th class="kbcol">' + escK(t('kb_col_wheel')) +
+    '</th><th><span class="sr-only" style="position:absolute;left:-9999px">' +
+    escK(t('kb_reset_row')) + '</span></th></tr></thead><tbody>';
+  for (const g of KB.data.groups) {
+    h += '<tr class="kbg"><th colspan="4">' + escK(LANG === 'ja' ? g.ja : g.en) + '</th></tr>';
+    for (const a of KB.data.actions.filter(x => x.group === g.key)) {
+      const cell = KB.binds[a.id];
+      const capOn = (col, i) => (KB.cap && KB.cap.id === a.id && KB.cap.col === col && KB.cap.i === i) ||
+                                (KB.listen && KB.listen.mode === 'bind' && KB.listen.id === a.id &&
+                                 col === 'wheel' && KB.listen.i === i);
+      const chips = col => {
+        const list = cell[col];
+        let out = '';
+        list.forEach((spec, i) => {
+          const isConf = col === 'keys' ? !!conf.keys[spec] : !!conf.wheel[spec];
+          const txt = col === 'keys' ? kbPretty(spec) : kbWheelText(spec);
+          const unk = col === 'wheel' && !kbLabel(spec);
+          out += '<span class="kchip' + (col === 'wheel' ? ' wheel' : '') + (isConf ? ' conf' : '') +
+            (capOn(col, i) ? ' cap' : '') + '"><button class="kcb' + (unk ? ' unk' : '') +
+            '" data-kb="edit" data-id="' + a.id + '" data-col="' + col + '" data-i="' + i +
+            '" title="' + escK(t('kb_change')) + '">' + escK(txt) + '</button><button class="kx" data-kb="del" data-id="' +
+            a.id + '" data-col="' + col + '" data-i="' + i + '" aria-label="' + escK(t('kb_remove') + ' ' + txt) +
+            '">×</button></span>';
+        });
+        if (!list.length && !capOn(col, list.length)) out += '<span class="knone">' + escK(t('kb_none')) + '</span>';
+        if (list.length < 4) out += '<button class="kadd' + (capOn(col, list.length) ? ' cap' : '') +
+          '" data-kb="add" data-id="' + a.id + '" data-col="' + col + '" aria-label="' +
+          escK(t('kb_add') + ': ' + kbActName(a) + ' (' + t(col === 'keys' ? 'kb_col_keys' : 'kb_col_wheel') + ')') +
+          '" title="' + escK(t('kb_add')) + '">+</button>';
+        return out;
+      };
+      const changed = JSON.stringify(cell) !== JSON.stringify(defs[a.id]);
+      h += '<tr><td class="kbact">' + escK(kbActName(a)) +
+        (LANG === 'ja' ? '' : '') + '</td><td>' + chips('keys') + '</td><td>' +
+        (a.axis ? '<span class="kaxis">' + escK(t('kb_axis')) + '</span>' : chips('wheel')) +
+        '</td><td>' + (changed ? '<button class="krst" data-kb="reset" data-id="' + a.id +
+        '" title="' + escK(t('kb_reset_row')) + '" aria-label="' + escK(t('kb_reset_row') + ': ' + kbActName(a)) +
+        '">↺</button>' : '') + '</td></tr>';
+    }
+  }
+  $('kb-table').innerHTML = h + '</tbody>';
+
+  // conflict banner / 衝突の警告
+  const lines = [];
+  for (const [s, ids] of Object.entries(conf.keys))
+    lines.push('<b>' + escK(kbPretty(s)) + '</b>: ' + ids.map(i => escK(kbActName(kbAct(i)))).join(', '));
+  for (const [w, ids] of Object.entries(conf.wheel))
+    lines.push('<b>' + escK(kbWheelText(w)) + '</b>: ' + ids.map(i => escK(kbActName(kbAct(i)))).join(', '));
+  $('kb-conf').hidden = !lines.length;
+  $('kb-conf').innerHTML = lines.length ? escK(t('kb_conflict')) + '<br>' + lines.join('<br>') : '';
+  $('kb-dirty').hidden = !KB.dirty;
+  kbRenderCap();
+  kbRenderIdent();
+}
+
+function kbRenderCap() {
+  let msg = null;
+  if (KB.cap) {
+    const a = kbAct(KB.cap.id);
+    msg = t(a.kind === 'hold' ? 'kb_press_key_hold' : 'kb_press_key').replace('{a}', kbActName(a));
+  } else if (KB.listen && KB.listen.mode === 'bind') {
+    const left = Math.max(0, Math.ceil((KB.listen.deadline - Date.now()) / 1000));
+    msg = t('kb_press_wheel').replace('{a}', kbActName(kbAct(KB.listen.id))).replace('{s}', left);
+  }
+  $('kb-cap').hidden = msg === null;
+  if (msg !== null) $('kb-cap-msg').textContent = msg;
+}
+
+function kbRenderIdent() {
+  const d = KB.data;
+  $('kb-id-toggle').textContent = t(KB.ident ? 'kb_id_stop' : 'kb_id_start');
+  $('kb-lab-reset').textContent = t(Date.now() < KB.labResetArm ? 'kb_lab_reset_sure' : 'kb_lab_reset');
+  const specs = [...new Set(Object.keys(d.stock_labels).concat(Object.keys(d.labels), d.confirmed,
+                                                               KB.last ? [KB.last.spec] : []))];
+  const ord = s => { const m = s.split(':'); return (m[0] === 'button' ? 0 : 1000) + (+m[1]) * 10 +
+                     ['up', 'down', 'left', 'right'].indexOf(m[2] || 'up'); };
+  specs.sort((a, b) => ord(a) - ord(b));
+  const named = specs.filter(s => d.labels[s]);
+  const nconf = named.filter(s => d.confirmed.includes(s)).length;
+  $('kb-id-prog').textContent = t('kb_id_progress').replace('{n}', nconf).replace('{m}', named.length);
+  const lastSpec = KB.last && KB.last.spec;
+  $('kb-id-grid').innerHTML = specs.map(s =>
+    '<span class="' + (d.confirmed.includes(s) && d.labels[s] ? 'ok' : '') + (s === lastSpec && KB.ident ? ' now' : '') +
+    '">' + escK(kbWheelText(s)) + '</span>').join('');
+
+  const box = $('kb-id-now');
+  if (!KB.ident) { box.innerHTML = '<span>' + escK(t('kb_id_off')) + '</span>'; return; }
+  if (!KB.last) {
+    box.innerHTML = '<span>' + escK(t('kb_id_wait')) + '</span>' +
+      (KB.listen && Date.now() - KB.listen.started > 8000 ? '<span>' + escK(t('kb_no_driver')) + '</span>' : '');
+    return;
+  }
+  // keep the rename controls stable while the user types / 入力中は再描画しない
+  if (box.dataset.spec === lastSpec && box.dataset.lang === LANG &&
+      box.dataset.name === String(d.labels[lastSpec] || '') &&
+      box.dataset.ok === String(d.confirmed.includes(lastSpec)) && box.querySelector('select')) return;
+  box.dataset.spec = lastSpec; box.dataset.lang = LANG;
+  box.dataset.name = String(d.labels[lastSpec] || ''); box.dataset.ok = String(d.confirmed.includes(lastSpec));
+  const name = kbLabel(lastSpec);
+  const ok = !!name && d.confirmed.includes(lastSpec);
+  const uses = d.actions.filter(a => ((KB.binds || d.bindings)[a.id].wheel || []).includes(lastSpec))
+                        .map(kbActName);
+  const choices = [...new Set(d.stock_order.concat(Object.values(d.labels)))];
+  box.innerHTML = '<span class="kbname' + (name ? '' : ' unk') + '">' + escK(name || t('kb_unknown')) + '</span>' +
+    (name ? '<span class="kbst' + (ok ? ' ok' : '') + '">' + escK(t(ok ? 'kb_id_confirmed' : 'kb_id_unconfirmed')) + '</span>' : '') +
+    '<span>' + escK(uses.length ? t('kb_id_bound').replace('{a}', uses.join(', ')) : t('kb_id_free')) + '</span>' +
+    (name && !ok ? '<button class="rbtn kbsave" id="kb-id-ok">' + escK(t('kb_id_correct')) + '</button>' : '') +
+    '<select id="kb-id-sel" aria-label="' + escK(t('kb_id_rename')) + '">' +
+    choices.map(c => '<option value="' + escK(c) + '"' + (c === d.labels[lastSpec] ? ' selected' : '') + '>' +
+      escK(LANG === 'ja' ? (d.label_ja[c] || c) : c) + '</option>').join('') +
+    '<option value="__custom">' + escK(t('kb_id_custom')) + '</option></select>' +
+    '<input id="kb-id-txt" maxlength="40" hidden placeholder="' + escK(t('kb_id_custom_ph')) + '">' +
+    '<button class="rbtn" id="kb-id-ren">' + escK(t('kb_id_rename')) + '</button>';
+  if (!name) $('kb-id-sel').value = '__custom';
+  $('kb-id-txt').hidden = $('kb-id-sel').value !== '__custom';
+  $('kb-id-sel').onchange = () => { $('kb-id-txt').hidden = $('kb-id-sel').value !== '__custom';
+                                    if (!$('kb-id-txt').hidden) $('kb-id-txt').focus(); };
+  if ($('kb-id-ok')) $('kb-id-ok').onclick = () => kbLabelPost({spec: lastSpec, confirm: true});
+  $('kb-id-ren').onclick = () => {
+    const v = $('kb-id-sel').value === '__custom' ? $('kb-id-txt').value.trim() : $('kb-id-sel').value;
+    if (v) kbLabelPost({spec: lastSpec, label: v});
+  };
+}
+
+async function kbLabelPost(body) {
+  try {
+    const r = await fetch('/keybinds/label', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if (j.labels) { KB.data.labels = j.labels; KB.data.confirmed = j.confirmed; }
+  } catch (e) {}
+  delete $('kb-id-now').dataset.spec;
+  kbRender();
+}
+
+async function kbLoad(force) {
+  if (KB.data && KB.dirty && !force) { kbRender(); return; }
+  try {
+    const j = await (await fetch('/keybinds')).json();
+    KB.data = j; KB.binds = kbClone(j.bindings); KB.dirty = false;
+  } catch (e) { return; }
+  kbRender();
+}
+
+function kbSet(fn) { fn(KB.binds); KB.dirty = true; kbRender(); }
+
+// keyboard capture / キー入力の取り込み
+let kbPendingMod = null;
+function kbFinishKey(spec) {
+  const c = KB.cap; KB.cap = null; kbPendingMod = null;
+  if (!c || !spec) { kbRender(); return; }
+  kbSet(b => {
+    const list = b[c.id].keys;
+    const dup = list.indexOf(spec);
+    if (dup >= 0 && dup !== c.i) { if (c.i < list.length) list.splice(c.i, 1); }
+    else list[c.i] = spec;
+  });
+}
+document.addEventListener('keydown', e => {
+  if (!KB.cap) return;
+  e.preventDefault(); e.stopPropagation();
+  const name = kbName(e);
+  if (!name) return;
+  if (KB_MODKEYS.has(name)) { kbPendingMod = name; return; }
+  const hold = kbAct(KB.cap.id).kind === 'hold';
+  const mods = hold ? [] : KB_MODS.filter(m => e[m + 'Key']);
+  kbFinishKey(mods.concat([name]).join('+'));
+}, true);
+document.addEventListener('keyup', e => {
+  if (!KB.cap) return;
+  e.preventDefault(); e.stopPropagation();
+  const name = kbName(e);
+  if (name && name === kbPendingMod) kbFinishKey(name);     // a modifier on its own
+}, true);
+
+// wheel: listen for the press the driving window reports / ホイール入力の待ち受け
+async function kbLearn(seconds) {
+  try {
+    const r = await fetch('/keybinds/learn', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({seconds})});
+    return await r.json();
+  } catch (e) { return null; }
+}
+async function kbStartListen(mode, id, i) {
+  KB.cap = null;
+  const j = await kbLearn(30);
+  KB.listen = {mode, id, i, since: j ? j.now : Date.now() / 1000, started: Date.now(),
+               renew: Date.now() + 10000, deadline: Date.now() + 20000};
+  if (mode === 'identify') KB.ident = true;
+  kbRender();
+}
+function kbStopListen() {
+  if (!KB.listen && !KB.ident) return;
+  KB.listen = null; KB.ident = false;
+  kbLearn(0);
+  if (KB.data) kbRender();
+}
+async function kbPoll() {
+  const L = KB.listen;
+  if (!L) return;
+  if (L.mode === 'bind' && Date.now() > L.deadline) {
+    KB.listen = null; kbLearn(0);
+    $('kb-msg').textContent = t('kb_no_driver');
+    kbRender(); return;
+  }
+  if (Date.now() > L.renew) { L.renew = Date.now() + 10000; kbLearn(30); }
+  let j = null;
+  try { j = await (await fetch('/keybinds/wheel')).json(); } catch (e) { return; }
+  if (KB.listen !== L) return;
+  const last = j && j.last;
+  if (last && last.t > L.since) {
+    L.since = last.t;
+    KB.last = last;
+    if (last.label !== undefined && KB.data.labels[last.spec] !== (last.label || undefined)) {
+      if (last.label) KB.data.labels[last.spec] = last.label; else delete KB.data.labels[last.spec];
+    }
+    if (L.mode === 'bind') {
+      KB.listen = null; kbLearn(0);
+      kbSet(b => {
+        const list = b[L.id].wheel;
+        const dup = list.indexOf(last.spec);
+        if (dup >= 0 && dup !== L.i) { if (L.i < list.length) list.splice(L.i, 1); }
+        else list[L.i] = last.spec;
+      });
+      return;
+    }
+  }
+  kbRenderCap();
+  kbRenderIdent();
+}
+setInterval(kbPoll, 250);
+
+$('kb-table').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-kb]');
+  if (!btn) return;
+  const id = btn.dataset.id, col = btn.dataset.col, op = btn.dataset.kb;
+  $('kb-msg').textContent = '';
+  if (op === 'reset') { kbSet(b => { b[id] = kbClone(KB.data.defaults[id]); }); return; }
+  if (op === 'del') { kbSet(b => { b[id][col].splice(+btn.dataset.i, 1); }); return; }
+  const i = op === 'add' ? KB.binds[id][col].length : +btn.dataset.i;
+  if (KB.listen) { KB.listen = null; KB.ident = false; kbLearn(0); }
+  if (col === 'keys') { KB.cap = {id, col, i}; kbRender(); }
+  else kbStartListen('bind', id, i);
+});
+$('kb-cap-cancel').onclick = () => {
+  KB.cap = null; kbPendingMod = null;
+  if (KB.listen && KB.listen.mode === 'bind') { KB.listen = null; kbLearn(0); }
+  kbRender();
+};
+$('kb-reset-all').onclick = () => { kbSet(b => { for (const k of Object.keys(b)) b[k] = kbClone(KB.data.defaults[k]); }); };
+$('kb-save').onclick = async () => {
+  try {
+    const r = await fetch('/keybinds', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({bindings: KB.binds})});
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.status);
+    KB.data = j; KB.binds = kbClone(j.bindings); KB.dirty = false;
+    $('kb-msg').textContent = t('kb_saved');
+  } catch (e) { $('kb-msg').textContent = t('kb_save_fail') + e.message; }
+  kbRender();
+};
+$('kb-id-toggle').onclick = () => {
+  if (KB.ident) kbStopListen();
+  else { KB.last = null; delete $('kb-id-now').dataset.spec; kbStartListen('identify'); }
+};
+$('kb-lab-reset').onclick = () => {
+  if (Date.now() < KB.labResetArm) { KB.labResetArm = 0; kbLabelPost({reset: true}); }
+  else { KB.labResetArm = Date.now() + 4000; kbRenderIdent(); setTimeout(() => KB.data && kbRenderIdent(), 4100); }
+};
+window.addEventListener('beforeunload', () => {
+  if (KB.listen || KB.ident) navigator.sendBeacon && navigator.sendBeacon('/keybinds/learn',
+    new Blob([JSON.stringify({seconds: 0})], {type: 'application/json'}));
+});
+fetch('/keybinds').then(r => r.json()).then(j => { if (!KB.data) { KB.data = j; kbSigHint(); } }).catch(() => {});
 
 {
   // old links (#ffb, #pod, #drone...) land where those things live now

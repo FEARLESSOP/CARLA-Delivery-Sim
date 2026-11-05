@@ -119,6 +119,11 @@ not through sockets:
 - `pedal_tuning.json` — pedal strength/curve. The dashboard's Settings > Driving > Pedal Tuning
   card writes it; `DualControl._load_tuning` re-reads it ~1×/s while driving,
   as do the `[` / `]` keys. Mapping is `output = strength × press^curve`.
+- `keybinds.json` / `g923_buttons.json` — key and wheel-button bindings and
+  the G923 button names (`keybinds.py`; dashboard Settings > Keybinds). The
+  control script re-reads them ~1×/s; it reports each wheel press in
+  `wheel_last.json` and ignores wheel presses while `keybind_learn.json` says
+  the dashboard is identifying buttons. Never show raw button numbers in a UI.
 - `turn_signal.json` — blinker state written by the control script. While a
   signal is on, the dashboard scores a broken-line crossing as a legal lane
   change rather than a lane invasion.
@@ -126,7 +131,25 @@ not through sockets:
   polled by `run_pipeline.py`'s freeze watchdog. A stale mtime means the
   world stopped advancing, which `proc.poll()` cannot see.
 
-All three are gitignored and regenerated on first run.
+- `map_request.json` — F5 / Shift+F5 in the driving window (`map_switch.py`).
+  Under the pipeline the window never calls `load_world` (that aborted
+  libcarla in every other client and took the rig down): it writes the target
+  map + current car here and exits with code 75; `run_pipeline.py` stops the
+  clients (traffic first), loads the map with CarlaUE4 still up, and restarts
+  them all with the same options (`tests/test_map_switch.py`).
+- `pipeline_control.json` / `pipeline_status.json` — the dashboard's
+  Windows card (`windows_control.py`). The dashboard merges
+  `{window: {action: open|close, t}}` into the control file (the pipeline
+  never writes it, only clears it at start, and remembers the last `t` per
+  window); `run_pipeline.py` starts/stops that one viewer with its launch
+  command and rewrites the status file (~1 s; removed at shutdown). Only the
+  read-only viewers (`sensor_viewer`, `drone_cams`) are offered. A viewer
+  exiting with code 0 (its close button / Esc / Q) is a user close — no
+  restart; any other code is a crash and is restarted. The open/closed state,
+  not the launch flags, decides what `start_clients()` reopens after F5.
+  Viewers catch SIGTERM so their sensors are destroyed (`tests/test_windows_control.py`).
+
+All of these are gitignored and regenerated on first run.
 
 **One tick master.** With traffic enabled the world runs in *synchronous*
 mode, and a synchronous CARLA server advances only when a client calls

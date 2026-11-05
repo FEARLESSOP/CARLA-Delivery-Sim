@@ -38,7 +38,11 @@ GUARD_POST = 2.0          # post spacing (Gr-C-2E) / 支柱間隔
 GUARD_POST_TOP = 0.78     # post top over the beam's base ground (beam 0.40-0.80) / 支柱上端
 GUARD_PIECE = 40.0        # mesh pieces (one per tile by its midpoint) / メッシュ分割長
 LAMP_JUNCTION_CLEAR = 1.0  # no lamp this close to a junction lane (a pinched mouth) / 交差点車線からの離れ（狭い口）
-LAMP_DEAD_END_CLEAR = 2.5  # nor this close to a dead end's U-turn lanes (cars swing wide) / 袋小路の転回車線から
+LAMP_DEAD_END_CLEAR = 2.5  # nor this close to a dead end's turning lanes when there are no heads / 袋小路の転回車線から
+LAMP_HEAD_NEAR = 3.0       # lamps this near a dead-end head's paving are placed as below / 転回部に近い街灯
+LAMP_HEAD_CLEAR = 1.0      # ... this far behind its kerb (a car climbing a head kerb hit a lamp at 0.45 m) / 縁石の後ろ
+LAMP_DROP_MAX = 0.8        # ... on ground at most this below the kerb (its arm stays >= 4.5 m over the road) / 縁石より低い地面の上限
+LAMP_SLIDE = 15.0          # ... slid along the kerb up to this when blocked / 縁石沿いにずらす最大距離
 ISLAND_MIN_W = 4.0         # no lamps or trees on narrower islands / これより狭い島に街灯・樹木を置かない
 
 
@@ -66,6 +70,7 @@ class Props(object):
         self.place_linkways()
         self.place_barrier()
         self.place_guardrail()
+        self.place_head_rails()
         self.place_beacons()
 
     def ok(self, x, y, r=0.6):
@@ -161,6 +166,11 @@ class Props(object):
         narrow = unary_union([p for p in polys(L.islands) if p.buffer(-ISLAND_MIN_W / 2).is_empty]) \
             if jl is not None else Polygon()
         self.lamps_skipped = 0
+        heads_all = getattr(L, "dead_end_head_area", None) if jl is not None else None
+        if heads_all is not None and not heads_all.is_empty:
+            # a dead-end head is junction paving too: its kerb is handled below, not
+            # as a pinched mouth / 転回部の縁石は下で扱う（狭い口とはしない）
+            jl = jl.difference(heads_all.buffer(0.5))
         for p in polys(ring_line):
             for ring in [p.exterior] + list(p.interiors):
                 if ring.length < 30:
@@ -170,18 +180,64 @@ class Props(object):
                     if L.driveways.buffer(1.0).contains(q) or L.footpaths.contains(q) or \
                             getattr(L, "reserved", Polygon()).buffer(1.0).contains(q):
                         continue
+                    heads = getattr(L, "dead_end_head_area", None) if jl is not None else None
+                    if heads is not None and heads.is_empty:
+                        heads = None
                     if jl is not None and (jl.distance(q) < LAMP_JUNCTION_CLEAR or narrow.distance(q) < 1.0
-                                           or L.dead_end_lanes.distance(q) < LAMP_DEAD_END_CLEAR):
+                                           or (heads is None and L.dead_end_lanes.distance(q) < LAMP_DEAD_END_CLEAR)):
                         self.lamps_skipped += 1
                         continue
+                    if heads is not None and heads.distance(q) < LAMP_HEAD_NEAR:
+                        # beside a dead-end head: LAMP_HEAD_CLEAR m behind the kerb;
+                        # blocked: slid along the kerb up to LAMP_SLIDE m, else none
+                        # 袋小路の転回部の横: 縁石の後ろ LAMP_HEAD_CLEAR m（塞がれば縁石沿いにずらす）
+                        s0 = k * 32.0 + 4.0
+                        q2 = None
+                        for ds in [0.0] + [v for d in range(1, int(LAMP_SLIDE) + 1) for v in (d, -d)]:
+                            qq = ring.interpolate((s0 + ds) % ring.length)
+                            c = self.head_lamp_spot(qq)
+                            if c is not None:
+                                q2 = c
+                                break
+                        if q2 is None:
+                            self.lamps_skipped += 1
+                            self.lamps_head_dropped = getattr(self, "lamps_head_dropped", 0) + 1
+                            continue
+                        q = q2
+                        self.lamps_moved = getattr(self, "lamps_moved", 0) + 1
                     # the arm reaches over the road: toward the nearest carriageway edge
                     # 腕は最寄りの車道側へ
                     e = L.carriageway.boundary.interpolate(L.carriageway.boundary.project(q))
                     ang = math.atan2(e.y - q.y, e.x - q.x)
-                    if self.guard is not None and self.guard.distance(q) < 0.6:
+                    hr = [g for _, g in getattr(L, "head_rails", [])]
+                    if hr and unary_union(hr).distance(q) < 0.6:
+                        q = Point(q.x - 0.9 * math.cos(ang), q.y - 0.9 * math.sin(ang))   # behind a head rail / 後ろへ
+                    elif self.guard is not None and self.guard.distance(q) < 0.6:
                         # behind the ring guardrail, not in it / ガードレールの後ろへ
                         q = Point(q.x - 0.9 * math.cos(ang), q.y - 0.9 * math.sin(ang))
                     self.items.append(("lamp", (q.x, q.y, ang)))
+
+    def head_lamp_spot(self, q):
+        """A lamp spot LAMP_HEAD_CLEAR m behind the kerb nearest q, clear of
+        buildings, drives, footways and other roads; None if blocked.
+        縁石の後ろ LAMP_HEAD_CLEAR m の街灯位置（塞がれていれば None）"""
+        L = self.L
+        cb = L.carriageway.boundary
+        e = cb.interpolate(cb.project(q))
+        v = np.array([q.x - e.x, q.y - e.y])
+        n = np.linalg.norm(v)
+        if n < 1e-6 or L.carriageway.contains(q):
+            return None
+        d = 0.2 + LAMP_HEAD_CLEAR                     # kerb width + clearance / 縁石幅＋離れ
+        c = Point(e.x + v[0] / n * d, e.y + v[1] / n * d)
+        D = getattr(L, "drape", None)
+        if D is not None and float(D.z(np.array([c.x]), np.array([c.y]))[0]) < \
+                float(D.z(np.array([e.x]), np.array([e.y]))[0]) - LAMP_DROP_MAX:
+            return None                       # below the head: its arm hung low over the road / 低い地面
+        if L.carriageway.distance(c) < d - 0.15 or L.building_area.distance(c) < 0.8 \
+                or L.driveways.buffer(0.8).contains(c) or L.footpaths.contains(c) or not L.inside.contains(c):
+            return None
+        return c
 
     def place_shelters(self):
         L = self.L
@@ -246,6 +302,23 @@ class Props(object):
                 piece = substring_line(part, part.length * k / n, part.length * (k + 1) / n)
                 self.items.append(("guardrail", piece))
                 self.guard_len += piece.length
+
+    def place_head_rails(self):
+        """Guardrails where a dead-end head faces a road at another height and
+        turnloops.py could not move the loop clear (layout.head_rails).
+        高さの違う道路に面した転回部のガードレール。"""
+        rails = getattr(self.L, "head_rails", [])
+        self.head_rail_len = 0.0
+        if not rails:
+            return
+        hp = [self.L.carriageway.intersection(g.buffer(4.0)) for _, g in rails]
+        self.head_edge = unary_union([q.boundary for q in hp if not q.is_empty])
+        ra = self.L.road_all.buffer(GUARD_GAP - 0.2)        # never on a road or kerb / 道路・縁石に掛けない
+        for _, g in rails:
+            for part in getattr(g.difference(ra), "geoms", [g.difference(ra)]):
+                if part.geom_type == "LineString" and part.length > 3.0:
+                    self.items.append(("head_guardrail", part))
+                    self.head_rail_len += part.length
 
     def place_beacons(self):
         for cr in self.crossings:
@@ -373,8 +446,14 @@ class Props(object):
                 mid = d.interpolate(0.5, normalized=True)
                 if x0 <= mid.x < x1 and y0 <= mid.y < y1:
                     if D is not None:                    # long things follow the ground / 長い物は地形に沿う
-                        f.zfun, f.dense = (self.guard_z if kind == "guardrail" else D.z), 2.5
-                    getattr(self, "m_" + kind)(f, d)
+                        f.zfun, f.dense = (self.guard_z if kind == "guardrail" else
+                                           self.head_guard_z if kind == "head_guardrail" else D.z), 2.5
+                    if kind == "head_guardrail":
+                        self._gz = self.head_guard_z
+                        self.m_guardrail(f, d)
+                        self._gz = None
+                    else:
+                        getattr(self, "m_" + kind)(f, d)
                     f.zfun, f.dense = None, None
         out = {"Terrain_Trees": m, "Terrain_Street": f}
         for sp, lm in leaves.items():
@@ -482,6 +561,17 @@ class Props(object):
         Q = shapely.line_interpolate_point(edge, shapely.line_locate_point(edge, shapely.points(X, Y)))
         return np.maximum(g, self.drape.z(shapely.get_x(Q), shapely.get_y(Q)))
 
+    def head_guard_z(self, X, Y):
+        """Beam base of a dead-end head's guardrail: the higher of the ground and
+        the head's paving edge beside it. / 転回部ガードレールの基準高"""
+        X, Y = np.asarray(X, float), np.asarray(Y, float)
+        g = self.drape.z(X, Y)
+        edge = getattr(self, "head_edge", None)
+        if edge is None:
+            return g
+        Q = shapely.get_coordinates(shapely.shortest_line(shapely.points(X, Y), edge))[1::2]
+        return np.maximum(g, self.drape.z(Q[:, 0], Q[:, 1]))
+
     def m_guardrail(self, m, line):
         """Japanese guardrail (ガードレール Gr-C): a white W-beam, rail top 0.8 m,
         on 0.14 m posts every GUARD_POST m behind it. The beam is a closed
@@ -522,7 +612,7 @@ class Props(object):
             # beam sits (raised to the road on embankments) / 地中から梁上端の直下まで
             zf, dn = m.zfun, m.dense
             zg = float(self.drape.z(np.array([px]), np.array([py]))[0])
-            zb = float(self.guard_z(np.array([px]), np.array([py]))[0])
+            zb = float((getattr(self, "_gz", None) or self.guard_z)(np.array([px]), np.array([py]))[0])
             m.zfun, m.dense = None, None
             m.cylinder("line_white", px, py, zg - 0.4, zb + GUARD_POST_TOP, 0.07, seg=8)
             m.zfun, m.dense = zf, dn

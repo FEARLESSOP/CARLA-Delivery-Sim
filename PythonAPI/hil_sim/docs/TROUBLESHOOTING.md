@@ -332,3 +332,119 @@ A still frame with a **fresh** heartbeat is not a tick-master problem —
 check for the GPU crash above.
 ハートビートが **新しい** のに静止している場合はティックマスタの問題では
 ない。上記の GPU クラッシュを確認すること。
+
+---
+
+## A wheel button does the wrong thing, or nothing / ホイールのボタンが違う動作をする・反応しない
+
+The bindings are in `keybinds.json` (dashboard Settings > Keybinds), not in
+the script. Check, in order:
+
+1. **Name wrong?** The names come from `g923_buttons.json`, a table of the
+   usual new-lg4ff G923 / G29 layout (pygame numbers the 25 buttons in HID
+   order; the D-pad is a hat). If the page says "Triangle" for the button
+   printed ○, open the *Wheel button names* card, turn **identify buttons**
+   on, press it, and rename it. The binding follows the physical button.
+2. **Nothing arrives when binding / identifying?** The browser cannot see the
+   wheel; the driving window writes each press to `wheel_last.json`. It must
+   be running, and it must be a version with this feature (restart the
+   pipeline once after updating).
+3. **Buttons stopped working?** Identify mode makes the driving window ignore
+   wheel buttons. It ends when you stop it, leave the page, or 30 s after the
+   page stops renewing it. Delete `keybind_learn.json` to end it at once.
+4. **Want the old layout back?** Settings > Keybinds > **reset all** > **save**,
+   or delete `keybinds.json` (recreated from the defaults at the next start).
+
+割り当てはスクリプト内ではなく `keybinds.json`（ダッシュボードの 設定 >
+キー割り当て）にある。次の順に確認する。
+
+1. **名前が違う：** 名前は `g923_buttons.json`（new-lg4ff の G923 / G29 の一般的な
+   配置。pygame は 25 個のボタンを HID 順に番号付けし、十字キーはハット）。
+   ○ のボタンが「△」と表示されるなら、*ホイールのボタン名* カードで
+   **ボタンを識別** をオンにし、そのボタンを押して名前を変更する。
+   割り当ては物理的なボタンに付いたまま。
+2. **割り当て・識別で入力が届かない：** ブラウザはホイールを読めない。
+   運転ウインドウが押下を `wheel_last.json` に書くため、運転ウインドウが
+   起動していて、この機能を含む版である必要がある（更新後に一度パイプラインを再起動）。
+3. **ボタンが効かなくなった：** 識別モード中は運転ウインドウがボタンを無視する。
+   停止するか、ページを離れるか、更新が止まって 30 秒で終わる。すぐ終えるには
+   `keybind_learn.json` を削除する。
+4. **元の配置に戻したい：** 設定 > キー割り当て > **すべて既定に戻す** > **保存**、
+   または `keybinds.json` を削除（次回起動時に既定値で再作成）。
+
+---
+
+## F5 (change map) crashes the whole rig / F5（マップ切替）でリグ全体が落ちる
+
+### Signature / 兆候
+
+F5 in the driving window, then every window closes and the pipeline log ends
+with `manual_control exited ... -> shutting down`; FFB / dashboard logs show
+`terminate called ... TimeoutException` (libcarla `abort()`). From
+OitaKosen, F5 also went to Town01, and the list held Town06/07, which this
+package does not have.
+
+運転ウインドウで F5 を押すと全ウインドウが閉じ、パイプラインのログは
+`manual_control exited ... -> shutting down` で終わる。FFB やダッシュボードの
+ログに `terminate called ... TimeoutException`（libcarla の `abort()`）が出る。
+また OitaKosen から F5 で Town01 に飛び、一覧には本パッケージに無い Town06/07 が
+含まれていた。
+
+### Cause / 原因
+
+The driving window called `client.load_world()` itself while about eight
+other clients shared the world: `generate_traffic.py` (synchronous tick
+master, dt 1/30, and TrafficManager server), `delivery_sim.py`,
+`dashboard.py`, `carla_ffb.py`, `traction_fx.py`, `drone_viewer.py`. The load
+destroyed every actor they held while the world was synchronous and the TM
+was still driving the old cars. libcarla aborts in those clients (Python
+cannot catch it), the TM dies with the tick master, the driving window's own
+`restart()` then waits on a world nobody steps or fails, and when it exits
+the pipeline shuts everything down.
+
+運転ウインドウが、他の約 8 クライアント（同期 tick マスタ兼 TM サーバの
+`generate_traffic.py`（dt 1/30）、`delivery_sim.py`、`dashboard.py`、
+`carla_ffb.py`、`traction_fx.py`、`drone_viewer.py`）が共有するワールドで
+自ら `client.load_world()` を呼んでいた。ワールドが同期モードで TM が旧車両を
+動かしている最中に、それらが持つアクターが全て消える。libcarla は各クライアント
+で abort し（Python では捕捉不可）、TM は tick マスタと共に落ち、運転ウインドウ
+の `restart()` は誰も進めないワールドを待つか失敗し、終了するとパイプラインが
+全体を停止していた。
+
+### Fix / 対処
+
+`map_switch.py` + `run_pipeline.py`: F5 only writes `map_request.json`
+(target map, current car) and exits with code 75. The pipeline stops the
+clients (traffic first, 20 s grace, then the rest), forces async mode if
+anything was left synchronous, loads the map in a throwaway client (up to
+120 s, then confirms the loaded map's name — `util/config.py`'s 10 s is too
+short for OitaKosen), and starts every client again with the same options
+and `--start-vehicle` = the current car. If the load fails it restarts
+CarlaUE4 on that map (kill first, then start; with `--no-sim` it does not
+touch your CARLA and shuts down). The cycle comes from
+`client.get_available_maps()`, installed maps only.
+
+`map_switch.py` と `run_pipeline.py`：F5 は `map_request.json`（目的のマップと
+現在の車）を書いて終了コード 75 で終わるだけ。パイプラインがクライアントを止め
+（交通を最初に猶予 20 秒、次に残り）、同期モードが残っていれば非同期に戻し、
+使い捨てクライアントでマップを読み込み（最大 120 秒、その後読込済みマップ名を
+確認。`util/config.py` の 10 秒は OitaKosen には短い）、同じオプションと
+`--start-vehicle` = 現在の車で全クライアントを再起動する。読込に失敗した場合は
+CarlaUE4 をそのマップで再起動する（先に終了してから起動。`--no-sim` では
+ユーザーの CARLA に触れずに終了する）。巡回順は `client.get_available_maps()`
+から作り、インストール済みのマップのみ。
+
+### If it still goes wrong / それでも失敗する場合
+
+- Log says `asked for a map switch but map_request.json is missing or stale`:
+  the window could not write the file (permissions, disk full).
+  / ログに `asked for a map switch but map_request.json is missing or stale`：
+  ウインドウが依頼ファイルを書けなかった（権限・ディスク容量）。
+- Log says `load_world(<map>) failed -> restarting CarlaUE4`: the map did not
+  load in 150 s; check the CarlaUE4 output for the map's own errors.
+  / ログに `load_world(<map>) failed -> restarting CarlaUE4`：150 秒以内に
+  読み込めなかった。CarlaUE4 の出力でマップ自体のエラーを確認する。
+- Still the old behaviour: the pipeline was started before the update;
+  restart it once. Test: `tests/test_map_switch.py`.
+  / 以前の挙動のまま：更新前に起動したパイプラインである。一度再起動する。
+  試験：`tests/test_map_switch.py`。

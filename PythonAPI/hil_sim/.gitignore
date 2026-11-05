@@ -42,3 +42,22 @@ cars/make_glass*.log
 # imported 3D car and map source models / 取り込み用の車両・マップ 3D モデル
 cars/sources/
 maps/sources/
+
+# keybinds (dashboard Settings > Keybinds; defaults in keybinds.py) and the
+# live wheel-press side channel / キー割り当てとホイール入力の受け渡し
+keybinds.json
+g923_buttons.json
+wheel_last.json
+keybind_learn.json
+
+# F5 map-switch request, driving window -> run_pipeline (map_switch.py)
+# F5 のマップ切替依頼（運転ウインドウ -> パイプライン）
+map_request.json
+map_request.json.tmp
+
+# dashboard Windows card <-> run_pipeline (windows_control.py)
+# ダッシュボードのウィンドウ開閉 <-> パイプライン
+pipeline_control.json
+pipeline_control.json.tmp
+pipeline_status.json
+pipeline_status.json.tmp

@@ -53,7 +53,8 @@ def main():
     root = tree.getroot()
     lefthand = meta.get("lefthand", False)
     t_kerb = KERB_T if lefthand else -KERB_T
-    n_speed = n_give = n_stop = 0
+    n_speed = n_give = n_stop = n_nospot = 0
+    spots = None               # speed_spot.Spots, built on the first speed post / 最初の速度標識で作る
     sid = 900000
     for road in root.findall("road"):
         if road.get("junction", "-1") != "-1":
@@ -82,9 +83,23 @@ def main():
             kmh = speed_at.get(rid, kmh)
         else:
             post = after_junction and kmh in SPEEDS and length > 40.0
+        t_speed = t_kerb
+        if post:
+            # the free kerb: never in another road's lane (speed_spot.py, guide ch. 25)
+            # 空いている側の歩道（他の道路の車線に置かない）
+            if spots is None:
+                import speed_spot
+                spots = speed_spot.Spots(out, meta)
+            t_speed, side, why = spots.choose(rid, 8.0, KERB_T)
+            if t_speed is None:
+                post = False
+                n_nospot += 1
+                print("signs: speed %d km/h on road %d left out, no free kerb (%s)" % (kmh, rid, why))
+            elif side != "reference kerb":
+                print("signs: speed %d km/h on road %d at t=%.2f (%s; %s)" % (kmh, rid, t_speed, side, why))
         if post:
             sid += 1
-            ET.SubElement(sigs, "signal", s="8.0", t="%.2f" % t_kerb, id=str(sid), name="speed_%d" % kmh,
+            ET.SubElement(sigs, "signal", s="8.0", t="%.2f" % t_speed, id=str(sid), name="speed_%d" % kmh,
                           dynamic="no", orientation="+", zOffset="0", country="OpenDRIVE", type="274",
                           subtype=str(kmh), value=str(kmh), unit="km/h", height="2.2", width="0.6")
             n_speed += 1
@@ -115,6 +130,8 @@ def main():
         print("signal phases: %d junction controllers split: %s" % (
             len(done), ", ".join("%s %s" % (k[-12:], "/".join(str(len(g)) for g in v)) for k, v in done.items())))
     tree.write(xodr, encoding="utf-8", xml_declaration=True)
+    if n_nospot:
+        print("signs: %d speed posts left out (no free kerb)" % n_nospot)
     print("signs: %d speed limit, %d give way" % (n_speed, n_give) + (", %d stop" % n_stop if stops else "")
           + (" (named %s), %d lane speeds set from JARTIC" % (stop_name, n_set) if speed_set or "jartic_log" in extra
              else ""))

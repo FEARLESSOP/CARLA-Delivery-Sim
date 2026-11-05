@@ -55,6 +55,12 @@ import json,sys
 for q in json.load(open(sys.argv[1]))[sys.argv[2]].get('terrain_sw') or []: print('%s,%s' % tuple(q))" "$HERE/maps.json" "$KEY")
     "$VENV/bin/python" "$HERE/osm_city/terrain.py" "$OUT" --glb "${GLBS[@]}" --osm "$OSM" --sw "${SWS[@]}"
     "$VENV/bin/python" "$HERE/osm_city/elevate.py" "$OUT"
+    # road_fixes: dead-end loops whose head would end at a road at another height
+    # move clear (the rest get a guardrail in the model) / 高さの違う道路に近い転回ループを離す
+    [ -n "$FIXES" ] && "$CARLA_PY" "$HERE/osm_city/turnloops.py" "$OUT/$NAME.xodr" --refine
+    # light poles again on the elevated roads: a pinned light (positionInertial)
+    # carries the road's z (guide ch. 24) / 標高後に信号柱を再計算（固定位置の z）
+    [ -n "$LEFT" ] && "$CARLA_PY" "$HERE/osm_city/lht_poles.py" "$OUT/$NAME.xodr" "$OUT/$NAME.xodr"
     "$CARLA_PY" "$HERE/osm_city/lanes.py" "$OUT/$NAME.xodr" "$OUT/lanes.json"
 fi
 echo "== 3-D model"
@@ -62,6 +68,13 @@ echo "== 3-D model"
 "$VENV/bin/python" "$HERE/osm_city/signs.py" "$OUT"
 # maps.json "jartic_d" only: Japanese sign plates (no-op elsewhere) / 日本の標識板（JARTIC 地図のみ）
 "$VENV/bin/python" "$HERE/osm_city/jp_signs.py" "$OSM" "$OUT"
+# Japan maps: crossings for the walkers (hokousha.json, road logic read only) and
+# the pedestrian heads at signalised crossings (guide ch. 26)
+# 日本の地図: 横断歩道データと歩行者用信号機（ガイド 26 章）
+if [ "$("$CARLA_PY" -c "import json,sys; c=json.load(open(sys.argv[1]))[sys.argv[2]]; print(int(c.get('jp_hokousha', c.get('road_style') == 'japan' or c.get('package') == 'Japan')))" "$HERE/maps.json" "$KEY")" = 1 ]; then
+    "$CARLA_PY" "$HERE/osm_city/hokousha_crossings.py" "$OUT"
+    "$VENV/bin/python" "$HERE/osm_city/jp_hokousha.py" "$OUT"
+fi
 # nothing on or over a road (exit 1 stops the chain before the FBX) / 道路上に物が無いこと
 "$VENV/bin/python" "$HERE/osm_city/check_roads.py" "$OSM" "$OUT"
 "${BLENDER:-blender}" -b -P "$HERE/osm_city/blender_build.py" -- "$OUT" --fbx 2>&1 | grep -E "wrote|Error" || true

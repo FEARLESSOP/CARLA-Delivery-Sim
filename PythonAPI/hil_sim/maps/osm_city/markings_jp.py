@@ -511,7 +511,7 @@ class MarkingsJP(Markings):
             if not cand:
                 continue
             same = [r for r in cand if self.rid_way.get(r) == way and self.rid_rev.get(r) == rev]
-            if self.road_cls.get(road, MINOR) >= TERT and same:
+            if same:
                 frm = same[0]
             else:
                 frm = max(cand, key=lambda r: (self.road_cls.get(r, MINOR), self.rid_len.get(r, 0.0)))

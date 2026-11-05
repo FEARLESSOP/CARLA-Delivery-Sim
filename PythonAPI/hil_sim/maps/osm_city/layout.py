@@ -50,11 +50,13 @@ MEDIAN_MIN_W = 0.6       # narrower gaps between carriageways are paved / これ
 MEDIAN_JUNCTION_CLEAR = 3.0
 BAY_DEPTH, BAY_LEN, BAY_TAPER = 3.0, 15.0, 10.0     # bus bay / バス停車帯
 HEAD_TAPER = 10.0        # dead-end turning head: taper length along the street / 袋小路の転回部のすり付け長
-# road_fixes maps: a dead end's U-turn lane turns on a ~1.5 m radius; a CARLA
-# car's front corner sweeps ~1.5 m past its outer edge and TM cars stray more
-# (guide ch. 21) / 袋小路の転回車線: 車体の角は車線外縁から ~1.5 m はみ出す
-DEAD_END_MARGIN = 2.0    # paved past a dead end's U-turn lanes / 袋小路の転回車線の外の舗装幅
+# road_fixes maps: a dead end's turning loop (roadnet.py -> turnloops.py: a
+# forward bulb, centre radius 3.5-5 m); a car's front corner sweeps past the
+# lane's outer edge and TM cars stray more (guide ch. 21)
+# 袋小路の転回ループ（電球形）: 車体の角は車線外縁からはみ出す
+DEAD_END_MARGIN = 2.0    # paved past a dead end's turning loop (turnloops.PASSES assumes it) / 袋小路の転回ループの外の舗装幅
 HEAD_CLEAR = GUTTER + 2 * CLOSE_GAP + 2 * KERB_W + 0.5   # head to other roads' lanes (no gap paving) / 他道路との離れ
+WALLED_MARGIN, HEAD_CLEAR_MIN = 1.2, 2.0   # meta "dead_end_walled" heads: paving kept round the loop / 擁壁側の余裕幅
 
 
 def polys(g):
@@ -120,7 +122,7 @@ class Layout(object):
         jp = [p for p, l in zip(lp, self.lanes) if l["junction"] >= 0]
         self.junction_lanes = unary_union(jp)
         dead = getattr(self, "dead_end_junctions", set())
-        # a dead end's U-turn lanes as netconvert drew them (props keeps lamps off) / 袋小路の転回車線
+        # a dead end's turning-loop lanes as drawn (props keeps lamps off) / 袋小路の転回ループ車線
         self.dead_end_lanes = unary_union([lane_poly(l) for l in self.lanes if l["junction"] in dead])
         self.lane_area = unary_union(lp)
         # islands the lanes already enclose (slip-road triangles, medians): kept
@@ -182,13 +184,12 @@ class Layout(object):
         self.islands = clean(unary_union(islands).difference(self.road_all), 0.5)
 
     def dead_end_heads(self, lp):
-        """Dead ends (road_fixes maps): the turnaround lanes netconvert keeps
-        there swing a 3 m lane round in a ~2 m radius, so their outline pokes
-        out past the street's edges as "ears" (roadnet.py drops the turnarounds
-        at every other junction). Each dead end's lanes become one smooth
-        turning head: the convex hull of its turnaround lanes and the last
-        HEAD_TAPER m of the street's lanes. / 袋小路の転回車線は耳状にはみ出すので、
-        転回車線と手前 HEAD_TAPER m の凸包（滑らかな転回部）に置き換える。"""
+        """Dead ends (road_fixes maps): each dead end's turning loop (a forward
+        bulb, turnloops.py; roadnet.py drops the turnarounds at every other
+        junction) becomes one smooth round turning head: the convex hull of
+        the loop lane buffered DEAD_END_MARGIN m and the last HEAD_TAPER m of
+        the street's lanes. / 袋小路の転回ループ＋余裕幅と手前 HEAD_TAPER m の
+        凸包（丸い転回部）。"""
         byj = {}
         for i, l in enumerate(self.lanes):
             if l["junction"] >= 0:
@@ -205,8 +206,11 @@ class Layout(object):
         tree = shapely.STRtree(lp)
         keepout = []
         self.heads_clipped = 0
+        walled = set(self.meta.get("dead_end_walled") or [])
+        self.head_rail_sides = []
         self.dead_ends = 0
         self.dead_end_junctions = set()
+        self.dead_end_heads_by_j = {}
         for j, idx in byj.items():
             if not all(turn(self.lanes[i]) > 100.0 for i in idx):
                 continue                     # an ordinary junction / 通常の交差点
@@ -245,11 +249,27 @@ class Layout(object):
                      and self.lanes[k]["junction"] != j and apart(k)]
             if other:
                 ou = unary_union(other)
+                # full HEAD_CLEAR: paving nearer ended in a drop with no kerb (fix3
+                # review); turnloops.py --refine moves loops clear of such roads
+                # 高さの違う道路から HEAD_CLEAR 離す（近いと段差・折れ）
+                full = hull
                 hull = hull.difference(ou.buffer(HEAD_CLEAR, quad_segs=4))
+                # a loop still that near (turnloops --refine could not move it, meta
+                # "dead_end_walled", or its head's taper) keeps WALLED_MARGIN m of
+                # paving round its lane, down to HEAD_CLEAR_MIN m off the other road,
+                # with a guardrail behind the kerb there (props.py)
+                # それでも近いループ: 車線の外 WALLED_MARGIN m を残しガードレール
+                keep = head.buffer(WALLED_MARGIN, quad_segs=8).difference(ou.buffer(HEAD_CLEAR_MIN, quad_segs=4))
+                lost = full.intersection(keep).difference(hull)
+                if j in walled or lost.area > 0.5:
+                    hull = unary_union([hull, full.intersection(keep)])
                 hull = hull.buffer(-1.2, quad_segs=6).buffer(1.2, quad_segs=6)    # no sharp cut corners / 角を丸める
-                plain = body.convex_hull.intersection(body.buffer(3.0, quad_segs=4))
+                cut_clear = HEAD_CLEAR_MIN if (j in walled or lost.area > 0.5) else HEAD_CLEAR
+                plain = body.convex_hull.intersection(body.buffer(3.0, quad_segs=4)).difference(ou.buffer(cut_clear, quad_segs=4))
                 hull = unary_union([plain] + [q for q in polys(hull) if q.intersects(head)])
                 self.heads_clipped += 1
+                if j in walled or lost.area > 0.5:
+                    self.head_rail_sides.append((j, ou))      # guardrail on that side / ガードレール
                 gap = ou.buffer(HEAD_CLEAR - 0.6, quad_segs=4).intersection(hull.buffer(HEAD_CLEAR, quad_segs=4)) \
                     .difference(ou.buffer(GUTTER + 0.05, quad_segs=4)).difference(hull.buffer(GUTTER + 0.05, quad_segs=4))
                 keepout.append(gap)
@@ -260,8 +280,26 @@ class Layout(object):
                 self.heads_in_landmarks += 1
             for i in idx:
                 out[i] = hull
+            self.dead_end_heads_by_j[j] = (hull, zh)
             self.dead_ends += 1
         self.head_keepout = unary_union(keepout) if keepout else None
+        # the finished heads (props.py keeps lamps off their kerbs) / 完成した転回部
+        # guardrail lines: the finished head's kerb back, where it faces the road
+        # at another height (CCW: the head on the left) / ガードレール線
+        self.head_rails = []
+        for j, ou in self.head_rail_sides:
+            hp = out[byj[j][0]]
+            ring = Polygon(hp.exterior).buffer(GUTTER + KERB_W + 0.5, quad_segs=8).exterior if hp.geom_type == "Polygon" else None
+            if ring is None:
+                continue
+            if not Polygon(ring).exterior.is_ccw:
+                ring = LineString(list(ring.coords)[::-1])
+            side = LineString(ring.coords).intersection(ou.buffer(HEAD_CLEAR + 1.5, quad_segs=4))
+            for g in getattr(side, "geoms", [side]):
+                if g.geom_type == "LineString" and g.length > 3.0:
+                    self.head_rails.append((j, g))
+        self.dead_end_head_area = unary_union([out[byj[j][0]] for j in self.dead_end_junctions]) \
+            if self.dead_end_junctions else Polygon()
         return out
 
     def add_bus_bays(self, jp):
@@ -384,6 +422,8 @@ class Layout(object):
         if not band.is_valid:
             band = make_valid(band)       # GEOS buffers can come out invalid / buffer が不正形状のとき
         band = band.difference(mapped).difference(motorway.buffer(12.0))
+        if getattr(self, "dead_end_lanes", None) is not None and not self.dead_end_lanes.is_empty:
+            band = band.difference(self.dead_end_lanes.buffer(DEAD_END_MARGIN + KERB_W + VERGE + FOOTPATH + 1.0))
         self.footpaths = clean(unary_union([self.footpaths, clean(band, 6.0)]).difference(keepout), 0.3)
         self.default_band = clean(band, 6.0)
 

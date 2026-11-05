@@ -18,6 +18,8 @@ Steps:
      rule="LHT" on top, that reverses every lane), with the OSM turn-lane
      tags and traffic signals.
   5. fix_xodr_signals.py makes the signals proper CARLA traffic lights.
+  6. road_fixes maps: turnloops.py replaces netconvert's dead-end
+     turnarounds (drawn inside out) with forward bulb loops.
 
 Writes <out_dir>/<Name>.xodr, <out_dir>/<Name>.ring.osm and
 <out_dir>/meta.json (frame, bounds, ring).
@@ -426,6 +428,25 @@ def add_ring(src, dst, meta, fixes=False):
           "(%d dead ends just short of it extended)" % (kept, cut, dropped, len(ends), ring_snaps[0]))
 
 
+def osm_buildings(osm, meta):
+    """Building footprints (map frame) of an OSM file, for turnloops.py. / 建物の外形"""
+    from shapely.geometry import Polygon
+    from shapely.validation import make_valid
+    root = ET.parse(osm).getroot()
+    fr = geo.Frame(meta)
+    xy = {n.get("id"): fr.xy(float(n.get("lon")), float(n.get("lat"))) for n in root.iter("node")}
+    out = []
+    for w in root.iter("way"):
+        if not any(t.get("k") == "building" for t in w.findall("tag")):
+            continue
+        pts = [xy[nd.get("ref")] for nd in w.findall("nd") if nd.get("ref") in xy]
+        if len(pts) >= 4:
+            p = make_valid(Polygon(pts))
+            if not p.is_empty and p.area > 5.0:
+                out.append(p)
+    return out
+
+
 def netconvert(osm, xodr, meta, lefthand):
     fr = geo.Frame(meta)
     cmd = [NETCONVERT if os.path.exists(NETCONVERT) else "netconvert",
@@ -474,6 +495,14 @@ def netconvert(osm, xodr, meta, lefthand):
     os.remove(xodr + ".raw")
     fix = os.path.join(HERE, "..", "fix_xodr_signals.py")
     subprocess.check_call([VENV_PY if os.path.exists(VENV_PY) else sys.executable, fix, xodr, xodr])
+    if meta.get("road_fixes"):
+        # netconvert draws the dead-end turnarounds inside out (start 2.8 m
+        # beside the lane, ~150 deg reversed): forward bulb loops instead
+        # 袋小路の転回接続（裏返し）を前進する電球形ループに置き換える
+        import turnloops
+        rep, failed = turnloops.fix(xodr, xodr, buildings=osm_buildings(osm, meta))
+        meta["dead_end_loops"] = {str(r["j"]): {k: round(r[k], 2) for k in ("R", "back", "g", "clr")} for r in rep}
+        meta["dead_end_no_loop"] = failed
 
 
 def main():
@@ -506,6 +535,7 @@ def main():
         json.dump(meta, open(os.path.join(args.out_dir, "meta.json"), "w"), indent=1)
     xodr = os.path.join(args.out_dir, args.name + ".xodr")
     netconvert(ring_osm, xodr, meta, args.lefthand)
+    json.dump(meta, open(os.path.join(args.out_dir, "meta.json"), "w"), indent=1)
     print("wrote", xodr)
 
 

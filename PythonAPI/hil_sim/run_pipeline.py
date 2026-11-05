@@ -39,6 +39,13 @@ VENV_PY = CARLA_ROOT / "carla-venv" / "bin" / "python"
 UTIL_DIR = CARLA_ROOT / "PythonAPI" / "util"
 CONTROL_SCRIPT = BASE_DIR / "manual_control_steeringwheel G923.py"
 FFB_SCRIPT = BASE_DIR / "carla_ffb.py"
+# F5 map switch: request file + exit code shared with the driving window
+# F5 のマップ切替：運転ウィンドウと共有する依頼ファイルと終了コード
+sys.path.insert(0, str(BASE_DIR))
+import map_switch  # noqa: E402
+# Dashboard Windows card: open / close the optional viewer windows
+# ダッシュボードの「ウィンドウ」カード：任意ビューアの開閉
+import windows_control  # noqa: E402
 DATA_DIR = BASE_DIR / "data"                        # simulation database / シミュレーションデータの保存先
 
 
@@ -52,6 +59,20 @@ def map_is_left_hand(map_name):
     return any(isinstance(m, dict) and m.get("name") == map_name
                and (m.get("keep_left") or m.get("left_hand_traffic"))
                for m in maps.values())
+
+
+def map_signal_timing(map_name):
+    """The signal-timing profile of one of your own maps (maps.json
+    "signal_timing", relative to hil_sim), or None. / 信号時間プロファイル。"""
+    try:
+        maps = json.load(open(BASE_DIR / "maps" / "maps.json"))
+    except (OSError, ValueError):
+        return None
+    for m in maps.values():
+        if isinstance(m, dict) and m.get("name") == map_name and m.get("signal_timing"):
+            path = BASE_DIR / m["signal_timing"]
+            return path if path.exists() else None
+    return None
 
 
 def nvidia_offload_env(mode):
@@ -177,6 +198,144 @@ def reset_world_async(host, port, timeout=10.0):
         return False
 
 
+def world_map_name(host, port, timeout=10.0):
+    """Short name of the map the server has loaded ('OitaKosen'), or None.
+
+    サーバが読み込んでいるマップの短い名前（取得できなければ None）。
+    """
+    code = ("import carla\n"
+            "c = carla.Client('%s', %d)\n"
+            "c.set_timeout(%.1f)\n"
+            "print('map=' + c.get_world().get_map().name)\n" % (host, port, timeout))
+    try:
+        out = subprocess.run([str(VENV_PY), "-c", code],
+                             capture_output=True, timeout=timeout + 10.0)
+    except Exception:
+        return None
+    for line in out.stdout.decode("utf-8", "replace").splitlines():
+        if line.startswith("map="):
+            return map_switch.short_name(line[4:].strip())
+    return None
+
+
+def load_world_map(host, port, name, timeout=120.0):
+    """Load a map in a throwaway client and confirm it is the one loaded.
+
+    util/config.py gives load_world only 10 s; a big own map (OitaKosen)
+    takes longer, so config.py reports a failure while the server is still
+    loading fine. Here the client waits up to ``timeout``, and a timeout is
+    followed by polling the loaded map's name before calling it a failure.
+    The throwaway process also keeps a libcarla abort out of the pipeline.
+
+    使い捨てクライアントでマップを読み込み、読み込まれたことを確認する。
+    util/config.py の load_world は 10 秒しか待たず、大きな自作マップ
+    （OitaKosen）では読込中なのに失敗を返す。ここでは ``timeout`` まで待ち、
+    タイムアウト後も読込済みマップ名を確認してから失敗と判断する。別プロセス
+    なので libcarla の abort もパイプラインに及ばない。
+    """
+    code = ("import carla\n"
+            "c = carla.Client('%s', %d)\n"
+            "c.set_timeout(%.1f)\n"
+            "w = c.load_world(%r)\n"
+            "print('map=' + w.get_map().name)\n" % (host, port, timeout, name))
+    try:
+        subprocess.run([str(VENV_PY), "-c", code],
+                       capture_output=True, timeout=timeout + 20.0)
+    except Exception as exc:
+        print("[pipeline] load_world(%s): %s" % (name, exc))
+    deadline = time.time() + 30.0
+    while True:
+        if world_map_name(host, port) == map_switch.short_name(name):
+            return True
+        if time.time() > deadline:
+            return False
+        time.sleep(3.0)
+
+
+def stop_procs(procs, grace):
+    """SIGTERM a list of (proc, name) together, SIGKILL whatever outlives
+    ``grace`` seconds. / まとめて SIGTERM し、猶予後も残るものは SIGKILL。"""
+    for proc, name in procs:
+        if proc.poll() is None:
+            print("[pipeline] stopping %s (pid=%d)" % (name, proc.pid))
+            signal_group(proc, signal.SIGTERM)
+    deadline = time.time() + grace
+    for proc, name in procs:
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.time()))
+        except subprocess.TimeoutExpired:
+            print("[pipeline] killing %s (pid=%d)" % (name, proc.pid))
+            signal_group(proc, signal.SIGKILL)
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+# Order in which a map switch stops the world clients: the tick master and
+# TrafficManager server first, so the world is handed back asynchronous and
+# no TM keeps driving cars that are about to vanish; then everyone else.
+# マップ切替でワールドのクライアントを止める順：tick マスタ兼 TM サーバを
+# 最初に（ワールドを非同期に戻し、消える車を TM が動かし続けないように）、
+# 次に残り全部。
+SWITCH_STOP_FIRST = ("generate_traffic", "agent")
+
+
+def switch_stop_groups(names):
+    """Split client names into the stop stages of a map switch (CarlaUE4 is
+    never stopped). / マップ切替時の停止段階に分ける（CarlaUE4 は止めない）。"""
+    names = [n for n in names if n != "CarlaUE4"]
+    first = [n for n in SWITCH_STOP_FIRST if n in names]
+    rest = [n for n in names if n not in first]
+    return [g for g in (first, rest) if g]
+
+
+def take_map_request(rc, path=map_switch.REQUEST_PATH, now=None):
+    """After the driving window exited with ``rc``: the map-switch request to
+    carry out, or None (a normal quit). The file is removed either way. A
+    fresh request counts even if the window then died with another code; a
+    MAP_SWITCH_RC without a readable request is reported and treated as quit.
+
+    運転ウィンドウ終了後に実行するマップ切替依頼（通常終了なら None）。
+    ファイルはどちらの場合も消す。新しい依頼があれば終了コードが違っても
+    実行し、MAP_SWITCH_RC なのに依頼が読めない場合は通常終了として扱う。
+    """
+    req = map_switch.read_request(path, now=now)
+    map_switch.clear_request(path)
+    if req is None and rc == map_switch.MAP_SWITCH_RC:
+        print("[pipeline] manual_control asked for a map switch but %s is missing "
+              "or stale -> shutting down / マップ切替の依頼ファイルが無いか古い"
+              % path)
+    return req
+
+
+def switch_map(target, stop_clients, reset_async, load_map, restart_carla):
+    """The orderly map switch, with the side effects passed in (testable):
+    stop every world client, make sure the world is asynchronous, load the
+    map; if that fails, restart CarlaUE4 on it. Returns "loaded",
+    "restarted" or "failed".
+
+    順序立てたマップ切替（副作用は引数で受け取る）：全クライアント停止 →
+    非同期化 → マップ読込。失敗したら CarlaUE4 ごと再起動して読み込む。
+    戻り値は "loaded" / "restarted" / "failed"。
+    """
+    stop_clients()
+    if reset_async():
+        print("[pipeline] cleared a leftover synchronous mode before the map load "
+              "/ マップ読込前に残っていた同期モードを解除した")
+    print("[pipeline] loading map %s / マップ %s を読み込み中" % (target, target))
+    if load_map(target):
+        return "loaded"
+    print("[pipeline] ERROR: load_world(%s) failed -> restarting CarlaUE4 on %s "
+          "/ マップ読込に失敗したため CarlaUE4 を %s で再起動する"
+          % (target, target, target))
+    if restart_carla(target):
+        return "restarted"
+    print("[pipeline] ERROR: could not bring CARLA up on %s / %s で CARLA を"
+          "起動できなかった" % (target, target))
+    return "failed"
+
+
 def recent_gpu_faults(minutes=10):
     """Kernel Xid lines blaming CarlaUE4, if the journal is readable.
 
@@ -264,7 +423,9 @@ def main():
                    help="no skid marks (traction_fx.py)")
     p.add_argument("--dashboard-port", type=int, default=5000)
     p.add_argument("--no-sensor-viewer", action="store_true",
-                   help="Skip the multi-sensor pygame viewer window")
+                   help="Start without the multi-sensor viewer window (open it "
+                        "later from the dashboard's Windows card) / センサー"
+                        "ビューアを開かずに起動（後でダッシュボードから開ける）")
     p.add_argument("--sensor-viewer-res", default="1440x720",
                    help="Sensor viewer window size, WxH (default 1440x720)")
     p.add_argument("--vehicle-filter", default="vehicle.*",
@@ -295,7 +456,9 @@ def main():
                         '"--first-now --drone-prob 0.7" '
                         '/ delivery_sim.py への追加オプション')
     p.add_argument("--drone-cams", action="store_true",
-                   help="open the drone camera wall (drone_viewer.py); needs --delivery")
+                   help="open the drone camera wall (drone_viewer.py) at start; needs "
+                        "--delivery (without this flag it can still be opened from the "
+                        "dashboard's Windows card) / ドローンカメラ一覧を起動時に開く")
     p.add_argument("--drone-cams-res", default="1280x720",
                    help="drone camera wall window size WxH (default 1280x720)")
     p.add_argument("--ffb", action="store_true",
@@ -373,6 +536,9 @@ def main():
                            # 自前で起動した CarlaUE4 の子プロセス
 
     def terminate_all():
+        # the dashboard's Windows card must not offer controls of a dead
+        # pipeline / 終了したパイプラインの操作をダッシュボードに出さない
+        windows_control.clear(windows_control.STATUS_PATH)
         for proc, name in reversed(children):
             if proc.poll() is None:
                 print("[pipeline] terminating %s (pid=%d)" % (name, proc.pid))
@@ -460,11 +626,13 @@ def main():
                           % (args.port, args.port))
                     return 1
 
-        if not args.no_sim:
+        def start_carla():
+            """Launch CarlaUE4 and wait for its RPC port. / CarlaUE4 を起動しポートを待つ。"""
+            nonlocal carla_proc
             sh = CARLA_ROOT / "CarlaUE4.sh"
             if not sh.exists():
                 print("[pipeline] ERROR: %s not found" % sh)
-                return 1
+                return False
             cmd = [str(sh)]
             # The rig has no audio; the UE4 mixer thread is pure CPU.
             # 本環境は音声を使わない。UE4のミキサースレッドはCPUのみを消費する。
@@ -476,25 +644,37 @@ def main():
                 print("[pipeline] NVIDIA PRIME offload enabled for CarlaUE4 "
                       "/ CarlaUE4 を NVIDIA GPU で描画します")
             carla_proc = launch(cmd, CARLA_ROOT, "CarlaUE4", gpu_env)
-            children.append((carla_proc, "CarlaUE4"))
+            children.insert(0, (carla_proc, "CarlaUE4"))
             print("[pipeline] waiting for %s:%d (timeout %.0fs)..."
                   % (args.host, args.port, args.boot_timeout))
             if not wait_for_port(args.host, args.port, args.boot_timeout):
                 print("[pipeline] CARLA did not open RPC port in time")
-                terminate_all()
-                return 1
+                return False
             print("[pipeline] CARLA ready")
             time.sleep(2.0)
+            return True
 
-        if args.map:
+        def load_startup_map(name):
             cmd = [str(VENV_PY), str(UTIL_DIR / "config.py"),
                    "--host", args.host, "--port", str(args.port),
-                   "--map", args.map]
-            print("[pipeline] loading map %s" % args.map)
+                   "--map", name]
+            print("[pipeline] loading map %s" % name)
             rc = subprocess.call(cmd, cwd=str(UTIL_DIR))
             if rc != 0:
                 print("[pipeline] map load failed (rc=%d), continuing anyway" % rc)
             time.sleep(3.0)
+
+        if not args.no_sim:
+            if not start_carla():
+                terminate_all()
+                return 1
+
+        if args.map:
+            load_startup_map(args.map)
+
+        # A request left by an earlier run must not switch this one.
+        # 以前の実行が残した依頼で今回の実行が切り替わらないようにする。
+        map_switch.clear_request()
 
         # Helper processes we can relaunch if they crash mid-session.
         # セッション中にクラッシュした場合に再起動できる補助プロセス。
@@ -509,289 +689,459 @@ def main():
         # 側に回るため、ほぼ無意味だった。現在は実際のティックを確認して
         # マスタを取り戻すため、再起動で停止したワールドが実際に復帰する。
         # よって回数に余裕を持たせる。
-        restart_left = {"generate_traffic": 3, "dashboard": 3,
-                        "sensor_viewer": 3, "agent": 3, "delivery": 3, "ffb": 3, "drone_cams": 3,
-                       "traction_fx": 3}
+        restart_left = {}
         heartbeat = BASE_DIR / "traffic_heartbeat.json"
         watchdog_armed_at = float("inf")
 
-        if not args.no_traffic:
-            cmd = [str(VENV_PY), "generate_traffic.py",
-                   "--host", args.host, "--port", str(args.port),
-                   "--tm-port", str(args.tm_port),
-                   "-n", str(args.vehicles),
-                   "-w", str(args.walkers),
-                   "--cyclists", str(args.cyclists if args.vehicles or args.walkers else 0),
-                   "--wheelchair-share", str(args.wheelchair_share),
-                   "--runners", str(args.runners)]
-            lht = map_is_left_hand(args.map)
-            if lht and not args.no_hybrid:
-                # In hybrid mode the traffic manager moves far-away cars along
-                # the lane in the right-hand direction: on a left-hand map
-                # they step back and forth on the spot. Full physics for all.
-                # 左側通行マップではハイブリッドの遠方車両が往復して止まるため無効化。
-                print("[pipeline] %s is left-hand traffic -> hybrid physics off (all "
-                      "cars fully simulated) / 左側通行のためハイブリッド無効" % args.map)
-            if not args.no_hybrid and not lht:
-                # Full wheeled-vehicle physics for every car in the town runs
-                # on the simulator's CPU whether or not anyone can see it.
-                # Hybrid mode keeps physics only within 70 m of the hero and
-                # moves the rest along their waypoints, which is by far the
-                # largest single CPU saving in this rig. Traffic the driver
-                # can actually interact with is unaffected.
-                # 町中の全車両の四輪物理演算は、見えているかどうかに関係なく
-                # シミュレータのCPUで実行される。ハイブリッドモードでは
-                # hero から70m以内のみ物理演算を行い、残りはウェイポイントに
-                # 沿って移動させる。本環境で最も効果の大きいCPU削減であり、
-                # ドライバーが実際に関わる範囲の交通は影響を受けない。
-                cmd.append("--hybrid")
-            helper_cmds["generate_traffic"] = cmd
-            try:
-                heartbeat.unlink()
-            except OSError:
-                pass
-            children.append((launch(cmd, BASE_DIR, "generate_traffic"),
-                             "generate_traffic"))
-            watchdog_armed_at = time.time() + args.stall_grace
-            time.sleep(2.0)
-
+        # The dashboard keeps its port across map switches, so an open
+        # browser tab reconnects to the same URL.
+        # ダッシュボードはマップ切替後も同じポートを使う（ブラウザのタブが
+        # 同じ URL に再接続できるように）。
+        dport = None
         if not args.no_dashboard:
             dport = pick_free_port(args.dashboard_port)
             if dport != args.dashboard_port:
                 print("[pipeline] dashboard port %d busy -> using %d"
                       % (args.dashboard_port, dport))
-            cmd = [str(VENV_PY), "dashboard.py",
-                   "--host", args.host, "--port", str(args.port),
-                   "--dashboard-port", str(dport),
-                   "--log-dir", str(DATA_DIR)]
-            if args.no_log:
-                cmd.append("--no-log")
-            helper_cmds["dashboard"] = cmd
-            children.append((launch(cmd, BASE_DIR, "dashboard"),
-                             "dashboard"))
-            print("[pipeline] dashboard will be at http://localhost:%d/"
-                  % dport)
 
-        if args.agent:
-            # Autonomous ego vehicle sharing the world with the human hero
-            # (HIL co-simulation). / 人間のhero車と同一ワールドを共有する
-            # 自動運転ego車（HIL共走）。
-            cmd = [str(VENV_PY), "agent_drive.py",
-                   "--host", args.host, "--port", str(args.port),
-                   "--tm-port", str(args.tm_port),
-                   "--policy", args.agent]
-            helper_cmds["agent"] = cmd
-            children.append((launch(cmd, BASE_DIR, "agent"), "agent"))
+        # The optional windows, with the command line they get at launch and
+        # when the dashboard opens them later (windows_control.py).
+        # 任意ウィンドウと、その起動コマンド（起動時もダッシュボードから
+        # 後で開く時も同じ）。
+        window_cmds = {
+            "sensor_viewer": [str(VENV_PY), "sensor_viewer.py",
+                              "--host", args.host, "-p", str(args.port),
+                              "--res", args.sensor_viewer_res,
+                              "--fps", str(args.viewer_fps),
+                              "--sensor-fps", str(args.sensor_fps)],
+            # CCTV-style wall of drone cameras; a camera exists only while
+            # its drone flies. / ドローンカメラ一覧（飛行中のみ描画）
+            "drone_cams": [str(VENV_PY), "drone_viewer.py",
+                           "--host", args.host, "-p", str(args.port),
+                           "--res", args.drone_cams_res],
+        }
+        unavailable = {}
+        if args.delivery <= 0:
+            unavailable["drone_cams"] = "needs --delivery N (no drones without vans)"
+        windows = windows_control.WindowSupervisor(
+            wanted={"sensor_viewer": not args.no_sensor_viewer,
+                    "drone_cams": args.drone_cams},
+            cmds=window_cmds,
+            launch=lambda cmd, name: launch(cmd, BASE_DIR, name),
+            stop=lambda procs: stop_procs(procs, 8.0),
+            unavailable=unavailable,
+            control_path=windows_control.CONTROL_PATH,
+            status_path=windows_control.STATUS_PATH)
 
-        if args.delivery > 0:
-            # Car + drone delivery vans. With the traffic script running it
-            # owns the synchronous tick, so the vans only follow it
-            # (--passive); without traffic nobody steps the world at a fixed
-            # rate, so delivery_sim becomes the tick master itself.
-            # The map is already loaded above, so it must not load one.
-            # 車+ドローンの配送車。交通スクリプトが同期 tick を持つ場合は追従
-            # のみ（--passive）。交通なしでは誰も固定レートで進めないため、
-            # delivery_sim 自身が tick マスタになる。マップは上で読み込み済み
-            # のため、ここでは読み込ませない。
-            cmd = [str(VENV_PY), "delivery_sim.py",
-                   "--host", args.host, "--port", str(args.port),
-                   "--map", "", "--vans", str(args.delivery),
-                   "--vehicles", "0", "--walkers", "0",
-                   "--tm-port", str(args.tm_port)]
+        def start_clients(map_name, start_vehicle):
+            """Start every client of the world (all but CarlaUE4) for
+            ``map_name``: at startup, and again after each F5 map switch with
+            the same options. Returns the driving window's process.
+            ワールドの全クライアント（CarlaUE4 以外）を ``map_name`` 用に起動
+            する。起動時と、F5 のマップ切替の後に同じオプションで再度呼ぶ。
+            運転ウィンドウのプロセスを返す。"""
+            nonlocal watchdog_armed_at
+            helper_cmds.clear()
+            restart_left.clear()
+            # (the optional windows restart through `windows` instead)
+            # （任意ウィンドウの再起動は `windows` が扱う）
+            restart_left.update({"generate_traffic": 3, "dashboard": 3,
+                                 "agent": 3, "delivery": 3,
+                                 "ffb": 3, "traction_fx": 3,
+                                 "signal_timing": 3})
+            watchdog_armed_at = float("inf")
+
             if not args.no_traffic:
-                cmd.append("--passive")
-            # start delivering at once instead of after a 20-90 s wait
-            # 20〜90 秒待たずにすぐ配送を始める
-            cmd.append("--first-now")
-            if args.delivery_args:
-                cmd += shlex.split(args.delivery_args)
-            helper_cmds["delivery"] = cmd
-            children.append((launch(cmd, BASE_DIR, "delivery"), "delivery"))
+                cmd = [str(VENV_PY), "generate_traffic.py",
+                       "--host", args.host, "--port", str(args.port),
+                       "--tm-port", str(args.tm_port),
+                       "-n", str(args.vehicles),
+                       "-w", str(args.walkers),
+                       "--cyclists", str(args.cyclists if args.vehicles or args.walkers else 0),
+                       "--wheelchair-share", str(args.wheelchair_share),
+                       "--runners", str(args.runners)]
+                lht = map_is_left_hand(map_name)
+                if lht and not args.no_hybrid:
+                    # In hybrid mode the traffic manager moves far-away cars along
+                    # the lane in the right-hand direction: on a left-hand map
+                    # they step back and forth on the spot. Full physics for all.
+                    # 左側通行マップではハイブリッドの遠方車両が往復して止まるため無効化。
+                    print("[pipeline] %s is left-hand traffic -> hybrid physics off (all "
+                          "cars fully simulated) / 左側通行のためハイブリッド無効" % map_name)
+                if not args.no_hybrid and not lht:
+                    # Full wheeled-vehicle physics for every car in the town runs
+                    # on the simulator's CPU whether or not anyone can see it.
+                    # Hybrid mode keeps physics only within 70 m of the hero and
+                    # moves the rest along their waypoints, which is by far the
+                    # largest single CPU saving in this rig. Traffic the driver
+                    # can actually interact with is unaffected.
+                    # 町中の全車両の四輪物理演算は、見えているかどうかに関係なく
+                    # シミュレータのCPUで実行される。ハイブリッドモードでは
+                    # hero から70m以内のみ物理演算を行い、残りはウェイポイントに
+                    # 沿って移動させる。本環境で最も効果の大きいCPU削減であり、
+                    # ドライバーが実際に関わる範囲の交通は影響を受けない。
+                    cmd.append("--hybrid")
+                helper_cmds["generate_traffic"] = cmd
+                try:
+                    heartbeat.unlink()
+                except OSError:
+                    pass
+                children.append((launch(cmd, BASE_DIR, "generate_traffic"),
+                                 "generate_traffic"))
+                watchdog_armed_at = time.time() + args.stall_grace
+                time.sleep(2.0)
 
-            if args.drone_cams:
-                # CCTV-style wall of drone cameras; a camera exists only
-                # while its drone flies. / ドローンカメラ一覧（飛行中のみ描画）
-                cmd = [str(VENV_PY), "drone_viewer.py",
-                       "--host", args.host, "-p", str(args.port),
-                       "--res", args.drone_cams_res]
-                helper_cmds["drone_cams"] = cmd
-                children.append((launch(cmd, BASE_DIR, "drone_cams"), "drone_cams"))
-        elif args.drone_cams:
-            print("[pipeline] --drone-cams needs --delivery N (no drones without vans) "
-                  "/ --drone-cams には --delivery が必要")
+            if dport is not None:
+                # after a map switch: give the old dashboard's socket a moment
+                # マップ切替後：旧ダッシュボードのソケット解放を少し待つ
+                deadline = time.time() + 5.0
+                while time.time() < deadline and port_in_use(dport):
+                    time.sleep(0.5)
+                cmd = [str(VENV_PY), "dashboard.py",
+                       "--host", args.host, "--port", str(args.port),
+                       "--dashboard-port", str(dport),
+                       "--log-dir", str(DATA_DIR)]
+                if args.no_log:
+                    cmd.append("--no-log")
+                helper_cmds["dashboard"] = cmd
+                children.append((launch(cmd, BASE_DIR, "dashboard"),
+                                 "dashboard"))
+                print("[pipeline] dashboard will be at http://localhost:%d/"
+                      % dport)
 
-        if args.ffb:
-            # carla_ffb.py only reads the world and restarts itself on errors.
-            # A second copy would fight the first for the wheel's force
-            # feedback, so reuse one that is already running.
-            # carla_ffb.py はワールドを読むだけで、エラー時は自身で再起動する。
-            # 2 つ目が動くとホイールの FFB を奪い合うため、既存のものを使う。
-            running = subprocess.run(["pgrep", "-f", "carla_ffb.py"],
-                                     capture_output=True).stdout.split()
-            if running:
-                print("[pipeline] carla_ffb.py is already running (pid %s) -> not "
-                      "starting a second copy / carla_ffb.py は既に起動中のため"
-                      "2 つ目は起動しない"
-                      % ", ".join(r.decode() for r in running))
-            else:
-                cmd = [str(VENV_PY), str(FFB_SCRIPT),
-                       "--host", args.host, "--port", str(args.port)]
-                if args.ffb_strength is not None:
-                    cmd += ["--strength", str(args.ffb_strength)]
-                helper_cmds["ffb"] = cmd
-                children.append((launch(cmd, BASE_DIR, "ffb"), "ffb"))
+            if args.agent:
+                # Autonomous ego vehicle sharing the world with the human hero
+                # (HIL co-simulation). / 人間のhero車と同一ワールドを共有する
+                # 自動運転ego車（HIL共走）。
+                cmd = [str(VENV_PY), "agent_drive.py",
+                       "--host", args.host, "--port", str(args.port),
+                       "--tm-port", str(args.tm_port),
+                       "--policy", args.agent]
+                helper_cmds["agent"] = cmd
+                children.append((launch(cmd, BASE_DIR, "agent"), "agent"))
 
-        if not args.no_traction_fx:
-            # Skid marks behind the hero's sliding tyres. It only reads the
-            # world, like the dashboard.
-            # hero の滑ったタイヤのスキッドマーク（読むだけ）。
-            cmd = [str(VENV_PY), "traction_fx.py",
-                   "--host", args.host, "--port", str(args.port)]
-            helper_cmds["traction_fx"] = cmd
-            children.append((launch(cmd, BASE_DIR, "traction_fx"), "traction_fx"))
+            if args.delivery > 0:
+                # Car + drone delivery vans. With the traffic script running it
+                # owns the synchronous tick, so the vans only follow it
+                # (--passive); without traffic nobody steps the world at a fixed
+                # rate, so delivery_sim becomes the tick master itself.
+                # The map is already loaded (also after an F5 switch), so
+                # --map "" keeps it: delivery_sim reads the map's buildings,
+                # addresses and yard from the loaded world itself.
+                # 車+ドローンの配送車。交通スクリプトが同期 tick を持つ場合は追従
+                # のみ（--passive）。交通なしでは誰も固定レートで進めないため、
+                # delivery_sim 自身が tick マスタになる。マップは読込済み（F5
+                # 切替後も同様）なので --map "" で現在のマップを使う。建物・住所・
+                # ヤードは delivery_sim が読込済みワールドから取得する。
+                cmd = [str(VENV_PY), "delivery_sim.py",
+                       "--host", args.host, "--port", str(args.port),
+                       "--map", "", "--vans", str(args.delivery),
+                       "--vehicles", "0", "--walkers", "0",
+                       "--tm-port", str(args.tm_port)]
+                if not args.no_traffic:
+                    cmd.append("--passive")
+                # start delivering at once instead of after a 20-90 s wait
+                # 20〜90 秒待たずにすぐ配送を始める
+                cmd.append("--first-now")
+                if args.delivery_args:
+                    cmd += shlex.split(args.delivery_args)
+                helper_cmds["delivery"] = cmd
+                children.append((launch(cmd, BASE_DIR, "delivery"), "delivery"))
+            elif args.drone_cams:
+                print("[pipeline] --drone-cams needs --delivery N (no drones without vans) "
+                      "/ --drone-cams には --delivery が必要")
 
-        if not args.no_sensor_viewer:
-            cmd = [str(VENV_PY), "sensor_viewer.py",
-                   "--host", args.host, "-p", str(args.port),
-                   "--res", args.sensor_viewer_res,
-                   "--fps", str(args.viewer_fps),
-                   "--sensor-fps", str(args.sensor_fps)]
-            helper_cmds["sensor_viewer"] = cmd
-            children.append((launch(cmd, BASE_DIR, "sensor_viewer"),
-                             "sensor_viewer"))
-
-        cmd = [str(VENV_PY), str(CONTROL_SCRIPT),
-               "--host", args.host, "--port", str(args.port),
-               "--res", args.control_res,
-               "--filter", args.vehicle_filter,
-               "--start-vehicle", args.start_vehicle,
-               "--fov", str(args.fov),
-               "--fps", str(args.fps),
-               "--mirror-fps", str(args.mirror_fps)]
-        if args.autopilot:
-            cmd.append("--autopilot")
-        # The hero's autopilot (--autopilot or the P key) gets its own TM:
-        # set_autopilot() would otherwise create the traffic TM server in
-        # manual_control before generate_traffic starts, and the traffic
-        # cars would join a TM that is never stepped (they stand still).
-        # hero の自動運転は別ポートの TM を使う（交通車両が動かなくなるため）。
-        cmd += ["--tm-port", str(args.tm_port + 1)]
-        if args.keyboard:
-            cmd.append("--keyboard")
-        mc = launch(cmd, BASE_DIR, "manual_control")
-        children.append((mc, "manual_control"))
-
-        # Supervise: wait for manual_control, restart crashed helpers.
-        # 監視: manual_control の終了を待ち、落ちた補助プロセスを再起動する。
-        while mc.poll() is None:
-            time.sleep(1.0)
-
-            # The simulator itself is not restartable: every actor, sensor
-            # and the hero vehicle die with it. When it goes, the driving
-            # window just stops updating -- which is what "the simulation
-            # froze" looks like from the driver's seat -- so say plainly
-            # what happened instead of supervising a world that no longer
-            # exists.
-            # シミュレータ本体は再起動できない。全アクター・センサー・
-            # hero 車両が道連れになるためである。落ちると運転ウィンドウ
-            # が更新を止めるだけで、運転席からは「シミュレーションが
-            # 固まった」ようにしか見えない。存在しないワールドを監視し
-            # 続けず、何が起きたかを明示する。
-            if carla_proc is not None and carla_proc.poll() is not None:
-                print("[pipeline] CarlaUE4 exited (rc=%s) -> the world is "
-                      "gone, shutting down / CarlaUE4 が終了したため"
-                      "ワールドが消失。シャットダウンする"
-                      % carla_proc.returncode)
-                faults = recent_gpu_faults()
-                if faults:
-                    print("[pipeline] the kernel logged a GPU fault -- this "
-                          "is a driver/GPU crash, not a CARLA bug "
-                          "/ カーネルが GPU 障害を記録している。CARLA の"
-                          "不具合ではなくドライバ/GPU のクラッシュである:")
-                    for line in faults:
-                        print("[pipeline]   %s" % line)
+            if args.ffb:
+                # carla_ffb.py only reads the world and restarts itself on errors.
+                # A second copy would fight the first for the wheel's force
+                # feedback, so reuse one that is already running.
+                # carla_ffb.py はワールドを読むだけで、エラー時は自身で再起動する。
+                # 2 つ目が動くとホイールの FFB を奪い合うため、既存のものを使う。
+                running = subprocess.run(["pgrep", "-f", "carla_ffb.py"],
+                                         capture_output=True).stdout.split()
+                if running:
+                    print("[pipeline] carla_ffb.py is already running (pid %s) -> not "
+                          "starting a second copy / carla_ffb.py は既に起動中のため"
+                          "2 つ目は起動しない"
+                          % ", ".join(r.decode() for r in running))
                 else:
-                    print("[pipeline] check %s/CarlaUE4.sh output above, and "
-                          "`journalctl -k | grep Xid` for a GPU fault "
-                          "/ 上記の CarlaUE4.sh の出力と、GPU 障害について"
-                          "は `journalctl -k | grep Xid` を確認すること"
-                          % CARLA_ROOT)
-                terminate_all()
-                return 1
+                    cmd = [str(VENV_PY), str(FFB_SCRIPT),
+                           "--host", args.host, "--port", str(args.port)]
+                    if args.ffb_strength is not None:
+                        cmd += ["--strength", str(args.ffb_strength)]
+                    helper_cmds["ffb"] = cmd
+                    children.append((launch(cmd, BASE_DIR, "ffb"), "ffb"))
 
-            for i, (proc, name) in enumerate(children):
-                if proc is mc or proc.poll() is None:
-                    continue
-                if name in helper_cmds and restart_left.get(name, 0) > 0:
-                    restart_left[name] -= 1
-                    print("[pipeline] %s died (rc=%s) -> restarting "
-                          "(%d restart(s) left)"
-                          % (name, proc.returncode, restart_left[name]))
-                    if name == "generate_traffic":
-                        try:
-                            heartbeat.unlink()
-                        except OSError:
-                            pass
-                        watchdog_armed_at = time.time() + args.stall_grace
-                    children[i] = (
-                        launch(helper_cmds[name], BASE_DIR, name), name)
+            if not args.no_traction_fx:
+                # Skid marks behind the hero's sliding tyres. It only reads the
+                # world, like the dashboard.
+                # hero の滑ったタイヤのスキッドマーク（読むだけ）。
+                cmd = [str(VENV_PY), "traction_fx.py",
+                       "--host", args.host, "--port", str(args.port)]
+                helper_cmds["traction_fx"] = cmd
+                children.append((launch(cmd, BASE_DIR, "traction_fx"), "traction_fx"))
 
-            # Freeze watchdog. A tick master that is alive but no longer
-            # stepping the world -- a wedged RPC, a stuck render thread --
-            # leaves every other component staring at a still frame while
-            # poll() reports a perfectly healthy process, so the loop above
-            # never notices. generate_traffic.py touches
-            # traffic_heartbeat.json on every tick; a stale heartbeat means
-            # the world has stopped advancing, whatever the process table
-            # says. Restarting the master is what unfreezes it.
-            # フリーズ監視。ティックマスタがプロセスとしては生きているのに
-            # ワールドを進めなくなると（RPCの詰まり、描画スレッドの停止）、
-            # 他の全コンポーネントは静止画を見続けるが poll() は正常と報告
-            # するため、上のループでは検知できない。generate_traffic.py は
-            # 毎ティック traffic_heartbeat.json を更新するので、その停止は
-            # プロセス表の内容に関わらずワールドが進んでいないことを示す。
-            # マスタを再起動することで停止が解ける。
-            if ("generate_traffic" in helper_cmds and args.stall_timeout > 0
-                    and time.time() > watchdog_armed_at):
-                age = heartbeat_age(heartbeat)
-                if age is None or age > args.stall_timeout:
-                    for i, (proc, name) in enumerate(children):
-                        if name != "generate_traffic":
-                            continue
-                        if restart_left.get(name, 0) <= 0:
-                            print("[pipeline] WARNING: simulation frozen (no "
-                                  "tick for %s s) and no traffic restarts "
-                                  "left / シミュレーションが停止したが交通の"
-                                  "再起動回数を使い切った"
-                                  % ("?" if age is None else "%.0f" % age))
-                            watchdog_armed_at = float("inf")
-                            break
+            profile = map_signal_timing(map_name)
+            if profile is not None:
+                # Real signal timing (maps.json "signal_timing"): cycle and
+                # green/yellow/all-red per 5-minute slot, only on that map.
+                # 実際の信号時間（そのマップのみ、5 分毎に再設定）。
+                cmd = [str(VENV_PY), "signal_timing.py", "apply", "--watch",
+                       "--host", args.host, "--port", str(args.port),
+                       "--profile", str(profile), "--only-map", map_name]
+                helper_cmds["signal_timing"] = cmd
+                children.append((launch(cmd, BASE_DIR, "signal_timing"), "signal_timing"))
+
+            # The optional viewer windows (sensor viewer, drone cameras): the
+            # ones that are open now -- the launch flags at startup, after an
+            # F5 switch whatever the user opened or closed meanwhile.
+            # 任意のビューアウィンドウ：今開いているもの（起動時は起動
+            # オプション、F5 切替後はそれまでにユーザーが開閉した状態）。
+            windows.start_wanted(children)
+
+            cmd = [str(VENV_PY), str(CONTROL_SCRIPT),
+                   "--host", args.host, "--port", str(args.port),
+                   "--res", args.control_res,
+                   "--filter", args.vehicle_filter,
+                   "--start-vehicle", start_vehicle,
+                   "--fov", str(args.fov),
+                   "--fps", str(args.fps),
+                   "--mirror-fps", str(args.mirror_fps),
+                   # F5 asks us to switch the map instead of loading it there
+                   # F5 はマップを自分で読まず、パイプラインに切替を依頼する
+                   "--map-request", map_switch.REQUEST_PATH]
+            if args.autopilot:
+                cmd.append("--autopilot")
+            # The hero's autopilot (--autopilot or the P key) gets its own TM:
+            # set_autopilot() would otherwise create the traffic TM server in
+            # manual_control before generate_traffic starts, and the traffic
+            # cars would join a TM that is never stepped (they stand still).
+            # hero の自動運転は別ポートの TM を使う（交通車両が動かなくなるため）。
+            cmd += ["--tm-port", str(args.tm_port + 1)]
+            if args.keyboard:
+                cmd.append("--keyboard")
+            mc = launch(cmd, BASE_DIR, "manual_control")
+            children.append((mc, "manual_control"))
+            return mc
+
+        def stop_clients():
+            """Stop every world client but CarlaUE4, tick master first.
+            CarlaUE4 以外の全クライアントを止める（tick マスタが最初）。"""
+            live = [(p_, n) for p_, n in children if n != "CarlaUE4"]
+            for group in switch_stop_groups([n for _, n in live]):
+                procs = [(p_, n) for p_, n in live if n in group]
+                # the tick master destroys its cars in chunks; give it time
+                # tick マスタは車両を分割して破棄するため猶予を長めに
+                stop_procs(procs, 20.0 if "generate_traffic" in group else 10.0)
+            children[:] = [(p_, n) for p_, n in children if n == "CarlaUE4"]
+            try:
+                heartbeat.unlink()
+            except OSError:
+                pass
+
+        def restart_carla(map_name):
+            """Fallback when load_world fails: kill CarlaUE4, start one fresh
+            (never a second one beside it) and load the map.
+            load_world 失敗時の代替：CarlaUE4 を終了してから新しく起動し
+            （2 つ目を並べて起動はしない）、マップを読み込む。"""
+            nonlocal carla_proc
+            if user_owns_carla:
+                print("[pipeline] --no-sim: this CARLA is yours, not restarting it "
+                      "/ --no-sim のため CARLA は再起動しない")
+                return False
+            for p_, n in [c for c in children if c[1] == "CarlaUE4"]:
+                stop_procs([(p_, n)], 10.0)
+            children[:] = [c for c in children if c[1] != "CarlaUE4"]
+            carla_proc = None
+            for pat in ("CarlaUE4-Linux-Shipping", "CarlaUE4.sh"):
+                subprocess.call(["pkill", "-9", "-f", pat])
+            deadline = time.time() + 15.0
+            while time.time() < deadline and port_in_use(args.port):
+                time.sleep(0.5)
+            if port_in_use(args.port):
+                print("[pipeline] ERROR: port %d still in use, not starting CARLA "
+                      "(check: lsof -i:%d)" % (args.port, args.port))
+                return False
+            args.no_sim = False
+            if not start_carla():
+                return False
+            return load_world_map(args.host, args.port, map_name)
+
+        current_map = args.map or world_map_name(args.host, args.port)
+        start_vehicle = args.start_vehicle
+        while True:
+            mc = start_clients(current_map, start_vehicle)
+            windows.write_status(children, "running", current_map)
+
+            # Supervise: wait for manual_control, restart crashed helpers.
+            # 監視: manual_control の終了を待ち、落ちた補助プロセスを再起動する。
+            while mc.poll() is None:
+                time.sleep(1.0)
+
+                # The simulator itself is not restartable: every actor, sensor
+                # and the hero vehicle die with it. When it goes, the driving
+                # window just stops updating -- which is what "the simulation
+                # froze" looks like from the driver's seat -- so say plainly
+                # what happened instead of supervising a world that no longer
+                # exists.
+                # シミュレータ本体は再起動できない。全アクター・センサー・
+                # hero 車両が道連れになるためである。落ちると運転ウィンドウ
+                # が更新を止めるだけで、運転席からは「シミュレーションが
+                # 固まった」ようにしか見えない。存在しないワールドを監視し
+                # 続けず、何が起きたかを明示する。
+                if carla_proc is not None and carla_proc.poll() is not None:
+                    print("[pipeline] CarlaUE4 exited (rc=%s) -> the world is "
+                          "gone, shutting down / CarlaUE4 が終了したため"
+                          "ワールドが消失。シャットダウンする"
+                          % carla_proc.returncode)
+                    faults = recent_gpu_faults()
+                    if faults:
+                        print("[pipeline] the kernel logged a GPU fault -- this "
+                              "is a driver/GPU crash, not a CARLA bug "
+                              "/ カーネルが GPU 障害を記録している。CARLA の"
+                              "不具合ではなくドライバ/GPU のクラッシュである:")
+                        for line in faults:
+                            print("[pipeline]   %s" % line)
+                    else:
+                        print("[pipeline] check %s/CarlaUE4.sh output above, and "
+                              "`journalctl -k | grep Xid` for a GPU fault "
+                              "/ 上記の CarlaUE4.sh の出力と、GPU 障害について"
+                              "は `journalctl -k | grep Xid` を確認すること"
+                              % CARLA_ROOT)
+                    terminate_all()
+                    return 1
+
+                # Dashboard Windows card: open / close requests, then the
+                # status it shows. / ダッシュボードの開閉依頼と状態ファイル。
+                windows.poll_requests(children)
+
+                # An optional window that exited by itself: exit code 0 is the
+                # user closing it (close button / Esc / Q) -> it stays closed;
+                # anything else is a crash -> a bounded number of restarts.
+                # 自分で終了した任意ウィンドウ：終了コード 0 はユーザーが閉じた
+                # （閉じたまま）、それ以外はクラッシュ（回数制限付きで再起動）。
+                for proc, name in [c for c in children
+                                   if c[1] in windows_control.WINDOWS
+                                   and c[0].poll() is not None]:
+                    if windows.handle_exit(children, name, proc.returncode):
+                        continue
+                    children[:] = [c for c in children if c[0] is not proc]
+                    if windows.take_restart(name):
+                        print("[pipeline] %s died (rc=%s) -> restarting "
+                              "(%d restart(s) left)"
+                              % (name, proc.returncode, windows.restart_left[name]))
+                        windows.open(children, name, reason="restart")
+                    else:
+                        print("[pipeline] %s died (rc=%s), no restarts left "
+                              "(open it again from the dashboard) / 再起動回数を"
+                              "使い切った" % (name, proc.returncode))
+                windows.write_status(children, "running", current_map)
+
+                for i, (proc, name) in enumerate(children):
+                    if proc is mc or proc.poll() is None:
+                        continue
+                    if name in helper_cmds and restart_left.get(name, 0) > 0:
                         restart_left[name] -= 1
-                        print("[pipeline] simulation frozen: no tick for %s s "
-                              "-> restarting the traffic tick master "
-                              "(%d restart(s) left) / ワールドが %s 秒進んで"
-                              "いないため交通ティックマスタを再起動する"
-                              % ("?" if age is None else "%.0f" % age,
-                                 restart_left[name],
-                                 "?" if age is None else "%.0f" % age))
-                        signal_group(proc, signal.SIGTERM)
-                        try:
-                            proc.wait(timeout=5.0)
-                        except subprocess.TimeoutExpired:
-                            signal_group(proc, signal.SIGKILL)
+                        print("[pipeline] %s died (rc=%s) -> restarting "
+                              "(%d restart(s) left)"
+                              % (name, proc.returncode, restart_left[name]))
+                        if name == "generate_traffic":
                             try:
-                                proc.wait(timeout=2.0)
-                            except subprocess.TimeoutExpired:
+                                heartbeat.unlink()
+                            except OSError:
                                 pass
-                        try:
-                            heartbeat.unlink()
-                        except OSError:
-                            pass
+                            watchdog_armed_at = time.time() + args.stall_grace
                         children[i] = (
                             launch(helper_cmds[name], BASE_DIR, name), name)
-                        watchdog_armed_at = time.time() + args.stall_grace
-                        break
-        rc = mc.returncode
+
+                # Freeze watchdog. A tick master that is alive but no longer
+                # stepping the world -- a wedged RPC, a stuck render thread --
+                # leaves every other component staring at a still frame while
+                # poll() reports a perfectly healthy process, so the loop above
+                # never notices. generate_traffic.py touches
+                # traffic_heartbeat.json on every tick; a stale heartbeat means
+                # the world has stopped advancing, whatever the process table
+                # says. Restarting the master is what unfreezes it.
+                # フリーズ監視。ティックマスタがプロセスとしては生きているのに
+                # ワールドを進めなくなると（RPCの詰まり、描画スレッドの停止）、
+                # 他の全コンポーネントは静止画を見続けるが poll() は正常と報告
+                # するため、上のループでは検知できない。generate_traffic.py は
+                # 毎ティック traffic_heartbeat.json を更新するので、その停止は
+                # プロセス表の内容に関わらずワールドが進んでいないことを示す。
+                # マスタを再起動することで停止が解ける。
+                if ("generate_traffic" in helper_cmds and args.stall_timeout > 0
+                        and time.time() > watchdog_armed_at):
+                    age = heartbeat_age(heartbeat)
+                    if age is None or age > args.stall_timeout:
+                        for i, (proc, name) in enumerate(children):
+                            if name != "generate_traffic":
+                                continue
+                            if restart_left.get(name, 0) <= 0:
+                                print("[pipeline] WARNING: simulation frozen (no "
+                                      "tick for %s s) and no traffic restarts "
+                                      "left / シミュレーションが停止したが交通の"
+                                      "再起動回数を使い切った"
+                                      % ("?" if age is None else "%.0f" % age))
+                                watchdog_armed_at = float("inf")
+                                break
+                            restart_left[name] -= 1
+                            print("[pipeline] simulation frozen: no tick for %s s "
+                                  "-> restarting the traffic tick master "
+                                  "(%d restart(s) left) / ワールドが %s 秒進んで"
+                                  "いないため交通ティックマスタを再起動する"
+                                  % ("?" if age is None else "%.0f" % age,
+                                     restart_left[name],
+                                     "?" if age is None else "%.0f" % age))
+                            signal_group(proc, signal.SIGTERM)
+                            try:
+                                proc.wait(timeout=5.0)
+                            except subprocess.TimeoutExpired:
+                                signal_group(proc, signal.SIGKILL)
+                                try:
+                                    proc.wait(timeout=2.0)
+                                except subprocess.TimeoutExpired:
+                                    pass
+                            try:
+                                heartbeat.unlink()
+                            except OSError:
+                                pass
+                            children[i] = (
+                                launch(helper_cmds[name], BASE_DIR, name), name)
+                            watchdog_armed_at = time.time() + args.stall_grace
+                            break
+            rc = mc.returncode
+
+            # F5 / Shift+F5: the driving window asked for another map and
+            # closed. Switch it for every client while CarlaUE4 keeps running,
+            # then start them all again with the same options and hero car.
+            # F5 / Shift+F5：運転ウィンドウが別マップを依頼して終了した。
+            # CarlaUE4 は動かしたまま全クライアントごと切り替え、同じ
+            # オプション・同じ自車で全て再起動する。
+            req = take_map_request(rc)
+            if req is None:
+                break
+            target = req["map"]
+            print("[pipeline] map switch %s -> %s requested by manual_control "
+                  "(rc=%d, hero %s) / マップ切替の依頼"
+                  % (req.get("from") or current_map, target, rc,
+                     req["hero"] or start_vehicle or "-"))
+            windows.write_status(children, "switching", target)
+            how = switch_map(
+                target, stop_clients,
+                lambda: reset_world_async(args.host, args.port),
+                lambda m: load_world_map(args.host, args.port, m),
+                restart_carla)
+            if how == "failed":
+                terminate_all()
+                return 1
+            print("[pipeline] map %s %s -> restarting the clients / マップ切替"
+                  "完了、クライアントを再起動" % (
+                      target, "loaded" if how == "loaded" else
+                      "loaded after a CARLA restart"))
+            time.sleep(2.0)
+            current_map = target
+            start_vehicle = req["hero"] or start_vehicle
+
         print("[pipeline] manual_control exited rc=%d -> shutting down" % rc)
         terminate_all()
         return rc

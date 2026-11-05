@@ -117,6 +117,77 @@ print(h.hexdigest())" "$SRC/meshes")"
     cp "$NAVCACHE" "$CONTENT/$PKG/Maps/$NAME/Nav/$NAME.bin"
 fi
 
+JPSIG="$("$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))[sys.argv[2]]; print(int(c.get('jp_shingo', c.get('road_style') == 'japan' or c.get('package') == 'Japan')))" "$HERE/maps.json" "$KEY")"
+if [ "$JPSIG" = "1" ]; then
+    # Japanese traffic signals (guide ch. 24): our own horizontal LED head on a
+    # cantilever (osm_city/jp_shingo.py), built into BP_JpShingo, a copy of
+    # CARLA's light blueprint, and a TrafficLightManager saved in this level
+    # that spawns it; states/controllers/timing stay CARLA's. Other maps keep
+    # CARLA's lights. The editor often segfaults on exit after saving, so the
+    # log markers decide / 日本の信号機（ガイド 24 章）
+    step "2d/4 Japanese traffic signals"
+    SHG="$HERE/build/JpShingo"
+    # no stale parts: a failed Blender run must not import the old FBX
+    # 古い FBX を消してから作る（失敗時に前回分を取り込まない）
+    rm -f "$SHG"/SM_JpShingo{Pole,Arm,Head,Lamp}.fbx "$SHG/layout.json"
+    blender -b --python "$HERE/osm_city/jp_shingo.py" -- "$SHG" > "$SRC/jp_shingo_blender.log" 2>&1 || true
+    SHG_OK=1
+    grep -q "^\[jp_shingo\] wrote" "$SRC/jp_shingo_blender.log" || SHG_OK=0
+    for f in SM_JpShingoPole.fbx SM_JpShingoArm.fbx SM_JpShingoHead.fbx SM_JpShingoLamp.fbx layout.json; do
+        [ -s "$SHG/$f" ] || SHG_OK=0
+    done
+    [ "$SHG_OK" = 1 ] || { echo "jp_shingo.py failed (see $SRC/jp_shingo_blender.log)"; exit 1; }
+    (cd "$CARLA_SRC/Unreal/CarlaUE4" && SHINGO_SRC="$SHG" SHINGO_PKG="$PKG" \
+        "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/ue_jp_shingo.py" -unattended -nosplash -nullrhi) \
+        > "$SRC/ue_jp_shingo.log" 2>&1 || true
+    grep -q "\[ue_jp_shingo\] done" "$SRC/ue_jp_shingo.log" || { echo "BP_JpShingo step failed (see $SRC/ue_jp_shingo.log)"; exit 1; }
+    (cd "$CARLA_SRC/Unreal/CarlaUE4" && SHINGO_PKG="$PKG" SHINGO_MAP="$NAME" \
+        "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/ue_jp_shingo_level.py" -unattended -nosplash -nullrhi) \
+        > "$SRC/ue_jp_shingo_level.log" 2>&1 || true
+    grep "\[ue_jp_shingo_level\]" "$SRC/ue_jp_shingo_level.log" | tail -1 || true
+    grep -q "spawns BP_JpShingo_C" "$SRC/ue_jp_shingo_level.log" || { echo "signal manager step failed (see $SRC/ue_jp_shingo_level.log)"; exit 1; }
+fi
+
+JPSOK="$("$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))[sys.argv[2]]; print(int(c.get('jp_sokudo', c.get('road_style') == 'japan' or c.get('package') == 'Japan')))" "$HERE/maps.json" "$KEY")"
+if [ "$JPSOK" = "1" ]; then
+    # Japanese maximum-speed posts (guide ch. 25): our own 323 plate (white,
+    # red ring, blue numerals) on a white pole (osm_city/jp_sokudo.py), built
+    # into BP_JpSokudo<V>, copies of CARLA's speed-limit BP, and set in the
+    # level's TrafficLightManager.SpeedLimitModels; the speed value and its
+    # triggers stay CARLA's (SpawnSignals). Log markers decide, not rc.
+    # 日本の最高速度標識（ガイド 25 章）
+    step "2e/4 Japanese speed posts"
+    SOK="$HERE/build/JpSokudo"
+    rm -f "$SOK"/SM_JpSokudo*.fbx "$SOK"/T_JpSokudo*.png "$SOK/layout.json"
+    blender -b --python "$HERE/osm_city/jp_sokudo.py" -- "$SOK" > "$SRC/jp_sokudo_blender.log" 2>&1 || true
+    grep -q "^\[jp_sokudo\] wrote" "$SRC/jp_sokudo_blender.log" && [ -s "$SOK/layout.json" ] \
+        || { echo "jp_sokudo.py failed (see $SRC/jp_sokudo_blender.log)"; exit 1; }
+    (cd "$CARLA_SRC/Unreal/CarlaUE4" && SOKUDO_SRC="$SOK" SOKUDO_PKG="$PKG" \
+        "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/ue_jp_sokudo.py" -unattended -nosplash -nullrhi) \
+        > "$SRC/ue_jp_sokudo.log" 2>&1 || true
+    grep -q "\[ue_jp_sokudo\] done" "$SRC/ue_jp_sokudo.log" || { echo "BP_JpSokudo step failed (see $SRC/ue_jp_sokudo.log)"; exit 1; }
+    (cd "$CARLA_SRC/Unreal/CarlaUE4" && SOKUDO_PKG="$PKG" SOKUDO_MAP="$NAME" \
+        "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/ue_jp_sokudo_level.py" -unattended -nosplash -nullrhi) \
+        > "$SRC/ue_jp_sokudo_level.log" 2>&1 || true
+    grep "\[ue_jp_sokudo_level\]" "$SRC/ue_jp_sokudo_level.log" | tail -1 || true
+    grep -q "\[ue_jp_sokudo_level\] speed posts set:" "$SRC/ue_jp_sokudo_level.log" || { echo "speed post manager step failed (see $SRC/ue_jp_sokudo_level.log)"; exit 1; }
+fi
+
+# Japanese pedestrian heads (guide ch. 26): the map meshes Terrain_JpHokousha_*
+# (osm_city/jp_hokousha.py, one per signalised crossing) get our lamp materials;
+# the rig lights them at run time (hil_sim/hokousha.py). Only when the build has
+# them / 歩行者用信号機のランプ材質（ガイド 26 章）。メッシュがある場合のみ
+JPHOK="$("$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))[sys.argv[2]]; print(int(c.get('jp_hokousha', c.get('road_style') == 'japan' or c.get('package') == 'Japan')))" "$HERE/maps.json" "$KEY")"
+if [ "$JPHOK" = "1" ] && ls "$SRC"/meshes/Terrain_JpHokousha_*.npz > /dev/null 2>&1; then
+    step "2f/4 Japanese pedestrian heads"
+    (cd "$CARLA_SRC/Unreal/CarlaUE4" && HOKOUSHA_PKG="$PKG" HOKOUSHA_MAP="$NAME" TMPDIR="$SRC" \
+        "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/ue_jp_hokousha.py" -unattended -nosplash -nullrhi) \
+        > "$SRC/ue_jp_hokousha.log" 2>&1 || true
+    grep "\[ue_jp_hokousha\]" "$SRC/ue_jp_hokousha.log" | tail -1 || true
+    grep -q "\[ue_jp_hokousha\] [1-9][0-9]* pedestrian head meshes" "$SRC/ue_jp_hokousha.log" \
+        || { echo "pedestrian head step failed (see $SRC/ue_jp_hokousha.log)"; exit 1; }
+fi
+
 step "3/4 cook"
 rm -rf "$COOKED"
 (cd "$CARLA_SRC/Unreal/CarlaUE4" && "$EDITOR" "$UPROJECT" -run=cook \

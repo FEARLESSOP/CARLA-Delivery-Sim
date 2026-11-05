@@ -27,9 +27,10 @@ CARLA は交差点のコントローラを順に回す（青→黄→赤、赤�
                                                                            set them on the running world
   python signal_timing.py test                                             offline self-test (no server)
 
-It is not started by run_pipeline.py (yet): run apply by hand. With --watch
-it re-applies when the map changes or the 5-minute slot moves on.
-run_pipeline.py からは起動しない（手動で apply）。--watch でマップ変更・時間帯変化時に再設定。
+run_pipeline.py starts "apply --watch --only-map <map>" on maps whose maps.json
+entry has "signal_timing" (the profile path). With --watch it re-applies when
+the map changes or the 5-minute slot moves on.
+maps.json に "signal_timing" があるマップでは run_pipeline.py が --watch で起動する。
 """
 
 import argparse
@@ -329,6 +330,7 @@ def main():
             q.add_argument("--dry-run", action="store_true", help="print only / 表示のみ")
             q.add_argument("--watch", action="store_true",
                            help="re-apply on map change or new 5-min slot / マップ変更・時間帯変化で再設定")
+            q.add_argument("--only-map", help="apply only while this map is loaded / このマップの時だけ設定")
     sub.add_parser("test")
     a = ap.parse_args()
     if a.cmd == "test":
@@ -367,9 +369,21 @@ def main():
     client.set_timeout(20.0)
     last = None
     while True:
-        world = client.get_world()
-        w = when()
-        key = (world.get_map().name, day_kind(w), (w.hour * 60 + w.minute) // 5)
+        try:
+            world = client.get_world()
+            map_name = world.get_map().name.split("/")[-1]
+            w = when()
+            key = (map_name, day_kind(w), (w.hour * 60 + w.minute) // 5)
+            if a.only_map and map_name != a.only_map:
+                key = last           # another map (F5): leave its lights alone / 他のマップは触らない
+            elif key != last:
+                world.wait_for_tick(20.0)    # synchronous world: actors after a tick / 同期モード
+        except RuntimeError as exc:          # server busy or loading / サーバーが応答しない
+            print("  no answer from the server (%s), retrying / 再試行" % exc)
+            if not a.watch:
+                raise
+            time.sleep(10.0)
+            continue
         if key != last:
             print("apply %s %s / 設定" % (key[0], w.strftime("%H:%M %a")))
             # restart the cycles only on a new map (first apply); a new 5-minute slot just
