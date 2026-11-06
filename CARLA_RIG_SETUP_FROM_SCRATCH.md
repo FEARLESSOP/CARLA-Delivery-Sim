@@ -1588,6 +1588,10 @@ rename the folder to match the new path (for example
 
 ## 8. New-PC checklist, in order
 
+**One script does all of this:** `setup_new_pc.sh` (see `NEW_PC_SETUP.md`):
+`curl -fsSL https://raw.githubusercontent.com/FEARLESSOP/CARLA-Delivery-Sim/master/setup_new_pc.sh -o setup_new_pc.sh && OLD_PC=user@oldpc bash setup_new_pc.sh`.
+The steps below are the manual version and the reference.
+
 Commands assume the same layout and user folders. Change paths as in 6.4.
 
 ### 8.1 System

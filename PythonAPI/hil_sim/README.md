@@ -66,6 +66,12 @@ hil_sim/
 
 ---
 
+## New PC / 新しい PC
+
+One script sets up everything (CARLA, the rig, venv, Node, content from the old
+PC, skills): see [NEW_PC_SETUP.md](../../NEW_PC_SETUP.md).
+新しい PC は `setup_new_pc.sh` 一つで構築できます。
+
 ## How to run / 実行方法
 
 **The launcher (no arguments):**
