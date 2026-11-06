@@ -89,7 +89,7 @@ else
 fi
 
 # ---------------------------------------------------------------- 2. CARLA
-step "2. CARLA 0.9.16 (packaged release, ~15 GB download)"
+step "2. CARLA 0.9.16 (packaged release, ~8.3 GB download, ~17 GB unpacked)"
 if [ -x "$CARLA_DIR/CarlaUE4.sh" ]; then
   ok "already there"
 else
@@ -149,13 +149,13 @@ fi
 # ------------------------------------------- 6. content from the old PC
 step "6. cooked maps/cars, run-time data and memory from the old PC"
 if [ -z "$OLD_PC" ]; then
-  note "OLD_PC not set: own maps (OitaKosen, OitaStation, PasirRis, circuits), own cars and pods are NOT installed (not in git: too big). Re-run with OLD_PC=user@oldpc, or rebuild them (setup guide 5.10, 5.12, 5.13)"
+  note "OLD_PC not set: git only holds an older (2026-10-29) cooked set: OitaStation, the circuits, the pods and the first own cars. OitaKosen, PasirRis, the newer cars (SF90, Dawn, S800) and every later rebuild are missing. Re-run with OLD_PC=user@oldpc, or rebuild them (setup guide 5.10, 5.12, 5.13; needs UE4 + the CARLA source, 8.4)"
 else
   have rsync || die "rsync missing"
   O="$OLD_PC:$OLD_CARLA_DIR"
   for d in CarlaUE4/Content/DeliveryModels CarlaUE4/Content/LastMileModels CarlaUE4/Content/UserCars \
            CarlaUE4/Content/Japan CarlaUE4/Content/Singapore CarlaUE4/Content/Circuits Import/Japan; do
-    run "mkdir -p '$CARLA_DIR/$d' && rsync -a --info=stats0 '$O/$d/' '$CARLA_DIR/$d/'" && ok "$d"
+    run "mkdir -p '$CARLA_DIR/$d' && rsync -a --delete --info=stats0 '$O/$d/' '$CARLA_DIR/$d/'" && ok "$d"
   done
   run "rsync -a '$O/CarlaUE4/Content/Carla/Blueprints/Vehicles/VehicleFactory.u'* '$CARLA_DIR/CarlaUE4/Content/Carla/Blueprints/Vehicles/'" && ok "VehicleFactory (pods + own cars)"
   run "rsync -a '$O/PythonAPI/hil_sim/data/' '$HIL/data/'" && ok "hil_sim/data (sessions, signal timing, scenarios)"
@@ -237,4 +237,6 @@ Next:
   ../../carla-venv/bin/python calibrate_wheel.py      # once, with the G923 plugged in (PC mode)
   python3 run_pipeline.py                             # the launcher: pick map/traffic on http://localhost:5000
 Full reference: $CARLA_DIR/CARLA_RIG_SETUP_FROM_SCRATCH.md (section 8: checklist)
+Not done by this script: Claude Code itself, Unreal Engine 4.26 + the CARLA source
+(only needed to build new maps/cars/pods: setup guide 8.4).
 EOF
