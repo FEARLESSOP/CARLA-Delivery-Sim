@@ -143,6 +143,12 @@ def face_instance(v, master, tex):
 
 
 def stock_state(v):
+    # the state named for the value when the enum has it (stock BP_SpeedLimit100
+    # says SPEED_LIMIT_90, so the 100 posts were typed traffic.speed_limit.90)
+    # 値の名前の状態があればそれ（純正 100 は 90 を名乗る）
+    named = getattr(unreal.TrafficSignState, "SPEED_LIMIT_%d" % v, None)
+    if named is not None:
+        return named
     p = "%s/BP_SpeedLimit%d" % (STOCK_DIR, v)
     if not lib.does_asset_exist(p):
         return unreal.TrafficSignState.UNKNOWN

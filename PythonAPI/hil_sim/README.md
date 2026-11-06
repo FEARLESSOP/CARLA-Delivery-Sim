@@ -349,12 +349,20 @@ the dashboard's Settings > Delivery sim ("CARLA tooltips"), or start with
 
 `traction_fx.py` (started by `run_pipeline.py`) draws black streaks on the
 road behind each sliding tyre, wider the harder it slides; they fade after
-25 s (`--mark-life`). A tyre counts as sliding above 5 km/h when its slip
-angle is over 9° or its slip ratio over 0.3 (normal cornering stays at 2–6°;
-a handbrake drift is 12–28°; wheelspin or a locked wheel is 0.3–1.0).
+25 s (`--mark-life`). Above 5 km/h the car is sliding when:
+
+- the slip angle at the rear axle is over 8° (a gripping car stays under 7°
+  even in tight junction turns; a drift or spin goes past 10°), or
+- a tyre's slip ratio stays over 0.3 for 0.3 s with throttle or brake at 90 %
+  or more, or the handbrake on (a full-throttle launch, an emergency stop).
+
+CARLA's per-tyre slip readings alone jump to 0.3–0.5 on a gripping car when
+throttle and brake change every tick, which is how the autopilot drives; the
+old rule (tyre slip over 9° or 0.3) drew marks behind a car on autopilot.
 
 タイヤが滑ると路面に黒いスキッドマークが出ます（強く滑るほど太く、25 秒で
-消える）。判定は 5 km/h 以上でスリップ角 9° 超またはスリップ率 0.3 超。
+消える）。判定は 5 km/h 以上で後軸の横滑り角 8° 超、または強いアクセル・ブレーキ・
+サイドブレーキでタイヤのスリップ率 0.3 超が 0.3 秒続いた時（自動運転中の誤表示を修正）。
 
 ---
 
@@ -384,6 +392,7 @@ pipeline restarts generate_traffic on the new map, so the profile is chosen agai
 | Pedestrians waiting at a crossing without signals (38 条; NPA "Pedestrians First") | with the map's `hokousha.json`: stop when a walker stands at the kerb of an unsignalised crossing or walks into it / 信号の無い横断歩道で待つ歩行者に停止 |
 | Delivery vans (`delivery_sim.py`, own BasicAgent, not TM) | `delivery/rules.py` runs the same RuleKeeper for the vans while they drive: full stop at 止まれ, stop for walkers on the road / waiting at unsignalised crossings, speed capped at the lane limit × 0.9 (never above `--speed`). Vans parked for a delivery, charger or yard are left alone. `delivery_sim.py --traffic-profile none` turns it off; other maps unchanged / 配送車も止まれ・歩行者優先・車線速度に従う |
 | Pedestrian signals 青 → 青点滅 → 赤 (道交法施行令 2 条) | `hokousha.py`: one pedestrian phase per signalised crossing from the junction's vehicle phases; the heads (歩行者用信号機, countdown column) show it and walkers wait at the kerb on red and flashing green, finish when already crossing No walk shorter than 5 s (short side phases stay red); flashing only after a walk / 歩行者用信号: 灯器と歩行者が同じ現示に従う |
+| Speed limits (施行令 11 条; maps/osm_city/jp_speeds.py, map guide ch. 29) | each car drives its lane's limit × 0.9: the outer ring 100 km/h (44 posts), JARTIC zones and real OSM limits where they exist, else the legal limit, 60 with a centre line / 30 without; cars slow for the bends ahead (`speed.curve`: the ring's 15 m corners ~24 km/h). The dashboard and the driving window show the lane's limit on your own maps (`lane_limits.py`; CARLA's sign-based limit stays 30 on these keep-left roads) / 速度制限: 外周 100、他は実際の規制・法定速度 |
 | Real signal timing (JARTIC type C, Oita police) | `run_pipeline.py` starts `signal_timing.py apply --watch --only-map <Map>` on maps with maps.json `"signal_timing"` (OitaKosen): cycle and green / yellow 3 s / all-red 2 s by weekday or holiday and 5-minute slot, re-applied every slot; other maps and F5 switches away keep CARLA's times / 実際の信号時間を自動適用 |
 
 Not possible with the TM (left as they are): yellow-light "go on if you

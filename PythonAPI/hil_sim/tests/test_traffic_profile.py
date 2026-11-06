@@ -22,6 +22,7 @@ server: fakes stand in for the world, map, Traffic Manager and snapshots.
 """
 import os
 import sys
+import types
 
 HIL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HIL)
@@ -712,6 +713,30 @@ for mname in ("Carla/Maps/Town03", "Singapore/Maps/PasirRis/PasirRis"):
     helper = gt.setup_traffic_profile(World(m, [Actor(1)]), tm, [1], 'auto')
     check("%s: no helper, no landmark query, 0 TM calls" % mname,
           helper is None and m.landmark_calls == 0 and tm.calls == [])
+
+print("curve speed (the 100 km/h ring's corners) / カーブの速度")
+
+
+class CWP(object):
+    """A waypoint on a path of yaw angles every 5 m. / 5 m ごとの向きの列。"""
+    def __init__(self, yaws, i=0):
+        self.yaws, self.i = yaws, i
+        self.transform = types.SimpleNamespace(rotation=types.SimpleNamespace(yaw=yaws[i]))
+
+    def next(self, d):
+        return [CWP(self.yaws, self.i + 1)] if self.i + 1 < len(self.yaws) else []
+
+
+cc = {"lat_accel": 3.0, "decel": 2.5, "lookahead_m": 80, "step_m": 5}
+straight = CWP([0.0] * 40)
+check("straight road: the posted 90 stays", tp.curve_kmh(straight, 90.0, cc) == 90.0)
+# a 15 m-radius 90 deg corner starting 10 m ahead: 19.1 deg of yaw per 5 m / 半径 15 m の角
+corner = CWP([0.0, 0.0, 0.0] + [19.1 * k for k in range(1, 6)] + [90.0] * 30)
+v_near = tp.curve_kmh(corner, 90.0, cc)
+check("a 15 m corner 10 m ahead: well under 40 km/h", v_near < 40.0, "%.1f" % v_near)
+check("... the same corner far ahead allows more now",
+      tp.curve_kmh(CWP([0.0] * 12 + [19.1 * k for k in range(1, 6)] + [90.0] * 30), 90.0, cc) > v_near)
+check("stand-in waypoints without a transform: no change", tp.curve_kmh(object(), 50.0, cc) == 50.0)
 
 print("\n%d failure(s)" % len(FAILS) + (": " + ", ".join(FAILS) if FAILS else ""))
 sys.exit(1 if FAILS else 0)

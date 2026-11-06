@@ -187,6 +187,8 @@
     "road_fixes": true,
     "road_style": "japan",
     "signal_timing": "data/signal_timing_oita.json",
+    "ring_speed_kmh": 100,
+    "_ring_speed_doc": "the outer ring road's limit (osm_city/jp_speeds.py, with 274 posts after every joining street); the other roads keep their real limit (JARTIC zones, real OSM maxspeed, else the legal 60 with a centre line / 30 without). The user asked for it 2026-11-06",
     "_signal_timing_doc": "run_pipeline.py starts signal_timing.py apply --watch on this map: the Oita police (JARTIC type C) cycle and green/yellow/all-red by weekday/holiday and 5-minute slot, re-applied every slot (the user asked for it at every start, 2026-11-06)",
     "ring_guardrail": true,
     "_ring_guardrail_doc": "white W-beam guardrail (props.py) 0.5 m behind the ring road's outer kerb, all the way round: the user asked for a barrier so cars cannot drive onto the grass outside the ring (2026-11-04)",

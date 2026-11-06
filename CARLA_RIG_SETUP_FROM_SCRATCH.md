@@ -728,9 +728,13 @@ the header is now flushed at open, a fix for 0-byte files) and
 ### 5.7 Skid marks (`traction_fx.py`)
 
 **What (2026-10-28):** dark debug-line streaks behind each sliding tyre,
-wider the harder it slides, fading after `--mark-life` (25 s). A tyre is
-sliding above 5 km/h when its slip angle is over 9° or its slip ratio over
-0.3 (from `get_telemetry_data()`). The pipeline starts it; turn it off with
+wider the harder it slides, fading after `--mark-life` (25 s). Since
+2026-11-06 a slide is the rear-axle slip angle over 8° (from velocity and yaw
+rate), or a tyre slip ratio over 0.3 held 0.3 s with a hard pedal (>= 0.9) or
+the handbrake. The old per-tyre rule (slip angle 9°, ratio 0.3) drew marks
+behind a car on autopilot: CARLA's tyre slip reads 0.3-0.5 on a gripping car
+whose pedals change every tick (TM-driven Tesla and RX-7, median 0.31-0.33 at
+30 km/h). The pipeline starts it; turn it off with
 `--no-traction-fx`. Options: `--host --port --mark-life --role`. Test:
 `tests/test_traction_fx.py`.
 
@@ -1354,6 +1358,19 @@ with all on. Dashboard: time slider, day length − / + (1 min to 24 h), lamps
 Auto / On / Off and brightness.
 Test: `tests/test_weather_cycle.py`; UE: `maps/ue_jp_gaito_test.py` (14/14).
 
+### 5.18 Speed limits (`maps/osm_city/jp_speeds.py`, `lane_limits.py`)
+
+**What (2026-11-06, live on OitaKosen):** the outer ring at 100 km/h
+(maps.json `ring_speed_kmh`, 44 posts BP_JpSokudo100), every other road at
+its real limit: JARTIC 最高速度 zones and real OSM `maxspeed` (the user's own
+.osm), else the legal 60 with a centre line / 30 without. Ten 40 posts that
+came from roadnet's invented class defaults were removed. NPCs drive lane
+speed x 0.9 and slow for bends (`traffic_profiles.json` `speed.curve`); the
+dashboard and HUD show the lane limit (`lane_limits.py`). Note: the
+`speed_limit_kmh` column of the logged data is now that lane limit on your own
+maps. CARLA's own `get_speed_limit()` ignores the posts on these keep-left
+roads. Map guide ch. 29.
+
 ---
 
 ## 6. Changes to the packaged CARLA folder, and how to reproduce each one
@@ -1721,7 +1738,7 @@ Dates are JST.
 | 2026-11-02 | Oita Kosen imported (campus, dorm, 7-Eleven; Japanese buildings, road style, road fixes); landmark build order chosen; Pasir Ris large queued |
 | 2026-11-03 | Oita Kosen walker navmesh by hand; pipeline fixes (keep_left key, hero TM port, walker retries); unattended demo with the scratch watchdog |
 | 2026-11-04 | seasonal Japanese trees + wind + dashboard card; JARTIC signs and signal timing (road-sign-creator agent); akeno area features; blinkers, mirrors, lenses on own cars; `carla-car-importer` skill; skills repo renamed `carla-skills`; Pasir Ris large deferred; this document |
-| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder; day/night cycle + dynamic weather, rain grounds the drones |
+| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder; day/night cycle + dynamic weather, rain grounds the drones; street lamps; skid marks fixed for autopilot; speed limits (ring 100, real/legal elsewhere) |
 
 ---
 

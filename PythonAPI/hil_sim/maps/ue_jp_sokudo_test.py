@@ -65,9 +65,13 @@ def main():
         a = unreal.OpenDriveToMap.spawn_actor_with_check_no_collisions(cls, unreal.Transform())
         check("%d: is a CARLA TrafficSignBase" % v, isinstance(a, unreal.TrafficSignBase), a.get_class().get_name())
         sp = "%s/BP_SpeedLimit%d" % (STOCK, v)
-        want = unreal.get_default_object(lib.load_blueprint_class(sp)).get_editor_property("TrafficSignState") \
-            if lib.does_asset_exist(sp) else unreal.TrafficSignState.UNKNOWN
-        check("%d: TrafficSignState as CARLA's" % v, a.get_editor_property("TrafficSignState") == want,
+        # the state named for the value when the enum has one (stock 100 says 90),
+        # else the stock BP's / 値の名前の状態、無ければ純正 BP の状態
+        want = getattr(unreal.TrafficSignState, "SPEED_LIMIT_%d" % v, None)
+        if want is None:
+            want = unreal.get_default_object(lib.load_blueprint_class(sp)).get_editor_property("TrafficSignState") \
+                if lib.does_asset_exist(sp) else unreal.TrafficSignState.UNKNOWN
+        check("%d: TrafficSignState for its value" % v, a.get_editor_property("TrafficSignState") == want,
               str(a.get_editor_property("TrafficSignState")))
         comps = [c for c in a.get_components_by_class(unreal.StaticMeshComponent) if c.static_mesh]
         ok = len(comps) == 1 and comps[0].static_mesh.get_name() == "SM_JpSokudo%d" % v

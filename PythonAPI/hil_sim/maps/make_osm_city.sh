@@ -68,6 +68,13 @@ echo "== 3-D model"
 "$VENV/bin/python" "$HERE/osm_city/signs.py" "$OUT"
 # maps.json "jartic_d" only: Japanese sign plates (no-op elsewhere) / 日本の標識板（JARTIC 地図のみ）
 "$VENV/bin/python" "$HERE/osm_city/jp_signs.py" "$OSM" "$OUT"
+# Japan maps: real speed limits (JARTIC zones, real OSM maxspeed, else the legal
+# 60 with a centre line / 30 without) and the ring's maps.json "ring_speed_kmh"
+# with its posts (guide ch. 29) / 日本の地図: 実際の最高速度と外周道路の速度
+if [ "$("$CARLA_PY" -c "import json,sys; c=json.load(open(sys.argv[1]))[sys.argv[2]]; print(int(c.get('road_style') == 'japan'))" "$HERE/maps.json" "$KEY")" = 1 ]; then
+    RING="$("$CARLA_PY" -c "import json,sys; v=json.load(open(sys.argv[1]))[sys.argv[2]].get('ring_speed_kmh'); print('--ring %d' % v if v else '')" "$HERE/maps.json" "$KEY")"
+    "$VENV/bin/python" "$HERE/osm_city/jp_speeds.py" "$OUT" "$OUT/$NAME.xodr" "$OUT/$NAME.xodr" $RING --osm "$OSM"
+fi
 # Japan maps: crossings for the walkers (hokousha.json, road logic read only) and
 # the pedestrian heads at signalised crossings (guide ch. 26)
 # 日本の地図: 横断歩道データと歩行者用信号機（ガイド 26 章）

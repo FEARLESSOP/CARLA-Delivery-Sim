@@ -31,7 +31,14 @@
         "factor": 0.9,
         "fallback_kmh": 30,
         "min_kmh": 10,
-        "cyclist_max_kmh": 18
+        "cyclist_max_kmh": 18,
+        "curve": {
+          "_doc": "slow for the bends ahead (the posted limit stays): the tightest bend within braking distance at lat_accel m/s2, braking at decel m/s2 before it; the 100 km/h ring's 15 m corners give ~24 km/h / 前方のカーブで減速",
+          "lat_accel": 3.0,
+          "decel": 2.5,
+          "lookahead_m": 80,
+          "step_m": 5
+        }
       },
       "no_lane_change_before_junction_m": 30,
       "yield_to_walkers": {

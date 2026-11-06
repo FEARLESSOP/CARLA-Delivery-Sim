@@ -43,7 +43,7 @@ import bpy
 import bmesh
 from mathutils import Matrix, Vector
 
-VALUES = [20, 30, 40, 50, 60, 70, 80]      # 規制速度 on ordinary roads and motorways (km/h)
+VALUES = [20, 30, 40, 50, 60, 70, 80, 100]     # 規制速度 on ordinary roads and motorways (km/h)
 FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 RED, BLUE, WHITE = (236, 27, 36), (28, 96, 179), (250, 250, 250)
 POLE_R = 0.03025            # 60.5 mm / 白色支柱 φ60.5

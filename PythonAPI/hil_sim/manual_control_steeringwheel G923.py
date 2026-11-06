@@ -135,6 +135,7 @@ import keybinds  # noqa: E402
 # F5 map cycle + the map-switch request to run_pipeline.py (map_switch.py)
 # F5 のマップ巡回とパイプラインへのマップ切替依頼
 import map_switch  # noqa: E402
+from lane_limits import LaneLimits  # noqa: E402
 
 if sys.version_info >= (3, 0):
 
@@ -1257,6 +1258,8 @@ class HUD(object):
         self._alert_cooldown = {}     # category -> earliest next alert time
         self._alert_frame = 0
         self._speeding_since = None
+        self._lane_limits = LaneLimits()   # the lane's own limit on your maps / 自作マップは車線の制限速度
+        self._wmap = (None, None)          # (world id, carla.Map), parsed once per world / ワールド毎に 1 回
         self._sounds = self._make_sounds()
         # Vehicle roster, rescanned at 1 Hz rather than per frame.
         # world.get_actors() rebuilds a Python object for every actor in the
@@ -1333,6 +1336,18 @@ class HUD(object):
             except Exception:
                 pass
 
+    def speed_limit(self, world, player):
+        """The lane's posted limit on your own maps (Japan posts no sign for the
+        legal 60 / 30), else CARLA's last sign. / 車線の制限速度、他は標識の値。"""
+        try:
+            wid = world.world.id
+            if self._wmap[0] != wid:
+                self._wmap = (wid, world.world.get_map())
+            kmh = self._lane_limits.limit(self._wmap[1], player)
+            return float(kmh) if kmh else float(player.get_speed_limit())
+        except Exception:
+            return 0.0
+
     def _check_driver_alerts(self, world):
         """Periodic driving-quality checks: speeding and forward TTC.
         (Lane crossing and collision alerts fire from their sensors.)
@@ -1352,10 +1367,7 @@ class HUD(object):
             return
 
         # Speeding, sustained / 速度超過（継続時のみ）
-        try:
-            limit = float(player.get_speed_limit())
-        except Exception:
-            limit = 0.0
+        limit = self.speed_limit(world, player)
         now = time.time()
         if limit > 0 and speed > limit + ALERT_RULES['speeding_kmh_over']:
             if self._speeding_since is None:

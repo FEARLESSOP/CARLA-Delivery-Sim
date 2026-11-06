@@ -52,6 +52,7 @@ import keybinds
 import seasons
 import vehicle_tuning
 import weather_cycle
+from lane_limits import LaneLimits
 import windows_control
 
 
@@ -608,6 +609,9 @@ def _wait_for_server(host, port):
     print("[dashboard] CARLA RPC port is up")
 
 
+LANE_LIMITS = LaneLimits()
+
+
 def telemetry_worker(host, port, log_dir=None):
     # 5 s rather than 10 s: while the simulator is reachable but wedged
     # (a synchronous world with no tick master), this timeout is how long a
@@ -766,9 +770,12 @@ def telemetry_worker(host, port, log_dir=None):
             yaw_rate = IMU_DATA.get("gz", 0.0)  # rad/s / 単位：rad/s
             curvature = (yaw_rate / speed_ms) if speed_ms > 1.0 else 0.0
 
-            # Speed limit + traffic light. / 制限速度と信号。
+            # Speed limit + traffic light: on your own maps the lane's posted
+            # limit (lane_limits.py: no sign marks the legal 60 / 30), else
+            # CARLA's last 274 sign. / 制限速度（自作マップは車線の値）と信号。
             try:
-                speed_limit = float(hero.get_speed_limit())
+                lane_kmh = LANE_LIMITS.limit(carla_map, hero)
+                speed_limit = float(lane_kmh) if lane_kmh else float(hero.get_speed_limit())
             except Exception:
                 speed_limit = 0.0
             try:

@@ -164,6 +164,39 @@ def lane_speeds_from_xodr(xodr):
     return by_section, by_lane
 
 
+def curve_kmh(wp, kmh, cfg):
+    """Speed for the bends ahead: the posted limit stays (100 on the ring), but a
+    car slows so it takes the tightest bend within its braking distance at
+    ``lat_accel`` and brakes at ``decel`` before it (the ring's 15 m corners:
+    ~24 km/h). Waypoints only, no RPC. / 前方のカーブに合わせた速度。"""
+    a_lat = float(cfg.get('lat_accel', 3.0))
+    dec = float(cfg.get('decel', 2.5))
+    step = float(cfg.get('step_m', 5.0))
+    v = kmh / 3.6
+    reach = min(float(cfg.get('lookahead_m', 80.0)), v * v / (2.0 * dec) + 15.0)
+    best = kmh
+    cur, d = wp, 0.0
+    try:
+        yaw0 = cur.transform.rotation.yaw
+    except AttributeError:                # stand-in waypoints / 代用の waypoint
+        return kmh
+    while d < reach:
+        nxt = cur.next(step)
+        if not nxt:
+            break
+        cur = nxt[0]
+        d += step
+        dyaw = abs((cur.transform.rotation.yaw - yaw0 + 180.0) % 360.0 - 180.0)
+        yaw0 = cur.transform.rotation.yaw
+        k = math.radians(dyaw) / step                  # curvature (1/m) / 曲率
+        if k < 1e-4:
+            continue
+        v_bend = math.sqrt(a_lat / k)
+        v_now = math.sqrt(v_bend * v_bend + 2.0 * dec * max(0.0, d - step))
+        best = min(best, v_now * 3.6)
+    return best
+
+
 def _forward(wp):
     """True if traffic on this lane moves towards growing s. / 車線の進行が s 増加方向か。"""
     try:
@@ -363,6 +396,8 @@ class RuleKeeper(object):
         if kmh is None or kmh <= 0.0:
             kmh = float(cfg.get('fallback_kmh', 30))
         kmh = max(float(cfg.get('min_kmh', 10)), kmh * float(cfg.get('factor', 1.0)))
+        if wp is not None and cfg.get('curve'):
+            kmh = min(kmh, max(float(cfg.get('min_kmh', 10)), curve_kmh(wp, kmh, cfg['curve'])))
         if vid in self.cyclists:
             kmh = min(kmh, float(cfg.get('cyclist_max_kmh', 18)))
         return kmh

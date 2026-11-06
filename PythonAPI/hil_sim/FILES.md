@@ -41,6 +41,7 @@ A map of the important files, by topic. Paths are relative to
 | `hokousha.py` | Japanese pedestrian signals: phase from the car lights, walkers obey (ch. 26) |
 | `signal_timing.py`, `data/signal_timing_oita.json` | real police signal timing (JARTIC type C); auto-started on maps with maps.json `"signal_timing"` (ch. 18) |
 | `lane_spawns.py` | spawn points on lanes |
+| `lane_limits.py` | the speed limit of the lane a car is on (dashboard, driving window) |
 
 ## Delivery simulation
 
@@ -63,6 +64,7 @@ A map of the important files, by topic. Paths are relative to
 | `maps/osm_city/jp_shingo.py` + `maps/ue_jp_shingo*.py` | Japanese traffic signal model BP_JpShingo (ch. 24) |
 | `maps/osm_city/jp_sokudo.py` + `maps/ue_jp_sokudo*.py` | blue-number speed posts BP_JpSokudo (ch. 25) |
 | `maps/osm_city/hokousha_crossings.py`, `jp_hokousha*.py` + `maps/ue_jp_hokousha.py` | pedestrian signal heads (ch. 26) |
+| `maps/osm_city/jp_speeds.py` | speed limits: ring 100, real limits, legal 60/30 (ch. 29) |
 | `maps/osm_city/gaito.py`, `jp_gaito.py` + `maps/ue_jp_gaito.py` | street lamps that light up, BP_JpGaito (ch. 28) |
 | `maps/osm_city/check_roads.py`, `check_signal_poles.py` | checks: nothing on the road, poles where CARLA puts them |
 | `maps/build/<Map>/` | build output (git-ignored): xodr, FBX, photos, logs |
