@@ -46,6 +46,8 @@ import map_switch  # noqa: E402
 # Dashboard Windows card: open / close the optional viewer windows
 # ダッシュボードの「ウィンドウ」カード：任意ビューアの開閉
 import windows_control  # noqa: E402
+# live control from the dashboard, the launcher's files / ダッシュボードからの操作
+import pipeline_control  # noqa: E402
 DATA_DIR = BASE_DIR / "data"                        # simulation database / シミュレーションデータの保存先
 
 
@@ -402,6 +404,12 @@ def signal_group(proc, sig):
 
 
 def main():
+    # No arguments: the launcher. Only the dashboard starts; the map, traffic,
+    # pods and everything else are picked there (launcher.py).
+    # 引数なし: ランチャー（ダッシュボードだけ起動し、そこで設定して起動）
+    if len(sys.argv) == 1:
+        import launcher
+        return launcher.main()
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=2000)
@@ -426,6 +434,9 @@ def main():
                         "the dashboard's Day & weather card can also turn each off) "
                         "/ 昼夜サイクル・天気変化なし")
     p.add_argument("--dashboard-port", type=int, default=5000)
+    p.add_argument("--external-dashboard", action="store_true",
+                   help="the dashboard is already running (the launcher started it): "
+                        "do not start another / ダッシュボードは起動済み（ランチャー）")
     p.add_argument("--no-sensor-viewer", action="store_true",
                    help="Start without the multi-sensor viewer window (open it "
                         "later from the dashboard's Windows card) / センサー"
@@ -530,6 +541,10 @@ def main():
         print("[pipeline] ERROR: venv python not found at %s" % VENV_PY)
         return 1
 
+    # Dashboard requests: read from now on, so a request made while CARLA is
+    # still booting is applied once the clients run (only files from earlier
+    # runs are old). / 起動中の依頼も、クライアント起動後に処理する
+    control = pipeline_control.Reader(pipeline_control.CONTROL_PATH, pipeline_control.ACTIONS)
     children = []  # list of (proc, name) / (proc, name) のリスト
     # True if the user runs their own CARLA (--no-sim): then we never kill
     # it. Auto-reused leftovers from a previous run ARE killed on shutdown.
@@ -543,6 +558,7 @@ def main():
         # the dashboard's Windows card must not offer controls of a dead
         # pipeline / 終了したパイプラインの操作をダッシュボードに出さない
         windows_control.clear(windows_control.STATUS_PATH)
+        pipeline_control.write_json(pipeline_control.STATE_PATH, {"phase": "stopped", "t": time.time()})
         for proc, name in reversed(children):
             if proc.poll() is None:
                 print("[pipeline] terminating %s (pid=%d)" % (name, proc.pid))
@@ -702,7 +718,7 @@ def main():
         # ダッシュボードはマップ切替後も同じポートを使う（ブラウザのタブが
         # 同じ URL に再接続できるように）。
         dport = None
-        if not args.no_dashboard:
+        if not args.no_dashboard and not args.external_dashboard:
             dport = pick_free_port(args.dashboard_port)
             if dport != args.dashboard_port:
                 print("[pipeline] dashboard port %d busy -> using %d"
@@ -737,6 +753,81 @@ def main():
             control_path=windows_control.CONTROL_PATH,
             status_path=windows_control.STATUS_PATH)
 
+        def traffic_cmd(map_name):
+            """generate_traffic.py for the current options (start, F5, live change).
+            現在の設定の generate_traffic.py コマンド。"""
+            cmd = [str(VENV_PY), "generate_traffic.py",
+                   "--host", args.host, "--port", str(args.port),
+                   "--tm-port", str(args.tm_port),
+                   "-n", str(args.vehicles),
+                   "-w", str(args.walkers),
+                   "--cyclists", str(args.cyclists if args.vehicles or args.walkers else 0),
+                   "--wheelchair-share", str(args.wheelchair_share),
+                   "--runners", str(args.runners)]
+            lht = map_is_left_hand(map_name)
+            if lht and not args.no_hybrid:
+                # In hybrid mode the traffic manager moves far-away cars along
+                # the lane in the right-hand direction: on a left-hand map
+                # they step back and forth on the spot. Full physics for all.
+                # 左側通行マップではハイブリッドの遠方車両が往復して止まるため無効化。
+                print("[pipeline] %s is left-hand traffic -> hybrid physics off (all "
+                      "cars fully simulated) / 左側通行のためハイブリッド無効" % map_name)
+            if not args.no_hybrid and not lht:
+                # Full wheeled-vehicle physics for every car in the town runs
+                # on the simulator's CPU whether or not anyone can see it.
+                # Hybrid mode keeps physics only within 70 m of the hero and
+                # moves the rest along their waypoints, which is by far the
+                # largest single CPU saving in this rig. Traffic the driver
+                # can actually interact with is unaffected.
+                # 町中の全車両の四輪物理演算は、見えているかどうかに関係なく
+                # シミュレータのCPUで実行される。ハイブリッドモードでは
+                # hero から70m以内のみ物理演算を行い、残りはウェイポイントに
+                # 沿って移動させる。本環境で最も効果の大きいCPU削減であり、
+                # ドライバーが実際に関わる範囲の交通は影響を受けない。
+                cmd.append("--hybrid")
+            return cmd
+
+        def delivery_cmd():
+            """delivery_sim.py for the current options. / 現在の設定の delivery_sim.py。"""
+            cmd = [str(VENV_PY), "delivery_sim.py",
+                   "--host", args.host, "--port", str(args.port),
+                   "--map", "", "--vans", str(args.delivery),
+                   "--vehicles", "0", "--walkers", "0",
+                   "--tm-port", str(args.tm_port)]
+            if not args.no_traffic:
+                cmd.append("--passive")
+            # start delivering at once instead of after a 20-90 s wait
+            # 20〜90 秒待たずにすぐ配送を始める
+            cmd.append("--first-now")
+            if args.delivery_args:
+                cmd += shlex.split(args.delivery_args)
+            return cmd
+
+        def mc_cmd(start_vehicle):
+            """The driving window for the current options. / 運転ウィンドウのコマンド。"""
+            cmd = [str(VENV_PY), str(CONTROL_SCRIPT),
+                   "--host", args.host, "--port", str(args.port),
+                   "--res", args.control_res,
+                   "--filter", args.vehicle_filter,
+                   "--start-vehicle", start_vehicle,
+                   "--fov", str(args.fov),
+                   "--fps", str(args.fps),
+                   "--mirror-fps", str(args.mirror_fps),
+                   # F5 asks us to switch the map instead of loading it there
+                   # F5 はマップを自分で読まず、パイプラインに切替を依頼する
+                   "--map-request", map_switch.REQUEST_PATH]
+            if args.autopilot:
+                cmd.append("--autopilot")
+            # The hero's autopilot (--autopilot or the P key) gets its own TM:
+            # set_autopilot() would otherwise create the traffic TM server in
+            # manual_control before generate_traffic starts, and the traffic
+            # cars would join a TM that is never stepped (they stand still).
+            # hero の自動運転は別ポートの TM を使う（交通車両が動かなくなるため）。
+            cmd += ["--tm-port", str(args.tm_port + 1)]
+            if args.keyboard:
+                cmd.append("--keyboard")
+            return cmd
+
         def start_clients(map_name, start_vehicle):
             """Start every client of the world (all but CarlaUE4) for
             ``map_name``: at startup, and again after each F5 map switch with
@@ -756,35 +847,7 @@ def main():
             watchdog_armed_at = float("inf")
 
             if not args.no_traffic:
-                cmd = [str(VENV_PY), "generate_traffic.py",
-                       "--host", args.host, "--port", str(args.port),
-                       "--tm-port", str(args.tm_port),
-                       "-n", str(args.vehicles),
-                       "-w", str(args.walkers),
-                       "--cyclists", str(args.cyclists if args.vehicles or args.walkers else 0),
-                       "--wheelchair-share", str(args.wheelchair_share),
-                       "--runners", str(args.runners)]
-                lht = map_is_left_hand(map_name)
-                if lht and not args.no_hybrid:
-                    # In hybrid mode the traffic manager moves far-away cars along
-                    # the lane in the right-hand direction: on a left-hand map
-                    # they step back and forth on the spot. Full physics for all.
-                    # 左側通行マップではハイブリッドの遠方車両が往復して止まるため無効化。
-                    print("[pipeline] %s is left-hand traffic -> hybrid physics off (all "
-                          "cars fully simulated) / 左側通行のためハイブリッド無効" % map_name)
-                if not args.no_hybrid and not lht:
-                    # Full wheeled-vehicle physics for every car in the town runs
-                    # on the simulator's CPU whether or not anyone can see it.
-                    # Hybrid mode keeps physics only within 70 m of the hero and
-                    # moves the rest along their waypoints, which is by far the
-                    # largest single CPU saving in this rig. Traffic the driver
-                    # can actually interact with is unaffected.
-                    # 町中の全車両の四輪物理演算は、見えているかどうかに関係なく
-                    # シミュレータのCPUで実行される。ハイブリッドモードでは
-                    # hero から70m以内のみ物理演算を行い、残りはウェイポイントに
-                    # 沿って移動させる。本環境で最も効果の大きいCPU削減であり、
-                    # ドライバーが実際に関わる範囲の交通は影響を受けない。
-                    cmd.append("--hybrid")
+                cmd = traffic_cmd(map_name)
                 helper_cmds["generate_traffic"] = cmd
                 try:
                     heartbeat.unlink()
@@ -837,18 +900,7 @@ def main():
                 # delivery_sim 自身が tick マスタになる。マップは読込済み（F5
                 # 切替後も同様）なので --map "" で現在のマップを使う。建物・住所・
                 # ヤードは delivery_sim が読込済みワールドから取得する。
-                cmd = [str(VENV_PY), "delivery_sim.py",
-                       "--host", args.host, "--port", str(args.port),
-                       "--map", "", "--vans", str(args.delivery),
-                       "--vehicles", "0", "--walkers", "0",
-                       "--tm-port", str(args.tm_port)]
-                if not args.no_traffic:
-                    cmd.append("--passive")
-                # start delivering at once instead of after a 20-90 s wait
-                # 20〜90 秒待たずにすぐ配送を始める
-                cmd.append("--first-now")
-                if args.delivery_args:
-                    cmd += shlex.split(args.delivery_args)
+                cmd = delivery_cmd()
                 helper_cmds["delivery"] = cmd
                 children.append((launch(cmd, BASE_DIR, "delivery"), "delivery"))
             elif args.drone_cams:
@@ -912,27 +964,7 @@ def main():
             # オプション、F5 切替後はそれまでにユーザーが開閉した状態）。
             windows.start_wanted(children)
 
-            cmd = [str(VENV_PY), str(CONTROL_SCRIPT),
-                   "--host", args.host, "--port", str(args.port),
-                   "--res", args.control_res,
-                   "--filter", args.vehicle_filter,
-                   "--start-vehicle", start_vehicle,
-                   "--fov", str(args.fov),
-                   "--fps", str(args.fps),
-                   "--mirror-fps", str(args.mirror_fps),
-                   # F5 asks us to switch the map instead of loading it there
-                   # F5 はマップを自分で読まず、パイプラインに切替を依頼する
-                   "--map-request", map_switch.REQUEST_PATH]
-            if args.autopilot:
-                cmd.append("--autopilot")
-            # The hero's autopilot (--autopilot or the P key) gets its own TM:
-            # set_autopilot() would otherwise create the traffic TM server in
-            # manual_control before generate_traffic starts, and the traffic
-            # cars would join a TM that is never stepped (they stand still).
-            # hero の自動運転は別ポートの TM を使う（交通車両が動かなくなるため）。
-            cmd += ["--tm-port", str(args.tm_port + 1)]
-            if args.keyboard:
-                cmd.append("--keyboard")
+            cmd = mc_cmd(start_vehicle)
             mc = launch(cmd, BASE_DIR, "manual_control")
             children.append((mc, "manual_control"))
             return mc
@@ -980,6 +1012,109 @@ def main():
                 return False
             return load_world_map(args.host, args.port, map_name)
 
+        # -- live control from the dashboard (pipeline_control.py) --------
+        # ダッシュボードからの操作（交通・配送車・マップ・自車・補助の入切・停止）
+        pending = {"map": None, "stop": False}
+        helper_builders = {
+            "ffb": lambda: [str(VENV_PY), str(FFB_SCRIPT), "--host", args.host, "--port", str(args.port)]
+            + (["--strength", str(args.ffb_strength)] if args.ffb_strength is not None else []),
+            "traction_fx": lambda: [str(VENV_PY), "traction_fx.py", "--host", args.host, "--port", str(args.port)],
+            "weather_cycle": lambda: [str(VENV_PY), "weather_cycle.py", "--host", args.host, "--port", str(args.port)],
+        }
+        helper_flags = {"ffb": ("ffb", True), "traction_fx": ("no_traction_fx", False),
+                        "weather_cycle": ("no_weather_cycle", False)}
+
+        def write_state(phase):
+            # the last known state (every child is polled elsewhere each loop;
+            # an extra poll() here would disturb that order) / 直近の状態を使う
+            alive = sorted({n for p_, n in children if p_.returncode is None})
+            pipeline_control.write_json(pipeline_control.STATE_PATH, {
+                "phase": phase, "pid": os.getpid(), "t": time.time(), "map": current_map,
+                "vehicles": args.vehicles, "walkers": args.walkers, "cyclists": args.cyclists,
+                "traffic": not args.no_traffic, "delivery": args.delivery, "start_vehicle": start_vehicle,
+                "ffb": args.ffb, "traction_fx": not args.no_traction_fx,
+                "weather_cycle": not args.no_weather_cycle, "running": alive,
+                "launcher": bool(args.external_dashboard)})
+
+        def restart_child(name, cmd, grace):
+            """Stop the named child (if any) and start ``cmd`` in its place.
+            名前の子プロセスを止めて cmd を起動（cmd が None なら止めるだけ）。"""
+            nonlocal watchdog_armed_at
+            old = [(p_, n) for p_, n in children if n == name]
+            if old:
+                stop_procs(old, grace)
+                children[:] = [c for c in children if c[1] != name]
+            if name == "generate_traffic":
+                try:
+                    heartbeat.unlink()
+                except OSError:
+                    pass
+            if cmd is None:
+                helper_cmds.pop(name, None)
+                return None
+            helper_cmds[name] = cmd
+            proc = launch(cmd, BASE_DIR, name)
+            children.append((proc, name))
+            if name == "generate_traffic":
+                watchdog_armed_at = time.time() + args.stall_grace
+            return proc
+
+        def handle_control(req, mc):
+            """Apply one dashboard request; returns the (maybe new) driving
+            window. / 依頼を 1 件処理し、運転ウィンドウを返す。"""
+            nonlocal start_vehicle
+            a = req["action"]
+            print("[pipeline] dashboard request: %s / ダッシュボードの依頼"
+                  % json.dumps({k: v for k, v in req.items() if k not in ("seq", "t")}))
+            if a == "traffic":
+                if args.no_traffic:
+                    print("[pipeline] started without traffic (delivery owns the tick): "
+                          "relaunch to add traffic / 交通なしで起動したため再起動が必要")
+                    return mc
+                for k in ("vehicles", "walkers", "cyclists"):
+                    if req.get(k) is not None:
+                        setattr(args, k, max(0, int(req[k])))
+                # generate_traffic is the tick master: restart it, never stop it
+                # (with 0 cars it still steps the world) / tick マスタは止めず再起動
+                restart_child("generate_traffic", traffic_cmd(current_map), 20.0)
+            elif a == "delivery":
+                args.delivery = max(0, int(req.get("vans", 0)))
+                restart_child("delivery", delivery_cmd() if args.delivery > 0 else None, 15.0)
+                if args.delivery > 0:
+                    windows.unavailable.pop("drone_cams", None)
+                else:
+                    windows.close(children, "drone_cams")
+                    windows.unavailable["drone_cams"] = "no delivery pods"
+            elif a == "map" and req.get("map"):
+                pending["map"] = str(req["map"])
+                signal_group(mc, signal.SIGTERM)
+            elif a == "vehicle" and req.get("vehicle"):
+                start_vehicle = str(req["vehicle"])
+                stop_procs([(mc, "manual_control")], 10.0)
+                children[:] = [c for c in children if c[0] is not mc]
+                mc = launch(mc_cmd(start_vehicle), BASE_DIR, "manual_control")
+                children.append((mc, "manual_control"))
+            elif a == "helper":
+                name, on = req.get("name"), bool(req.get("on"))
+                if name in windows_control.WINDOWS:
+                    if on and windows.can_open(name):
+                        windows.open(children, name)
+                    elif not on:
+                        windows.close(children, name)
+                elif name in helper_builders:
+                    flag, positive = helper_flags[name]
+                    setattr(args, flag, on if positive else not on)
+                    running = any(n == name and p_.poll() is None for p_, n in children)
+                    if on and not running:
+                        restart_child(name, helper_builders[name](), 5.0)
+                        restart_left[name] = 3
+                    elif not on and running:
+                        restart_child(name, None, 8.0)
+            elif a == "stop":
+                pending["stop"] = True
+                signal_group(mc, signal.SIGTERM)
+            return mc
+
         current_map = args.map or world_map_name(args.host, args.port)
         start_vehicle = args.start_vehicle
         while True:
@@ -990,6 +1125,13 @@ def main():
             # 監視: manual_control の終了を待ち、落ちた補助プロセスを再起動する。
             while mc.poll() is None:
                 time.sleep(1.0)
+                req = control.take()
+                if req is not None:
+                    try:
+                        mc = handle_control(req, mc)
+                    except Exception as exc:     # never take the rig down / リグを止めない
+                        print("[pipeline] request failed: %s / 依頼の処理に失敗" % exc)
+                write_state("running")
 
                 # The simulator itself is not restartable: every actor, sensor
                 # and the hero vehicle die with it. When it goes, the driving
@@ -1123,6 +1265,11 @@ def main():
                             watchdog_armed_at = time.time() + args.stall_grace
                             break
             rc = mc.returncode
+            if pending["stop"]:
+                print("[pipeline] stop requested from the dashboard / ダッシュボードから停止")
+                write_state("stopping")
+                terminate_all()
+                return 0
 
             # F5 / Shift+F5: the driving window asked for another map and
             # closed. Switch it for every client while CarlaUE4 keeps running,
@@ -1130,7 +1277,13 @@ def main():
             # F5 / Shift+F5：運転ウィンドウが別マップを依頼して終了した。
             # CarlaUE4 は動かしたまま全クライアントごと切り替え、同じ
             # オプション・同じ自車で全て再起動する。
-            req = take_map_request(rc)
+            if pending["map"]:
+                # the dashboard picked a map: same switch as F5, same car
+                # ダッシュボードでマップを選択（F5 と同じ切替、同じ自車）
+                req = {"map": pending["map"], "hero": None, "from": current_map}
+                pending["map"] = None
+            else:
+                req = take_map_request(rc)
             if req is None:
                 break
             target = req["map"]
@@ -1139,6 +1292,7 @@ def main():
                   % (req.get("from") or current_map, target, rc,
                      req["hero"] or start_vehicle or "-"))
             windows.write_status(children, "switching", target)
+            write_state("switching")
             how = switch_map(
                 target, stop_clients,
                 lambda: reset_world_async(args.host, args.port),

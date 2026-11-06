@@ -1387,6 +1387,44 @@ dashboard and HUD show the lane limit (`lane_limits.py`). Note: the
 maps. CARLA's own `get_speed_limit()` ignores the posts on these keep-left
 roads. Map guide ch. 29.
 
+### 5.19 The launcher and the React dashboard (`launcher.py`, `web/`)
+
+**What (2026-11-06):** `python3 run_pipeline.py` with **no arguments** starts
+only the dashboard (http://localhost:5000, Simulation page). The user picks
+the map (from the installed levels, as F5 does), cars, pedestrians, cyclists,
+delivery pods, their car (own cars + CARLA's), force feedback, display and
+advanced options, then Launch. `launcher.py` runs `run_pipeline.py <flags>
+--external-dashboard` as a child, logs to `data/pipeline.log`, keeps the
+options in `launch_options.json`, and returns to the Launch page when the run
+ends. With flags, `run_pipeline.py` works as before.
+
+**Live control** (`pipeline_control.py`, `data/pipeline_control.json` /
+`pipeline_state.json`): while running, the dashboard switches the map (the
+F5 path), restarts the traffic with new counts (the tick master is restarted,
+never stopped), restarts / stops the delivery sim (pods), restarts the driving
+window with another car, turns FFB / skid marks / weather cycle / sensor viewer
+/ drone wall on or off, or stops. Restart-only options relaunch through the
+launcher. Every option carries `live` / `map` / `restart` in
+`launch_options.py`.
+
+**Frontend:** React 19 + TypeScript (strict) + Vite + Tailwind v4 in
+`hil_sim/web/` (developer guide `web/DEV.md`), React Bits components
+(`src/components/bits`: Aurora, StarBorder, ShinyText, SpotlightCard, CountUp,
+AnimatedList, ...), design system from the ui-ux-pro-max skill (dark slate,
+green accent, Fira Sans / Fira Code bundled). `dashboard.py` is the backend only
+(its 5000-line embedded page was removed) and serves `web/dist`, which is
+committed, so the rig runs without Node. Node 22 LTS lives in
+`~/.local/node` (official tarball, checksum verified, no sudo) and is needed
+only to rebuild:
+
+```bash
+export PATH=~/.local/node/bin:$PATH
+cd ~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/web && npm install && npm run build
+```
+
+Tests: `tests/test_launcher.py` (15), `tests/test_pipeline_control.py` (14),
+plus the map-switch and Windows-card tests.
+
 ---
 
 ## 6. Changes to the packaged CARLA folder, and how to reproduce each one
@@ -1754,7 +1792,7 @@ Dates are JST.
 | 2026-11-02 | Oita Kosen imported (campus, dorm, 7-Eleven; Japanese buildings, road style, road fixes); landmark build order chosen; Pasir Ris large queued |
 | 2026-11-03 | Oita Kosen walker navmesh by hand; pipeline fixes (keep_left key, hero TM port, walker retries); unattended demo with the scratch watchdog |
 | 2026-11-04 | seasonal Japanese trees + wind + dashboard card; JARTIC signs and signal timing (road-sign-creator agent); akeno area features; blinkers, mirrors, lenses on own cars; `carla-car-importer` skill; skills repo renamed `carla-skills`; Pasir Ris large deferred; this document |
-| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder; day/night cycle + dynamic weather, rain grounds the drones; street lamps; skid marks fixed for autopilot; speed limits (ring 100, real/legal elsewhere) |
+| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder; day/night cycle + dynamic weather, rain grounds the drones; street lamps; skid marks fixed for autopilot; speed limits (ring 100, real/legal elsewhere); launcher + live control + React/TypeScript dashboard |
 
 ---
 

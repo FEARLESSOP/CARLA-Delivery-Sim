@@ -1,0 +1,70 @@
+/* Vehicle page: classes and keyframes for the SVG stage (ported from the old
+   page's CSS). Colours come from attributes (C.* in TSX) or currentColor.
+   Every looping animation is switched off under prefers-reduced-motion
+   (the global rule only shortens durations, which would make an infinite
+   blink flicker), and its steady "on" look is kept instead.
+   車両ページの SVG 用クラスとアニメーション（動きを減らす設定では停止） */
+
+.vx-rings circle { fill: none; stroke: currentColor; stroke-opacity: .16; stroke-width: 1; }
+.vx-rings circle.r2 { stroke-dasharray: 3 6; }
+.vx-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.vx-halo-text { paint-order: stroke; stroke: var(--color-bg); stroke-linejoin: round; }
+
+/* hero car glow by state, shake on a new impact */
+.vx-car { transition: filter .4s; }
+.vx-car.ok { filter: drop-shadow(0 0 16px color-mix(in srgb, var(--color-info) 40%, transparent)); }
+.vx-car.warn { filter: drop-shadow(0 0 20px color-mix(in srgb, var(--color-warn) 50%, transparent)); }
+.vx-car.crash { filter: drop-shadow(0 0 26px color-mix(in srgb, var(--color-danger) 80%, transparent)); }
+.vx-shake { animation: vx-shake .35s ease-in-out; }
+@keyframes vx-shake { 25% { transform: translate(2px, -1px) } 50% { transform: translate(-2px, 1px) } 75% { transform: translate(1px, -2px) } }
+
+.vx-tail { transition: opacity .1s; }
+.vx-rev { transition: opacity .15s; }
+
+/* sensor markers */
+.vx-smark { transition: opacity .2s; }
+.vx-dim .vx-smark:not(.sel) { opacity: .25; }
+.vx-halo { fill: none; stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: vx-pulse 2.4s ease-out infinite; }
+.vx-locate { fill: none; stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: vx-pulse 1.4s ease-out infinite; }
+@keyframes vx-pulse { 0% { transform: scale(1); opacity: .8 } 75%, 100% { transform: scale(3.2); opacity: 0 } }
+
+/* impact ripples */
+.vx-hitring { fill: none; stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: vx-hitring 1.6s ease-out infinite; }
+@keyframes vx-hitring { 0% { transform: scale(1); opacity: .9 } 100% { transform: scale(4); opacity: 0 } }
+.vx-hit { transition: opacity .3s; }
+
+/* park-distance bands */
+.vx-pdc { fill: none; stroke-width: 5; stroke-linecap: round; opacity: .08; transition: opacity .2s; }
+.vx-pdc.lit { opacity: .95; filter: drop-shadow(0 0 7px currentColor); }
+
+/* turn signals: blinker lamps, lane-change chevrons, the buttons */
+.vx-lamp rect { opacity: 0; }
+.vx-lamp.on rect { animation: vx-lamp .9s steps(1) infinite; filter: drop-shadow(0 0 6px currentColor); }
+@keyframes vx-lamp { 0%, 49% { opacity: .95 } 50%, 100% { opacity: .06 } }
+.vx-chev { fill: none; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; opacity: 0; filter: drop-shadow(0 0 6px currentColor); }
+.on > .vx-chev { animation: vx-chev 1s ease-out infinite; }
+.on > .vx-chev:nth-child(2) { animation-delay: .15s; }
+.on > .vx-chev:nth-child(3) { animation-delay: .3s; }
+@keyframes vx-chev { 0%, 60%, 100% { opacity: 0 } 15%, 45% { opacity: .95 } }
+.vx-blink { animation: vx-blink .9s steps(1) infinite; }
+@keyframes vx-blink { 50% { opacity: .35 } }
+
+/* speed streaks, nearby objects, ultrasonic arc */
+.vx-streaks { transition: opacity .4s; }
+.vx-streak { stroke-width: 2; stroke-linecap: round; stroke-dasharray: 16 70; animation: vx-streak var(--sd, 1.2s) linear infinite; }
+@keyframes vx-streak { to { stroke-dashoffset: -86; } }
+.vx-near { transition: opacity .3s; }
+.vx-ultra { fill: none; stroke-width: 3.5; stroke-linecap: round; filter: drop-shadow(0 0 6px currentColor); }
+.vx-lane { stroke-width: 2; stroke-dasharray: 9 9; }
+
+/* status pill pulse while a collision is fresh */
+.vx-crash-pulse { animation: vx-crash-pulse 1s ease-in-out infinite; }
+@keyframes vx-crash-pulse { 50% { box-shadow: 0 0 36px color-mix(in srgb, var(--color-danger) 60%, transparent); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .vx-shake, .vx-halo, .vx-locate, .vx-hitring, .vx-lamp.on rect, .on > .vx-chev,
+  .vx-blink, .vx-streak, .vx-crash-pulse { animation: none !important; }
+  .vx-lamp.on rect, .on > .vx-chev { opacity: .95; }
+  .vx-halo, .vx-hitring { opacity: .5; }
+  .vx-streaks { display: none; }
+}

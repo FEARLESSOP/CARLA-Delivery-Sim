@@ -68,10 +68,44 @@ hil_sim/
 
 ## How to run / 実行方法
 
+**The launcher (no arguments):**
+
 ```bash
-cd CARLA_0.9.15/PythonAPI/hil_sim
-python run_pipeline.py --map Town02 --vehicles 60 --walkers 15
+cd ~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim
+python3 run_pipeline.py
 ```
+
+Only the dashboard starts and opens http://localhost:5000 on its Simulation
+page. Pick the map, cars, pedestrians, cyclists, delivery pods, your car,
+force feedback, display and the rest, then **Launch** (`launcher.py`; the
+options are kept in `launch_options.json` for next time). While it runs the
+same page becomes **live controls**:
+
+- map: switched like F5 (CARLA keeps running);
+- cars / pedestrians / cyclists: the traffic restarts with the new counts;
+- delivery pods: the delivery sim restarts with the new number (0 = off);
+- your car: the driving window restarts with it;
+- force feedback, skid marks, day/night + weather, sensor viewer, drone wall: on / off at once;
+- display and other restart-only options: **Restart with these settings**.
+
+Stop returns to the Launch page; closing the driving window does too; Ctrl+C in
+the terminal stops everything. The pipeline's output is on the page
+(`data/pipeline.log`). Every option has a `live` / `map switch` / `restart`
+tag; the list is `launch_options.py`.
+
+ランチャー: 引数なしで起動するとダッシュボードだけが立ち上がり、そこでマップ・
+交通量・配送車・自車などを選んで起動します。実行中は同じページでマップ切替・
+交通量・配送車・自車・各機能の入切を変更でき、再起動が必要な設定はボタン一つで
+再起動します。
+
+**With flags (as before):**
+
+```bash
+python3 run_pipeline.py --map Town02 --vehicles 60 --walkers 15
+```
+
+The dashboard's live controls work here too; a restart from the dashboard
+needs the launcher.
 
 The pipeline boots CarlaUE4, loads the map, spawns traffic, starts the
 dashboard (http://localhost:5000) and the sensor viewer, then opens the

@@ -37,7 +37,11 @@ must match the running server.
 ## Commands
 
 ```bash
-# full rig (Ubuntu has no `python`, only `python3`)
+# the launcher: only the dashboard starts; pick map/traffic/pods/car there and Launch
+# (launcher.py; live control while running; Stop returns to the Launch page)
+python3 run_pipeline.py
+
+# full rig with flags (Ubuntu has no `python`, only `python3`)
 python3 run_pipeline.py --map Town02 --vehicles 60 --walkers 15
 python3 run_pipeline.py --keyboard          # W/A/S/D instead of the wheel
 python3 run_pipeline.py --no-sim            # reuse a CARLA already on port 2000
@@ -50,6 +54,15 @@ python3 run_pipeline.py --map Town05 --delivery 3 --ffb   # + 3 delivery vans + 
 ```
 
 Note the space in `manual_control_steeringwheel G923.py` — always quote it.
+
+The dashboard UI is a React + TypeScript app in `web/` (rules: `web/DEV.md`).
+`dashboard.py` is the JSON backend and serves the committed build `web/dist`.
+After any change in `web/src` rebuild it (Node 22 is in `~/.local/node`, not on
+the PATH):
+
+```bash
+export PATH=~/.local/node/bin:$PATH && cd web && npm run build   # tsc -b + vite build
+```
 
 Tests (no CARLA server required; needs `pygame` + `carla` in the venv):
 
@@ -111,6 +124,16 @@ They poll the CARLA world for a vehicle by `role_name`:
 Consequence: startup order barely matters, and a dashboard showing "waiting
 for hero" is a normal transient state, not a failure. Run the agent as
 `hero` to score it with the same dashboard metrics as a human session.
+
+**Launcher and live control.** `launch_options.py` defines every launch option
+(flag, type, default, and whether a change is `live`, a `map` switch or a
+`restart`). `launcher.py` (no-argument `run_pipeline.py`) runs the pipeline as
+a child with `--external-dashboard`. The dashboard writes requests through
+`pipeline_control.py`: `data/launch_request.json` (launch / stop / relaunch, read
+by the launcher) and `data/pipeline_control.json` (traffic / delivery / map /
+vehicle / helper / stop, read by the pipeline's supervision loop). The pipeline
+reports `data/pipeline_state.json` each loop. Traffic changes restart
+`generate_traffic.py` (the tick master: restarted, never stopped).
 
 **JSON side-channels.** Live coupling between the driving window and the
 dashboard happens through small files next to the scripts, polled by mtime —

@@ -448,3 +448,26 @@ CarlaUE4 をそのマップで再起動する（先に終了してから起動�
   restart it once. Test: `tests/test_map_switch.py`.
   / 以前の挙動のまま：更新前に起動したパイプラインである。一度再起動する。
   試験：`tests/test_map_switch.py`。
+
+## The dashboard / launcher / ダッシュボードとランチャー
+
+- **"The dashboard UI is not built yet"**: `web/dist` is missing (a fresh
+  checkout without the build, or a deleted folder). Build it:
+  `export PATH=~/.local/node/bin:$PATH && cd web && npm install && npm run build`.
+  The JSON routes work meanwhile. / `web/dist` が無い: ビルドする。
+- **The old dashboard still shows**: the browser kept the old page. Reload it.
+  / ブラウザを再読込する。
+- **Launch does nothing**: is the launcher running (`python3 run_pipeline.py`
+  with no arguments)? With a pipeline started from the command line, the
+  dashboard's live controls work, but Launch / Restart need the launcher.
+  `data/launcher_state.json` shows its phase; the pipeline's output is in
+  `data/pipeline.log`. / ランチャーが動いているか確認する。
+- **A live change seems lost**: requests go through `data/pipeline_control.json`.
+  The pipeline reads them from the moment it starts (since 2026-11-06; before
+  that, one sent while CARLA was still booting was dropped) and logs
+  `dashboard request: ...` in `data/pipeline.log`. A traffic change takes about
+  10-20 s: the tick master destroys its cars and spawns the new set.
+  / 依頼は pipeline.log に記録される。交通の変更は 10〜20 秒かかる。
+- **A web change does not appear**: rebuild `web/` (`npm run build`), then
+  reload the page. / web/ を再ビルドして再読込。
+

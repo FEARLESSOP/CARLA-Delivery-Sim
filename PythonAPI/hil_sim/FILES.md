@@ -20,10 +20,14 @@ A map of the important files, by topic. Paths are relative to
 | File | What it is |
 |---|---|
 | `run_pipeline.py` | starts CARLA and every client; restarts helpers; F5 map switch |
+| `launcher.py` | `python3 run_pipeline.py` with no arguments: the dashboard's Launch page starts / stops / restarts the pipeline |
+| `launch_options.py` | every launch option (flag, type, default, live / map / restart), maps and cars to pick |
+| `pipeline_control.py` | request / state files between the dashboard, the launcher and the running pipeline |
+| `web/` | the dashboard UI: React + TypeScript (Vite), `web/DEV.md`; `web/dist` is the build Flask serves |
 | `manual_control_steeringwheel G923.py` | the driving window (G923 wheel or keyboard) |
 | `map_switch.py` | the F5 map change, done by the pipeline |
 | `windows_control.py` | dashboard Windows card: open / close sensor viewer and drone cams |
-| `dashboard.py` | Flask dashboard on :5000 (telemetry, FFB, keybinds, seasons, windows) |
+| `dashboard.py` | Flask backend on :5000: every JSON route, serves `web/dist` |
 | `keybinds.py` | keyboard and wheel bindings (`keybinds.json` is made on first use) |
 | `carla_ffb.py`, `ffb_settings.py` | force feedback; tuning in `ffb_tuning.json`, `ffb_presets.json` |
 | `vehicle_tuning.py` | vehicle performance and drivetrains (`vehicle_tuning.json`) |

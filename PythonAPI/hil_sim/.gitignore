@@ -65,3 +65,11 @@ pipeline_status.json.tmp
 # day/night + weather settings (dashboard Day & weather card) / 昼夜と天気の設定
 weather_cycle.json
 weather_cycle.json.tmp
+
+# launcher: last launch options (per PC) / ランチャーの前回の設定
+launch_options.json
+launch_options.json.tmp
+# web frontend dependencies (web/dist IS committed: the rig runs without Node)
+# Web の依存パッケージ（dist はコミットする: Node なしで動く）
+web/node_modules/
+!web/dist/

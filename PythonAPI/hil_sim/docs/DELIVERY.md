@@ -65,6 +65,12 @@ With the defaults orders arrive faster than one van can serve them — raise
 
 ## Run / 実行
 
+From the launcher (`python3 run_pipeline.py`, no arguments) set **Delivery
+pods** on the Launch page. While it runs, change the number on the Simulation
+page and Apply: the delivery sim restarts with the new number of pods (0 turns
+it off and closes the drone camera wall; drones in the air are lost).
+ランチャーの起動ページで配送ポッドの台数を選び、実行中も変更できます。
+
 ```bash
 cd ~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim
 # CARLA must be running (it loads Town03 itself) / CARLA 起動済みであること

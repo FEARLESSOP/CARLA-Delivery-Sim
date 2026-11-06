@@ -336,6 +336,11 @@ import windows_control as wc  # noqa: E402
 real_win = (wc.CONTROL_PATH, wc.STATUS_PATH)
 wc.CONTROL_PATH = os.path.join(TMP, "pipeline_control.json")
 wc.STATUS_PATH = os.path.join(TMP, "pipeline_status.json")
+# nor the live pipeline / launcher state files / パイプライン状態ファイルにも触れない
+import pipeline_control as pc  # noqa: E402
+real_pc = {k: getattr(pc, k) for k in ("CONTROL_PATH", "STATE_PATH")}
+pc.CONTROL_PATH = os.path.join(TMP, "pipeline_control_req.json")
+pc.STATE_PATH = os.path.join(TMP, "pipeline_state.json")
 try:
     sys.argv = ["run_pipeline.py", "--no-sim", "--map", "OitaKosen", "--vehicles", "10",
                 "--walkers", "10", "--delivery", "3", "--ffb", "--no-sensor-viewer",
@@ -353,6 +358,8 @@ finally:
     rp.take_map_request = take
     ms.REQUEST_PATH = real_req
     wc.CONTROL_PATH, wc.STATUS_PATH = real_win
+    for k, v in real_pc.items():
+        setattr(pc, k, v)
 
 names = [n for n, _ in LAUNCHED]
 first, second = names[:names.index("manual_control") + 1], names[names.index("manual_control") + 1:]
