@@ -51,6 +51,7 @@ import ffb_settings
 import keybinds
 import seasons
 import vehicle_tuning
+import weather_cycle
 import windows_control
 
 
@@ -1562,6 +1563,45 @@ def _shutdown_worker():
 # パイプラインの任意ウィンドウ（センサービューア・ドローンカメラ）：状態は
 # run_pipeline が約 1 秒ごとに pipeline_status.json へ書き、ここでのクリックは
 # pipeline_control.json に書かれてパイプラインが実行する（windows_control.py）。
+@app.route("/daycycle", methods=["GET", "POST"])
+def daycycle_route():
+    """Day/night cycle and dynamic weather (weather_cycle.py reads the file
+    live). / 昼夜サイクルと天気の設定（weather_cycle.py が随時読む）。"""
+    s = weather_cycle.load_settings()
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        for k in ("day_night", "paused", "dynamic"):
+            if k in body:
+                s[k] = bool(body[k])
+        for k, lo, hi in (("day_minutes", 1.0, 1440.0), ("rain_chance", 0.0, 1.0),
+                          ("lamp_lumens", 5000.0, 500000.0)):
+            if body.get(k) is not None:
+                try:
+                    s[k] = max(lo, min(hi, float(body[k])))
+                except (TypeError, ValueError):
+                    pass
+        if body.get("force") in ("auto",) + tuple(weather_cycle.STATES):
+            s["force"] = body["force"]
+        if body.get("lamps") in ("auto", "on", "off"):
+            s["lamps"] = body["lamps"]
+        hhmm = str(body.get("clock") or "")
+        if len(hhmm) == 5 and hhmm[2] == ":" and hhmm.replace(":", "").isdigit():
+            seq = (s.get("clock_cmd") or {}).get("seq", 0) if isinstance(s.get("clock_cmd"), dict) else 0
+            s["clock_cmd"] = {"hhmm": hhmm, "seq": int(seq) + 1}
+        try:
+            weather_cycle.save_settings(s)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+    try:
+        with open(weather_cycle.STATUS_PATH) as fh:
+            st = json.load(fh)
+        st["live"] = time.time() - float(st.get("t", 0)) < 5.0
+    except (OSError, ValueError):
+        st = {"live": False}
+    return jsonify({"settings": {k: v for k, v in s.items() if k != "clock_cmd"}, "status": st,
+                    "states": list(weather_cycle.STATES)})
+
+
 @app.route("/windows", methods=["GET", "POST"])
 def windows_route():
     """GET: every optional window with running / pid / available. POST
@@ -2537,6 +2577,51 @@ HTML = r"""<!doctype html>
     <input type="range" id="r-swind" min="0" max="100" step="5" value="30">
     <div class="kv"><span data-i18n="season_now">Showing</span><span class="v" id="season-eff">-</span></div>
     <div class="sub" id="season-msg"></div>
+  </div>
+
+  <div class="card">
+    <h3 data-i18n="card_daycycle">Day &amp; weather</h3>
+    <div class="kv"><span data-i18n="dc_clock">Time</span>
+      <span class="v"><b id="dc-clock" style="font-size:1.4em">--:--</b> <span id="dc-state" class="pill">-</span></span></div>
+    <div class="kv"><span data-i18n="dc_drones">Drones</span><span id="dc-drones" class="pill green">-</span></div>
+    <div class="inlbl"><span data-i18n="dc_daynight">Day / night cycle</span></div>
+    <div class="seasonbtns" role="group" aria-label="Day / night">
+      <button class="rbtn" id="dc-dn-on" data-i18n="dc_on">On</button>
+      <button class="rbtn" id="dc-dn-off" data-i18n="dc_off">Off</button>
+      <button class="rbtn" id="dc-pause" data-i18n="dc_pause">Pause clock</button>
+    </div>
+    <div class="inlbl"><span data-i18n="dc_settime">Set the time</span><b id="v-dctime">--:--</b></div>
+    <input type="range" id="r-dctime" min="0" max="95" step="1" value="32" aria-label="Time of day">
+    <div class="seasonbtns" role="group" aria-label="Set time">
+      <button class="rbtn" data-clock="05:30" data-i18n="dc_dawn">Dawn</button>
+      <button class="rbtn" data-clock="12:00" data-i18n="dc_noon">Noon</button>
+      <button class="rbtn" data-clock="18:00" data-i18n="dc_dusk">Dusk</button>
+      <button class="rbtn" data-clock="22:00" data-i18n="dc_night">Night</button>
+    </div>
+    <div class="inlbl"><span data-i18n="dc_daylen">One day lasts</span><b id="v-dclen">5 min</b></div>
+    <div class="seasonbtns" role="group" aria-label="Day length">
+      <button class="rbtn" id="dc-len-down" aria-label="Shorter day">−</button>
+      <input type="range" id="r-dclen" min="0" max="12" step="1" value="3" aria-label="Day length" style="flex:1">
+      <button class="rbtn" id="dc-len-up" aria-label="Longer day">+</button>
+    </div>
+    <div class="inlbl"><span data-i18n="dc_lamps">Street lamps</span><span id="dc-lamps-now" class="pill">-</span></div>
+    <div class="seasonbtns" id="dc-lamps" role="group" aria-label="Street lamps">
+      <button class="rbtn" data-lamps="auto" data-i18n="dc_lamps_auto">Auto (when dark)</button>
+      <button class="rbtn" data-lamps="on" data-i18n="dc_on">On</button>
+      <button class="rbtn" data-lamps="off" data-i18n="dc_off">Off</button>
+    </div>
+    <div class="inlbl"><span data-i18n="dc_lampbright">Lamp brightness</span><b><span id="v-dclum">150</span>k lm</b></div>
+    <input type="range" id="r-dclum" min="20" max="400" step="10" value="150" aria-label="Lamp brightness">
+    <div class="inlbl"><span data-i18n="dc_weather">Weather</span></div>
+    <div class="seasonbtns" id="dc-force" role="group" aria-label="Weather"></div>
+    <div class="seasonbtns" role="group" aria-label="Dynamic weather">
+      <button class="rbtn" id="dc-dyn-on" data-i18n="dc_dyn_on">Changes by itself</button>
+      <button class="rbtn" id="dc-dyn-off" data-i18n="dc_dyn_off">Hold</button>
+    </div>
+    <div class="inlbl"><span data-i18n="dc_rainchance">Rain chance</span><b><span id="v-dcrain">25</span>%</b></div>
+    <input type="range" id="r-dcrain" min="0" max="100" step="5" value="25" aria-label="Rain chance">
+    <div class="sub" data-i18n="dc_hint">When it rains, every drone in the air comes down and the pods keep theirs inside.</div>
+    <div class="sub" id="dc-msg"></div>
   </div>
 
   <div class="card">
@@ -3781,6 +3866,15 @@ const I18N = {
   lbl_lanew:'Lane width', lbl_laneoff:'Lane offset', lbl_junction:'Junction',
   yes:'yes', no:'no', offroad:'OFF ROAD',
   card_season:'Season & wind', season_wind:'Wind (trees sway)', season_now:'Showing',
+  card_daycycle:'Day & weather', dc_clock:'Time', dc_drones:'Drones', dc_daynight:'Day / night cycle',
+  dc_on:'On', dc_off:'Off', dc_pause:'Pause clock', dc_resume:'Resume clock', dc_daylen:'One day lasts',
+  dc_dawn:'Dawn', dc_noon:'Noon', dc_dusk:'Dusk', dc_night:'Night', dc_weather:'Weather',
+  dc_dyn_on:'Changes by itself', dc_dyn_off:'Hold', dc_rainchance:'Rain chance',
+  dc_hint:'When it rains, every drone in the air comes down and the pods keep theirs inside.',
+  dc_fly:'may fly', dc_grounded:'grounded: rain', dc_offline:'weather_cycle.py is not running (start the pipeline)',
+  dc_auto:'Auto', dc_clear:'Clear', dc_partly:'Partly cloudy', dc_cloudy:'Cloudy', dc_rain:'Rain', dc_storm:'Storm',
+  dc_to:'→', dc_settime:'Set the time', dc_lamps:'Street lamps', dc_lamps_auto:'Auto (when dark)', dc_lampbright:'Lamp brightness',
+  dc_lit:'lit', dc_unlit:'off', dc_realtime:'real time', 
   card_windows:'Windows', win_open:'Open', win_close:'Close', win_running:'open',
   win_closed:'closed', win_opening:'opening…', win_closing:'closing…',
   win_unavail:'not available', win_offline:'run_pipeline.py is not running: windows can only be opened under the pipeline',
@@ -3962,6 +4056,15 @@ const I18N = {
   lbl_lanew:'車線幅', lbl_laneoff:'横オフセット', lbl_junction:'交差点',
   yes:'はい', no:'いいえ', offroad:'車線外',
   card_season:'季節と風', season_wind:'風（木が揺れる）', season_now:'表示中',
+  card_daycycle:'昼夜と天気', dc_clock:'時刻', dc_drones:'ドローン', dc_daynight:'昼夜サイクル',
+  dc_on:'オン', dc_off:'オフ', dc_pause:'時計を止める', dc_resume:'時計を進める', dc_daylen:'1 日の長さ',
+  dc_dawn:'夜明け', dc_noon:'正午', dc_dusk:'夕方', dc_night:'夜', dc_weather:'天気',
+  dc_dyn_on:'自動で変化', dc_dyn_off:'固定', dc_rainchance:'雨の確率',
+  dc_hint:'雨が降ると飛行中のドローンはすべて墜落し、ポッドはドローンを出しません。',
+  dc_fly:'飛行可', dc_grounded:'雨で飛行禁止', dc_offline:'weather_cycle.py が動いていません（パイプラインを起動）',
+  dc_auto:'自動', dc_clear:'晴れ', dc_partly:'薄曇り', dc_cloudy:'曇り', dc_rain:'雨', dc_storm:'嵐',
+  dc_to:'→', dc_settime:'時刻を設定', dc_lamps:'街灯', dc_lamps_auto:'自動（暗い時）', dc_lampbright:'街灯の明るさ',
+  dc_lit:'点灯中', dc_unlit:'消灯', dc_realtime:'実時間', 
   card_windows:'ウィンドウ', win_open:'開く', win_close:'閉じる', win_running:'表示中',
   win_closed:'閉じている', win_opening:'起動中…', win_closing:'終了中…',
   win_unavail:'利用不可', win_offline:'run_pipeline.py が動いていません（ウィンドウの開閉はパイプライン配下のみ）',
@@ -4028,6 +4131,7 @@ function applyLang() {
   renderSessTable(); renderHist(); if (FF.params) ffBuild(); if (VT.params) vtBuild();
   if (typeof seasonRender === 'function') seasonRender();
   if (typeof winRender === 'function') winRender();
+  if (typeof dcRender === 'function') dcRender();
   if (typeof kbRender === 'function') kbRender();
 }
 function setLang(l) { LANG = l; localStorage.setItem('carla_lang', l); applyLang(); }
@@ -4938,6 +5042,90 @@ $('r-swind').addEventListener('pointerdown', () => { seasonDragging = true; });
 $('r-swind').addEventListener('pointerup', () => { seasonDragging = false; });
 seasonTick();
 setInterval(seasonTick, 2000);
+
+// Day & weather card (weather_cycle.py) / 昼夜と天気カード
+var DC = null, dcTimer = null, dcDrag = {};    // var: applyLang may run first
+function dcRender() {
+  if (!DC) return;
+  const s = DC.settings, st = DC.status || {};
+  const box = $('dc-force');
+  if (!box.childElementCount) {
+    ['auto'].concat(DC.states).forEach(k => {
+      const b = document.createElement('button');
+      b.className = 'rbtn'; b.dataset.key = k;
+      b.onclick = () => dcPost({force: k});
+      box.appendChild(b);
+    });
+  }
+  box.querySelectorAll('button').forEach(b => {
+    b.textContent = t('dc_' + b.dataset.key);
+    b.classList.toggle('active', b.dataset.key === s.force);
+  });
+  const on = (id, v) => { $(id).classList.toggle('active', !!v); $(id).setAttribute('aria-pressed', v ? 'true' : 'false'); };
+  on('dc-dn-on', s.day_night); on('dc-dn-off', !s.day_night); on('dc-pause', s.paused);
+  $('dc-pause').textContent = t(s.paused ? 'dc_resume' : 'dc_pause');
+  on('dc-dyn-on', s.dynamic); on('dc-dyn-off', !s.dynamic);
+  if (!dcDrag.len) { $('r-dclen').value = dcLenIndex(s.day_minutes); $('v-dclen').textContent = dcLenText(s.day_minutes); }
+  if (!dcDrag.time && st.hours != null) { $('r-dctime').value = Math.round(st.hours * 4) % 96; $('v-dctime').textContent = st.clock; }
+  document.querySelectorAll('#dc-lamps button').forEach(b => {
+    b.classList.toggle('active', b.dataset.lamps === (s.lamps || 'auto'));
+    if (b.dataset.lamps === 'auto') b.textContent = t('dc_lamps_auto');
+  });
+  if (!dcDrag.lum) { $('r-dclum').value = Math.round((s.lamp_lumens || 150000) / 1000); $('v-dclum').textContent = Math.round((s.lamp_lumens || 150000) / 1000); }
+  $('dc-lamps-now').textContent = !st.live || !st.lamps_n ? '-' : (st.lamps_on ? t('dc_lit') : t('dc_unlit')) + ' · ' + st.lamps_n;
+  $('dc-lamps-now').className = 'pill ' + (st.lamps_on ? 'yellow' : '');
+  if (!dcDrag.rain) { $('r-dcrain').value = Math.round(s.rain_chance * 100); $('v-dcrain').textContent = Math.round(s.rain_chance * 100); }
+  $('dc-clock').textContent = st.clock || '--:--';
+  const lbl = k => t('dc_' + k);
+  $('dc-state').textContent = !st.live ? '-' : st.target && st.target !== st.state
+    ? lbl(st.state) + ' ' + t('dc_to') + ' ' + lbl(st.target) : lbl(st.state || 'clear');
+  $('dc-state').className = 'pill ' + (st.raining ? 'red' : st.state === 'cloudy' ? 'yellow' : 'green');
+  $('dc-drones').textContent = st.raining ? t('dc_grounded') + ' (' + Math.round(st.rain) + '%)' : t('dc_fly');
+  $('dc-drones').className = 'pill ' + (st.raining ? 'red' : 'green');
+  $('dc-msg').textContent = st.live ? '' : t('dc_offline');
+}
+// day length steps (real minutes for 24 h), slider index <-> minutes / 1 日の長さの段階
+const DC_LENS = [1, 2, 3, 5, 10, 15, 20, 30, 45, 60, 120, 360, 1440];
+function dcLenIndex(m) { let i = 0; DC_LENS.forEach((v, k) => { if (Math.abs(v - m) < Math.abs(DC_LENS[i] - m)) i = k; }); return i; }
+function dcLenText(m) { return m >= 1440 ? t('dc_realtime') : m >= 60 ? (m / 60) + ' h' : Math.round(m) + ' min'; }
+function dcHhmm(q) { const h = Math.floor(q / 4), mm = (q % 4) * 15; return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm; }
+async function dcTick() {
+  try { DC = await (await fetch('/daycycle')).json(); dcRender(); } catch (e) {}
+}
+async function dcPost(body) {
+  try {
+    DC = await (await fetch('/daycycle', {method:'POST', headers:{'Content-Type':'application/json'},
+                                         body: JSON.stringify(body)})).json();
+    dcRender();
+  } catch (e) {}
+}
+$('dc-dn-on').onclick = () => dcPost({day_night: true});
+$('dc-dn-off').onclick = () => dcPost({day_night: false});
+$('dc-pause').onclick = () => dcPost({paused: !(DC && DC.settings.paused)});
+$('dc-dyn-on').onclick = () => dcPost({dynamic: true});
+$('dc-dyn-off').onclick = () => dcPost({dynamic: false});
+document.querySelectorAll('[data-clock]').forEach(b => { b.onclick = () => dcPost({clock: b.dataset.clock}); });
+document.querySelectorAll('[data-lamps]').forEach(b => { b.onclick = () => dcPost({lamps: b.dataset.lamps}); });
+function dcLenStep(d) {
+  const i = Math.max(0, Math.min(DC_LENS.length - 1, dcLenIndex(DC ? DC.settings.day_minutes : 5) + d));
+  dcPost({day_minutes: DC_LENS[i]});
+}
+$('dc-len-down').onclick = () => dcLenStep(-1);
+$('dc-len-up').onclick = () => dcLenStep(1);
+[['r-dclen', 'v-dclen', 'len', v => ({day_minutes: DC_LENS[v]}), v => dcLenText(DC_LENS[v])],
+ ['r-dctime', 'v-dctime', 'time', v => ({clock: dcHhmm(v)}), v => dcHhmm(v)],
+ ['r-dcrain', 'v-dcrain', 'rain', v => ({rain_chance: v / 100}), v => v],
+ ['r-dclum', 'v-dclum', 'lum', v => ({lamp_lumens: v * 1000}), v => v]].forEach(([r, v, k, body, show]) => {
+  $(r).addEventListener('input', () => {
+    $(v).textContent = show(parseInt($(r).value));
+    clearTimeout(dcTimer);
+    dcTimer = setTimeout(() => dcPost(body(parseInt($(r).value))), 300);
+  });
+  $(r).addEventListener('pointerdown', () => { dcDrag[k] = true; });
+  $(r).addEventListener('pointerup', () => { dcDrag[k] = false; });
+});
+dcTick();
+setInterval(dcTick, 1000);
 
 // Windows card: open / close the pipeline's optional windows (windows_control.py)
 // ウィンドウカード：パイプラインの任意ウィンドウを開閉する

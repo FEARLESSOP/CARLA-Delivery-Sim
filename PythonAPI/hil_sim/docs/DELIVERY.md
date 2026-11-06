@@ -200,7 +200,7 @@ Before each trip the van checks the cost: fly / charge in the van for up to
 `--max-charge-wait` / send the drone to the station and get a standby
 (`delivery/station.py`). Wind is a base breeze plus random and dashboard
 gusts (`delivery/wind.py`); drones counter up to `--drone-max-wind` after a
-lag, so gusts push them, and nothing takes off above `--wind-hold`. Failures
+lag, so gusts push them, and nothing takes off above `--wind-hold`. Rain from `weather_cycle.py` (CARLA precipitation >= `--rain-ground`, 20) brings every flying drone down (a `rain` crash) and holds all take-offs until it stops (`rain_hold` / `rain_over` events). Failures
 (order fails, drone crashes and is recovered after `--recover-s`):
 collision (per-tick raycast), blown off course, battery died, motor failure,
 parcel torn off, no safe drop, no drone. Flights are checked against real

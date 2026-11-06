@@ -188,6 +188,31 @@ if [ "$JPHOK" = "1" ] && ls "$SRC"/meshes/Terrain_JpHokousha_*.npz > /dev/null 2
         || { echo "pedestrian head step failed (see $SRC/ue_jp_hokousha.log)"; exit 1; }
 fi
 
+GAITO="$("$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))[sys.argv[2]]; print(int(c.get('gaito', True)))" "$HERE/maps.json" "$KEY")"
+if [ "$GAITO" = "1" ] && ls "$SRC"/meshes/Terrain_Street_*.npz > /dev/null 2>&1; then
+    # Street lamps that light up (guide ch. 28): every props.py lamp head gets a
+    # BP_JpGaito (CARLA's street-light BP, our glowing plate, no shadows, drawn
+    # to 80 m); the day/night cycle switches them (LightManager, Street group).
+    # Generated maps only ("gaito": false opts out). Log markers decide, not rc.
+    # 街灯（ガイド 28 章）: 各灯具に BP_JpGaito を置く
+    step "2g/4 street lamps"
+    "$HERE/.venv/bin/python" "$HERE/osm_city/gaito.py" "$SRC" > "$SRC/gaito.log" 2>&1 || true
+    grep -q "^\[gaito\] [1-9][0-9]* lamp heads" "$SRC/gaito.log" || { echo "gaito.py failed (see $SRC/gaito.log)"; exit 1; }
+    GTO="$HERE/build/JpGaito"
+    blender -b --disable-autoexec --python "$HERE/osm_city/jp_gaito.py" -- "$GTO" > "$SRC/jp_gaito_blender.log" 2>&1 || true
+    grep -q "^\[jp_gaito\] wrote" "$SRC/jp_gaito_blender.log" || { echo "jp_gaito.py failed (see $SRC/jp_gaito_blender.log)"; exit 1; }
+    (cd "$CARLA_SRC/Unreal/CarlaUE4" && GAITO_STEP=bp GAITO_SRC="$GTO" GAITO_PKG="$PKG" \
+        "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/ue_jp_gaito.py" -unattended -nosplash -nullrhi) \
+        > "$SRC/ue_jp_gaito.log" 2>&1 || true
+    grep -q "BP_JpGaito saved" "$SRC/ue_jp_gaito.log" || { echo "BP_JpGaito step failed (see $SRC/ue_jp_gaito.log)"; exit 1; }
+    (cd "$CARLA_SRC/Unreal/CarlaUE4" && GAITO_STEP=level GAITO_PKG="$PKG" GAITO_MAP="$NAME" GAITO_HEADS="$SRC/gaito.json" \
+        "$EDITOR" "$UPROJECT" -run=pythonscript -script="$HERE/ue_jp_gaito.py" -unattended -nosplash -nullrhi) \
+        > "$SRC/ue_jp_gaito_level.log" 2>&1 || true
+    grep "street lamps placed" "$SRC/ue_jp_gaito_level.log" | tail -1 || true
+    grep -q "[1-9][0-9]* of [0-9]* street lamps placed" "$SRC/ue_jp_gaito_level.log" \
+        || { echo "street lamp level step failed (see $SRC/ue_jp_gaito_level.log)"; exit 1; }
+fi
+
 step "3/4 cook"
 rm -rf "$COOKED"
 (cd "$CARLA_SRC/Unreal/CarlaUE4" && "$EDITOR" "$UPROJECT" -run=cook \

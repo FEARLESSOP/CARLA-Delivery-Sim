@@ -30,6 +30,7 @@ A map of the important files, by topic. Paths are relative to
 | `traction_fx.py` | skid marks |
 | `sensor_viewer.py`, `drone_viewer.py` | optional viewer windows |
 | `seasons.py`, `season.json` | tree seasons and wind |
+| `weather_cycle.py` | day/night cycle (24 h in 5 min), dynamic weather, street lamps on/off; rain grounds the drones (`weather_cycle.json`, dashboard card "Day & weather") |
 
 ## Traffic, rules and signals (Japan maps)
 
@@ -48,6 +49,7 @@ A map of the important files, by topic. Paths are relative to
 | `delivery_sim.py` | the delivery sim (vans, pods, drones) |
 | `delivery/` | its modules; `delivery/rules.py` = Japan rules for the vans |
 | `docs/DELIVERY.md` | how it works |
+| `delivery/station.py` | drone fleet: charging, standby, wind and rain grounding |
 
 ## Maps (carla-map-generator skill)
 
@@ -61,6 +63,7 @@ A map of the important files, by topic. Paths are relative to
 | `maps/osm_city/jp_shingo.py` + `maps/ue_jp_shingo*.py` | Japanese traffic signal model BP_JpShingo (ch. 24) |
 | `maps/osm_city/jp_sokudo.py` + `maps/ue_jp_sokudo*.py` | blue-number speed posts BP_JpSokudo (ch. 25) |
 | `maps/osm_city/hokousha_crossings.py`, `jp_hokousha*.py` + `maps/ue_jp_hokousha.py` | pedestrian signal heads (ch. 26) |
+| `maps/osm_city/gaito.py`, `jp_gaito.py` + `maps/ue_jp_gaito.py` | street lamps that light up, BP_JpGaito (ch. 28) |
 | `maps/osm_city/check_roads.py`, `check_signal_poles.py` | checks: nothing on the road, poles where CARLA puts them |
 | `maps/build/<Map>/` | build output (git-ignored): xodr, FBX, photos, logs |
 | `maps/queue/` | queued map requests and handoffs |

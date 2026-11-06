@@ -997,10 +997,10 @@ class Van(LmpVanMixin):
                 self.drone_queue = []
             return
         if self.sky.drones.grounded:
-            u.note = "grounded: wind %.0f m/s" % self.sky.drones._wind
-            self._say(t, "hold", "wind_hold", batch=batch, pos=self.roof(),
-                      detail="wind %.1f m/s > %.0f m/s: D%d waits in the pod"
-                      % (self.sky.drones._wind, self.sky.drones.wind_hold, u.id))
+            u.note = "grounded: " + self.sky.drones.ground_reason()
+            self._say(t, "hold", "rain_hold" if self.sky.drones.raining else "wind_hold",
+                      batch=batch, pos=self.roof(),
+                      detail="%s: D%d waits in the pod" % (self.sky.drones.ground_reason(), u.id))
             return
         self._said.discard("hold")
         if u.battery.level >= need:
@@ -1518,6 +1518,7 @@ class Fleet(object):
     """
 
     EVENTS_SHOWN = ("failed", "drone_crash", "drone_to_station", "standby_sent", "wind_hold",
+                    "rain_hold", "rain_over",
                     "battery_swap", "drone_switch", "box_station", "pod_showcase",
                     "drone_ready", "loading", "drone_home", "landing", "drone_waiting",
                     "drone_divert",
@@ -1688,10 +1689,18 @@ class Fleet(object):
             sc["speed"] = lmp_rig.clamp(float(c.get("speed", sc["speed"])), 0.1, 4.0)
 
     def weather(self, t):
-        """Let the trees sway with the wind (CARLA weather wind_intensity)."""
+        """Let the trees sway with the wind (CARLA weather wind_intensity), and
+        read the rain that grounds the drones (weather_cycle.py).
+        風で木を揺らし、ドローンを止める雨量を読む。"""
         if t - self._weather_t < 2.0:
             return
         self._weather_t = t
+        was = self.sky.drones.raining
+        self.sky.drones.rain = float(self.world.get_weather().precipitation)
+        if self.sky.drones.raining != was:
+            self.log(t, "rain_hold" if not was else "rain_over",
+                     detail="rain %.0f%%: %s" % (self.sky.drones.rain,
+                     "drones in the air come down, no take-offs" if not was else "drones may fly again"))
         speed = math.hypot(*self.sky.wind.vector(t))
         intensity = min(100.0, speed / 15.0 * 100.0)
         if self._weather_wind is None or abs(intensity - self._weather_wind) > 5.0:
@@ -1807,7 +1816,9 @@ class Fleet(object):
         self.live.write_state({
             "running": True, "t": r1(t), "map": self.world.get_map().name,
             "wind": dict(self.sky.wind.state(t), grounded=self.sky.drones.grounded,
-                         hold=self.sky.drones.wind_hold, drone_max=self.args.drone_max_wind),
+                         hold=self.sky.drones.wind_hold, drone_max=self.args.drone_max_wind,
+                         rain=r1(self.sky.drones.rain), raining=self.sky.drones.raining,
+                         rain_ground=self.sky.drones.rain_ground),
             "drones": drones, "vans": vans, "hubs": hubs,
             "orders": orders, "cars": cars, "events": events,
             "station": {"pads": [[r1(p[0]), r1(p[1])] for p in st.pads],
@@ -2300,6 +2311,10 @@ def parse_args(argv=None):
     p.add_argument("--wind-hold", type=float, default=10.0,
                    help="no drone takes off while the wind is above this, m/s "
                         "(0 = never hold) / この風速を超える間は離陸しない")
+    p.add_argument("--rain-ground", type=float, default=20.0,
+                   help="CARLA precipitation (0-100) from which every flying drone "
+                        "comes down and none takes off (weather_cycle.py makes the "
+                        "rain; 0 = rain never grounds) / この雨量でドローンは墜落・離陸禁止")
     # failures / 故障
     p.add_argument("--motor-fail-rate", type=float, default=1.0,
                    help="motor failures per flight hour / 飛行 1 時間あたりのモーター故障")
@@ -2578,7 +2593,7 @@ def main(argv=None):
         drones = units
         sky.drones = DroneFleet(units, station, sky.bm, sky.check.flight_z, log,
                                 recover_s=args.recover_s, wind_hold=args.wind_hold,
-                                pod_draw=sky.pem.drone_ratio)
+                                pod_draw=sky.pem.drone_ratio, rain_ground=args.rain_ground)
         print("  %d drones (%d in vans + %d standby): %s"
               % (n_units, per_van * len(cars), n_units - per_van * len(cars),
                  units[0].blueprint_id))

@@ -61,3 +61,7 @@ pipeline_control.json
 pipeline_control.json.tmp
 pipeline_status.json
 pipeline_status.json.tmp
+
+# day/night + weather settings (dashboard Day & weather card) / 昼夜と天気の設定
+weather_cycle.json
+weather_cycle.json.tmp

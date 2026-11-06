@@ -299,8 +299,9 @@ class LmpVanMixin(object):
         left = self.hub_orders(stop)
         if self.loaded and self.loaded[1] in left:
             if self.sky.drones.grounded:
-                self._say(t, "hold", "wind_hold", pos=self.roof(),
-                          detail="wind %.1f m/s: launches wait" % self.sky.drones._wind)
+                self._say(t, "hold", "rain_hold" if self.sky.drones.raining else "wind_hold",
+                          pos=self.roof(),
+                          detail="%s: launches wait" % self.sky.drones.ground_reason())
                 return
             if a.roof_closed():
                 a.play("open")

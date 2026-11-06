@@ -423,10 +423,30 @@ class World(object):
 
     def tick(self, clock):
         self.hud.tick(self, clock)
+        self.auto_headlights()
         if self.camera_manager is not None:
             self.camera_manager.update_head(self.player)
         if self.steering_wheel is not None:
             self.steering_wheel.set(self.wheel_deg)
+
+    def auto_headlights(self):
+        """Headlights on at dusk, at night and in heavy rain or fog (the day/night
+        cycle, weather_cycle.py); blinkers and other lights are kept.
+        夕方・夜・強い雨や霧でヘッドライトを点ける（ウインカー等はそのまま）。"""
+        now = time.monotonic()
+        if self.player is None or now - getattr(self, "_lights_t", 0.0) < 1.0:
+            return
+        self._lights_t = now
+        try:
+            w = self.world.get_weather()
+            dark = w.sun_altitude_angle < 3.0 or w.precipitation > 30.0 or w.fog_density > 40.0
+            beams = int(carla.VehicleLightState.Position) | int(carla.VehicleLightState.LowBeam)
+            ls = int(self.player.get_light_state())
+            new = (ls | beams) if dark else (ls & ~beams)
+            if new != ls:
+                self.player.set_light_state(carla.VehicleLightState(new))
+        except Exception:        # never stop the driving window / 運転を止めない
+            pass
 
     def render(self, display):
         self.camera_manager.render(display)

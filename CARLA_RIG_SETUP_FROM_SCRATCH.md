@@ -143,6 +143,8 @@ share small JSON files next to the scripts: `pedal_tuning.json`,
 `vehicle_tuning.json`, `season.json`, and `data/ffb_status.json` and
 `data/delivery_live/`.
 
+Started on every map: `weather_cycle.py` (day/night + weather, 5.17;
+`--no-weather-cycle` turns it off).
 Started per map: `signal_timing.py apply --watch --only-map <Map>` on maps
 whose maps.json entry has `"signal_timing"` (OitaKosen; 5.14).
 Not started by the pipeline: `seasons.py` (the dashboard applies seasons itself; the CLI is optional).
@@ -1333,6 +1335,25 @@ pole ×1.2, so `ue_jp_shingo.py` sets scale 1 (else the arm floats 1.2 m above
 the head); a walk under 5 s is not started (long police cycles); a BP-only
 change needs just cook + install (build_map steps 3–4).
 
+### 5.17 Day/night cycle and dynamic weather (`weather_cycle.py`)
+
+**What (2026-11-06, checked live on OitaKosen):** 24 h in `day_minutes` (5)
+real minutes; the sun from Oita's latitude and the date. Weather spells of
+1.5-4 game hours (clear / partly / cloudy / rain / storm, `rain_chance` 25 %),
+rain only after clouds, puddles that dry. Wind untouched. Settings in
+`weather_cycle.json` (git-ignored, written by the dashboard card "Day &
+weather" on the Drive tab, endpoint `/daycycle`), state in
+`data/weather_status.json`. At precipitation >= `--rain-ground` (20)
+`delivery/station.DroneFleet` crashes every flying drone (`rain`) and holds
+take-offs; checked live (D1 came down at 27 %, nothing flew for the rest of the
+rain). The hero's headlights follow the dark (`auto_headlights` in the driving
+window), the TM cars get `update_vehicle_lights` while the cycle runs.
+Street lamps: BP_JpGaito at all 1,613 OitaKosen lamp heads (build_map step 2g,
+map guide ch. 28), on below 3° of sun, 150 000 lm (`lamp_lumens`), 30 frames/s
+with all on. Dashboard: time slider, day length − / + (1 min to 24 h), lamps
+Auto / On / Off and brightness.
+Test: `tests/test_weather_cycle.py`; UE: `maps/ue_jp_gaito_test.py` (14/14).
+
 ---
 
 ## 6. Changes to the packaged CARLA folder, and how to reproduce each one
@@ -1700,7 +1721,7 @@ Dates are JST.
 | 2026-11-02 | Oita Kosen imported (campus, dorm, 7-Eleven; Japanese buildings, road style, road fixes); landmark build order chosen; Pasir Ris large queued |
 | 2026-11-03 | Oita Kosen walker navmesh by hand; pipeline fixes (keep_left key, hero TM port, walker retries); unattended demo with the scratch watchdog |
 | 2026-11-04 | seasonal Japanese trees + wind + dashboard card; JARTIC signs and signal timing (road-sign-creator agent); akeno area features; blinkers, mirrors, lenses on own cars; `carla-car-importer` skill; skills repo renamed `carla-skills`; Pasir Ris large deferred; this document |
-| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder |
+| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder; day/night cycle + dynamic weather, rain grounds the drones |
 
 ---
 

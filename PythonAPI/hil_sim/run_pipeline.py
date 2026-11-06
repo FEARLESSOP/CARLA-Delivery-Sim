@@ -421,6 +421,10 @@ def main():
     p.add_argument("--no-dashboard", action="store_true")
     p.add_argument("--no-traction-fx", action="store_true",
                    help="no skid marks (traction_fx.py)")
+    p.add_argument("--no-weather-cycle", action="store_true",
+                   help="no day/night cycle or dynamic weather (weather_cycle.py; "
+                        "the dashboard's Day & weather card can also turn each off) "
+                        "/ 昼夜サイクル・天気変化なし")
     p.add_argument("--dashboard-port", type=int, default=5000)
     p.add_argument("--no-sensor-viewer", action="store_true",
                    help="Start without the multi-sensor viewer window (open it "
@@ -748,7 +752,7 @@ def main():
             restart_left.update({"generate_traffic": 3, "dashboard": 3,
                                  "agent": 3, "delivery": 3,
                                  "ffb": 3, "traction_fx": 3,
-                                 "signal_timing": 3})
+                                 "signal_timing": 3, "weather_cycle": 3})
             watchdog_armed_at = float("inf")
 
             if not args.no_traffic:
@@ -880,6 +884,15 @@ def main():
                        "--host", args.host, "--port", str(args.port)]
                 helper_cmds["traction_fx"] = cmd
                 children.append((launch(cmd, BASE_DIR, "traction_fx"), "traction_fx"))
+
+            if not args.no_weather_cycle:
+                # Day/night cycle and dynamic weather, settings live from the
+                # dashboard (weather_cycle.json); rain grounds the drones.
+                # 昼夜サイクルと天気（設定はダッシュボード、雨でドローン停止）。
+                cmd = [str(VENV_PY), "weather_cycle.py",
+                       "--host", args.host, "--port", str(args.port)]
+                helper_cmds["weather_cycle"] = cmd
+                children.append((launch(cmd, BASE_DIR, "weather_cycle"), "weather_cycle"))
 
             profile = map_signal_timing(map_name)
             if profile is not None:

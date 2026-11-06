@@ -34,6 +34,7 @@ import carla
 from lane_spawns import lane_spawn_points
 import traffic_profile
 import hokousha
+import weather_cycle
 
 from carla import VehicleLightState as vls
 
@@ -736,8 +737,10 @@ def main():
             print('[traffic] --error-scale 0: default traffic, profile not '
                   'applied / 係数0のため既定交通（プロファイル未適用）')
 
-        # Set automatic vehicle lights update if specified / 指定があれば車両ライトの自動更新を有効化
-        if args.car_lights_on:
+        # Automatic vehicle lights (headlights at night, in rain): asked for,
+        # or the day/night cycle is on (weather_cycle.py)
+        # 車両ライトの自動更新（指定時、または昼夜サイクルが有効な時）
+        if args.car_lights_on or weather_cycle.load_settings()['day_night']:
             all_vehicle_actors = world.get_actors(vehicles_list)
             for actor in all_vehicle_actors:
                 traffic_manager.update_vehicle_lights(actor, True)

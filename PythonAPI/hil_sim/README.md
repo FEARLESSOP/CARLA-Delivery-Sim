@@ -286,6 +286,40 @@ F5 のマップ切替後も維持されます（起動オプションではな�
 
 ---
 
+## Day, night and weather / 昼夜と天気
+
+`weather_cycle.py` (started by `run_pipeline.py` on every map; `--no-weather-cycle`
+turns it off) runs a whole day in 5 minutes and changes the weather by itself:
+
+- **Clock and sun:** the sun's height and direction come from Oita's latitude and
+  today's date, so nights are as long as they really are this season. The street
+  lamps come on below 3° of sun (or in heavy rain / fog) and go off at dawn: on
+  OitaKosen all 1,613 of our own lamps (BP_JpGaito, map guide ch. 28), on CARLA's
+  towns their own. Your car's headlights come
+  on at dusk, at night and in heavy rain or fog, and so do the NPC cars' lights.
+- **Weather:** spells of 1.5-4 game hours: clear, partly cloudy, cloudy, rain or
+  storm. Rain always comes after clouds, puddles grow while it rains and dry after.
+  The wind is left to the seasons card and the delivery sim.
+- **Rain and drones:** from 20 % rain (`delivery_sim.py --rain-ground`) every drone
+  in the air comes down (logged as a `rain` crash) and the pods keep theirs inside
+  until the rain stops (`rain_hold` / `rain_over` events).
+- **Dashboard, Drive tab, card "Day & weather":** the time, the weather, whether
+  drones may fly; day/night on/off, pause the clock, a time slider (any time, 15 min
+  steps) and dawn / noon / dusk / night buttons, day length with − / + (1 min to
+  real time: 1, 2, 3, 5, 10, 15, 20, 30, 45 min, 1, 2, 6, 24 h), street lamps Auto /
+  On / Off and their brightness, force a weather (Auto, Clear, Partly cloudy, Cloudy,
+  Rain, Storm), weather changes by itself or holds, rain chance. Saved in
+  `weather_cycle.json`, read live; the state is in `data/weather_status.json`.
+
+The C key's weather presets in the driving window are overwritten within a second
+while the cycle runs (turn both off on the card to use them).
+Test: `tests/test_weather_cycle.py`. Run by hand: `../../carla-venv/bin/python weather_cycle.py`.
+
+`weather_cycle.py`（パイプラインが全マップで起動）は 1 日を 5 分で回し、天気も自動で変わります。
+太陽は大分の緯度と今日の日付から計算、夜は自車と NPC のヘッドライトが点きます。雨（20 % 以上）では
+飛行中のドローンはすべて墜落し、ポッドは雨が止むまでドローンを出しません。ダッシュボードの
+「昼夜と天気」カードで、昼夜のオン/オフ・時計の停止・1 日の長さ・時刻・天気の固定・雨の確率を変更できます。
+
 ## Drone cameras / ドローンカメラ
 
 `--drone-cams` (with `--delivery N`) opens a CCTV-style window with one tile

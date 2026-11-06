@@ -19,7 +19,7 @@ station with a part-charged battery.
 
 import math
 
-from delivery.backends import (IN_VAN, AT_STATION, CHARGING, STANDBY, CRASHED,
+from delivery.backends import (IN_VAN, AT_STATION, FLYING, CHARGING, STANDBY, CRASHED,
                                TO_STATION, TO_VAN, DELIVERING)
 
 
@@ -79,7 +79,8 @@ class DroneFleet(object):
     """
 
     def __init__(self, units, station, battery_model, cruise_z, log, recover_s=90.0,
-                 repair_level=50.0, wind_margin=3.0, wind_hold=10.0, pod_draw=0.02):
+                 repair_level=50.0, wind_margin=3.0, wind_hold=10.0, pod_draw=0.02,
+                 rain_ground=20.0):
         self.units, self.station, self.bm = units, station, battery_model
         self.cruise_z, self.log = cruise_z, log
         self.recover_s, self.repair_level = recover_s, repair_level
@@ -89,6 +90,8 @@ class DroneFleet(object):
         self.requests = {}          # van -> % it needs for its next delivery
         self.swaps = self.charge_trips = self.repairs = 0
         self._wind = 0.0
+        self.rain = 0.0             # CARLA precipitation 0-100 (delivery_sim reads it) / 雨量
+        self.rain_ground = rain_ground  # at this rain flying drones come down (0 = never)
 
     # -- setup / 初期配置
     def start(self, vans):
@@ -115,7 +118,19 @@ class DroneFleet(object):
         Drones already in the air carry on; nothing new takes off.
         強風で新たな離陸を禁止（飛行中の機体はそのまま）。
         """
-        return self.wind_hold > 0 and self._wind > self.wind_hold
+        return self.raining or (self.wind_hold > 0 and self._wind > self.wind_hold)
+
+    @property
+    def raining(self):
+        """Rain: every drone in the air comes down and none takes off.
+        雨: 飛行中の機体はすべて墜落し、離陸もしない。"""
+        return self.rain_ground > 0 and self.rain >= self.rain_ground
+
+    def ground_reason(self):
+        """Why take-offs are held, for notes and logs. / 離陸禁止の理由。"""
+        if self.raining:
+            return "rain %.0f%%" % self.rain
+        return "wind %.1f m/s" % self._wind
 
     def plan_wind(self):
         """Wind speed to plan energy for: what blows now, plus a margin."""
@@ -176,6 +191,11 @@ class DroneFleet(object):
             elif u.status == DELIVERING and getattr(u.flight, "holding", False):
                 self._check_hold(u, t)
             was = u.status
+            if self.raining and u.status in FLYING:
+                # rain shorts the motors: down it comes / 雨でモーターが止まり墜落
+                u._crash(t, "rain")
+                self._route(u, was, ("crashed", "rain"), t)
+                continue
             for ev in u.update(t, dt, wind):
                 self._route(u, was, ev, t)
             u.collect_parcels(t)
