@@ -45,6 +45,15 @@ check("tight gripping turn: rear-axle slip ~0 (centre slips ~9 deg)",
       abs(rear_slip_deg(v_c, fwd, w_deg, xr)) < 0.5
       and math.degrees(math.atan2(v_c.y, v_c.x)) > 8.0, rear_slip_deg(v_c, fwd, w_deg, xr))
 check("sliding sideways: the rear axle's slip shows it", abs(rear_slip_deg(V(8.0, 3.0), fwd, 0.0, -1.2)) > 15.0)
+import random  # noqa: E402
+from traction_fx import stripes, STRIPES, TYRE_W  # noqa: E402
+rng = random.Random(1)
+light = [len(stripes(0.1, rng)) for _ in range(200)]
+hard = [len(stripes(1.0, rng)) for _ in range(200)]
+check("a light slide draws fewer lines than a hard one (lighter mark)", sum(light) < sum(hard), "%d < %d" % (sum(light), sum(hard)))
+check("a hard slide draws every line across the tyre", max(hard) == STRIPES)
+check("lines stay within the tyre's width",
+      all(abs(o) <= TYRE_W / 2 + 1e-9 for _ in range(50) for o in stripes(rng.random(), rng)))
 check("intensity stays within 0..1", 0.0 <= intensity(90 * kmh, 90, 5.0) <= 1.0)
 
 print("\n%s" % ("ALL PASSED" if not FAILS else "FAILED: " + ", ".join(FAILS)))

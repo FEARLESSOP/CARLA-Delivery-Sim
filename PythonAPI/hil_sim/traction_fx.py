@@ -20,8 +20,13 @@ at 30 km/h on light throttle).
   autopilot never gets there, a full-throttle launch or an emergency stop does.
 Nothing below 5 km/h (noisy readings).
 
-Skid marks are dark streaks on the road from each sliding tyre's contact
-patch (debug lines, wider when sliding harder), fading after --mark-life.
+Each tyre's mark is a band of thin lines side by side across the tyre's
+width, not one thick line: CARLA's debug lines are round tubes (a thick one
+lay on the road like a black hose, stepped at every joint) and only pure
+black does not glow. A light slide draws a few lines, a hard one all of them;
+each line lives a random 35-100 % of --mark-life, so a mark thins out and
+fades instead of vanishing at once, and short random gaps make it patchy
+like rubber on asphalt.
 
 タイヤが滑った時に路面にスキッドマークを描く。ワールドを読むだけで tick は
 しない。滑りの判定はテレメトリのスリップ角・スリップ率。
@@ -29,6 +34,7 @@ patch (debug lines, wider when sliding harder), fading after --mark-life.
 
 import argparse
 import math
+import random
 import time
 
 import carla
@@ -39,7 +45,23 @@ LONG_SLIP, LONG_SPAN = 0.3, 0.4      # tyre slip ratio: wheelspin / lock / 空�
 LONG_HOLD = 0.3                      # ... held this long (s) / この時間続いたら
 HARD_PEDAL = 0.9                     # ... with throttle or brake at least this / 強い踏み込み
 MARK_COLOR = carla.Color(0, 0, 0)    # debug lines are self-lit: even 22 glows white / 黒以外は発光する
-MARK_Z = 0.03
+MARK_Z = 0.02                        # just above the road / 路面のすぐ上
+TYRE_W = 0.22                        # mark width (m) / 跡の幅
+STRIPES = 7                          # thin lines across it / 幅方向の細線の数
+STRIPE_T = 0.018                     # each line's thickness (m): flat from any angle / 細線の太さ
+FADE_IN = 2.0                        # a mark builds up over its first metres / 跡の出始めの長さ
+MIN_STEP = 0.25                      # draw once the tyre moved this far (m) / この距離進んだら描く
+LIFE_MIN = 0.35                      # a line lives 35-100 % of --mark-life: the mark fades / 寿命の幅
+
+
+def stripes(k, rng):
+    """Lateral offsets (m, across the mark) of the lines drawn for intensity k:
+    the middle ones always, more towards the edges the harder the slide, a few
+    skipped at random (patchy). / 強さ k で描く細線の横位置。"""
+    n = max(2, min(STRIPES, int(round(2 + k * (STRIPES - 2)))))
+    order = sorted(range(STRIPES), key=lambda j: abs(j - (STRIPES - 1) / 2.0))[:n]
+    keep = 0.75 + 0.25 * k
+    return [(j - (STRIPES - 1) / 2.0) * TYRE_W / (STRIPES - 1) for j in sorted(order) if rng.random() < keep]
 
 
 def intensity(speed, rear_slip, long_=0.0, long_held=0.0, hard=False):
@@ -102,6 +124,8 @@ class SkidMarks(object):
         self.offsets = wheel_offsets(car) if car is not None else None
         self.last = [None] * len(self.offsets or ())       # trucks have 6+ wheels / トラックは 6 輪以上
         self.held = [0.0] * len(self.offsets or ())        # s each tyre's slip ratio is over / 空転の継続時間
+        self.run = [0.0] * len(self.offsets or ())         # m of the current mark / 現在の跡の長さ
+        self.rng = getattr(self, "rng", None) or random.Random()
         rear = [o.x for o in (self.offsets or ()) if o.x < 0.0]
         self.rear_x = sum(rear) / len(rear) if rear else 0.0
         if car is not None:
@@ -137,11 +161,30 @@ class SkidMarks(object):
                 self.last[i] = None
                 continue
             here = tf.transform(carla.Location(off.x, off.y, off.z))   # transforms in place / 引数を書き換える
-            if self.last[i] is not None and self.last[i].distance(here) < 3.0:   # not across a teleport
-                self.world.debug.draw_line(
-                    self.last[i], here, thickness=0.12 + 0.1 * k, color=MARK_COLOR,
-                    life_time=self.args.mark_life)
+            a = self.last[i]
+            if a is None or a.distance(here) >= 3.0:          # a new mark, or across a teleport / 新しい跡
+                self.last[i], self.run[i] = here, 0.0
+                continue
+            step = a.distance(here)
+            if step < MIN_STEP:
+                continue
+            self.run[i] += step
+            self.draw_band(a, here, k * min(1.0, 0.3 + self.run[i] / FADE_IN))
             self.last[i] = here
+
+    def draw_band(self, a, b, k):
+        """The mark from a to b: thin lines across it, perpendicular to the way
+        the tyre moved. / a から b への跡（移動方向に直交する細線の束）。"""
+        dx, dy = b.x - a.x, b.y - a.y
+        n = math.hypot(dx, dy) or 1.0
+        px, py = -dy / n, dx / n
+        life = self.args.mark_life
+        for off in stripes(k, self.rng):
+            self.world.debug.draw_line(
+                carla.Location(a.x + px * off, a.y + py * off, a.z),
+                carla.Location(b.x + px * off, b.y + py * off, b.z),
+                thickness=STRIPE_T, color=MARK_COLOR,
+                life_time=life * self.rng.uniform(LIFE_MIN, 1.0))
 
 
 def main():

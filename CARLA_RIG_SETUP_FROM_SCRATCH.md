@@ -725,6 +725,14 @@ the header is now flushed at open, a fix for 0-byte files) and
 `summary.json`. Options: `--host --port --dashboard-port --log-dir
 --no-log --delivery-live-dir`.
 
+**Delivery City Map speed (2026-11-06):** the map's lanes, markings and
+buildings are built once per map as a few `Path2D` objects in world metres,
+drawn with one transform, onto an image that covers the view plus half a view
+on each side. Panning slides that image, zooming stretches it and redraws it
+sharp 140 ms after the wheel stops, and mouse events redraw at most once per
+frame. OitaKosen (2942 lanes, 3190 markings, 1208 buildings): panning went
+from 7.7 to 100 frames/s, a full redraw from 7.5 ms to 1.3 ms.
+
 ### 5.7 Skid marks (`traction_fx.py`)
 
 **What (2026-10-28):** dark debug-line streaks behind each sliding tyre,
@@ -737,6 +745,14 @@ whose pedals change every tick (TM-driven Tesla and RX-7, median 0.31-0.33 at
 30 km/h). The pipeline starts it; turn it off with
 `--no-traction-fx`. Options: `--host --port --mark-life --role`. Test:
 `tests/test_traction_fx.py`.
+
+**The look (2026-11-06):** CARLA's debug lines are round tubes and only
+pure black doesn't glow; one thick line per tyre lay on the road like a
+black hose, stepped at every joint. Each mark is now 7 thin lines (0.018 m)
+across a 0.22 m band, perpendicular to the tyre's travel, drawn every 0.25 m:
+a light slide draws the middle lines, a hard one all; random gaps make it
+patchy; each line lives a random 35-100 % of `--mark-life`, so marks fade.
+No frame-rate cost (30 frames/s idle and during a slide).
 
 **Tyre smoke was built and then removed at the user's request** (it looked
 like white puffballs). The code, `fx/` and the FXModels package were

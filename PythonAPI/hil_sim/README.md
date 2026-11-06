@@ -347,9 +347,10 @@ the dashboard's Settings > Delivery sim ("CARLA tooltips"), or start with
 
 ## Skid marks / スキッドマーク
 
-`traction_fx.py` (started by `run_pipeline.py`) draws black streaks on the
-road behind each sliding tyre, wider the harder it slides; they fade after
-25 s (`--mark-life`). Above 5 km/h the car is sliding when:
+`traction_fx.py` (started by `run_pipeline.py`) draws a mark on the road
+behind each sliding tyre: a band of thin dark lines across the tyre's width,
+denser the harder it slides, building up over the first 2 m, and thinning out
+until it is gone after 25 s (`--mark-life`; each line lives 35-100 % of it). Above 5 km/h the car is sliding when:
 
 - the slip angle at the rear axle is over 8° (a gripping car stays under 7°
   even in tight junction turns; a drift or spin goes past 10°), or

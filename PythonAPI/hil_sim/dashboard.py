@@ -5728,73 +5728,103 @@ function drArrow(ctx, x, y, dx, dy, col, w) {
 const DR_MAPC = {ground:'#555753', road:'#2e3436', side:'#888a85', shoulder:'#423e40',
                  park:'#423e40', bld:'#46484a', bldEdge:'#3a3c3d', white:'#babdb6', yellow:'#edd400'};
 
-// the map itself (lanes, markings, buildings), redrawn only when the view
-// changes / 地図本体は表示範囲が変わった時だけ描き直す
-function drBaseLayer(W, H, dpr) {
-  const m = DR.map, v = DR.view;
-  const key = [m.map, W, H, dpr, v.cx, v.cy, v.s].join();
-  if (DR.base && DR.baseKey === key && DR.baseMap === m) return DR.base;
-  const cv = DR.base || document.createElement('canvas');
-  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  const cw = W / 2, ch = H / 2;
-  const path = (f, close) => {
-    ctx.beginPath();
-    for (let i = 0; i < f.length; i += 2) {
-      const x = (f[i] - v.cx) * v.s + cw, y = (f[i + 1] - v.cy) * v.s + ch;
-      if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-    }
-    if (close) ctx.closePath();
+// the map itself (lanes, markings, buildings) as a few Path2D objects in world
+// metres, built once per map: a redraw is ~8 draw calls with a transform, not
+// ~8000 shapes with per-point maths (panning ran at 7.7 frames/s on OitaKosen)
+// 地図本体は地図ごとに 1 回、世界座標の Path2D にまとめる（描画呼び出し約 8 回）
+function drPaths(m) {
+  if (DR.paths && DR.pathsMap === m) return DR.paths;
+  const P = {s:new Path2D(), h:new Path2D(), d:new Path2D(), bld:new Path2D(),
+             w:new Path2D(), wb:new Path2D(), y:new Path2D(), yb:new Path2D(), roads:new Path2D()};
+  const add = (p, f, close) => {
+    for (let i = 0; i < f.length; i += 2) { if (i) p.lineTo(f[i], f[i + 1]); else p.moveTo(f[i], f[i + 1]); }
+    if (close) p.closePath();
   };
-  // buildings / 建物
-  ctx.fillStyle = m.lanes ? DR_MAPC.bld : '#18202d';
-  ctx.strokeStyle = m.lanes ? DR_MAPC.bldEdge : '#243044'; ctx.lineWidth = 1;
-  const pt = (x, y) => [(x - v.cx) * v.s + cw, (y - v.cy) * v.s + ch];
   for (const [x, y, ex, ey, yaw] of m.buildings) {
     const r = yaw * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
-    ctx.beginPath();
-    [[ex, ey], [-ex, ey], [-ex, -ey], [ex, -ey]].forEach(([a, b], i) => {
-      const p = pt(x + a * c - b * sn, y + a * sn + b * c);
-      if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]);
-    });
-    ctx.closePath(); ctx.fill(); ctx.stroke();
+    add(P.bld, [[ex, ey], [-ex, ey], [-ex, -ey], [ex, -ey]].flatMap(([a, b]) => [x + a * c - b * sn, y + a * sn + b * c]), true);
   }
+  for (const [k, f] of m.lanes || []) add(k === 's' ? P.s : k === 'd' ? P.d : P.h, f, true);
+  for (const [col, broken, f] of m.marks || []) add(col === 'y' ? (broken ? P.yb : P.y) : (broken ? P.wb : P.w), f, false);
+  for (const pl of m.roads || []) if (!m.lanes) add(P.roads, pl.flat(), false);
+  DR.paths = P; DR.pathsMap = m;
+  return P;
+}
+
+// the base layer covers the view plus half a view on every side: panning only
+// moves the image, a new one is drawn when the view leaves it or the zoom changes
+// 表示範囲の周囲半画面分まで描いておき、移動は画像をずらすだけ
+const DR_MARGIN = 0.5;
+function drBaseRender(W, H, dpr) {
+  const m = DR.map, v = DR.view, P = drPaths(m);
+  const BW = Math.round(W * (1 + 2 * DR_MARGIN)), BH = Math.round(H * (1 + 2 * DR_MARGIN));
+  const cv = (DR.base && DR.base.cv) || document.createElement('canvas');
+  cv.width = Math.round(BW * dpr); cv.height = Math.round(BH * dpr);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  // world metres -> base pixels / 世界座標 -> 画像の画素
+  ctx.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * (BW / 2 - v.cx * v.s), dpr * (BH / 2 - v.cy * v.s));
+  const px = 1 / v.s;                               // one CSS pixel in metres / 1 画素の長さ
+  ctx.lineJoin = 'round';
+  ctx.fillStyle = m.lanes ? DR_MAPC.bld : '#18202d';
+  ctx.strokeStyle = m.lanes ? DR_MAPC.bldEdge : '#243044'; ctx.lineWidth = px;
+  ctx.fill(P.bld); ctx.stroke(P.bld);
   if (m.lanes) {
     // pavements and shoulders under the carriageways, as CARLA draws them;
-    // each lane is also outlined in its own colour so neighbouring lanes meet
+    // each layer also outlined in its colour so neighbouring lanes meet
     // without a seam / 歩道・路肩の上に車道。隙間が出ないよう同色で縁取る
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 1.2;
-    for (const [kinds, col] of [[['s'], DR_MAPC.side], [['h', 'p'], DR_MAPC.shoulder], [['d'], DR_MAPC.road]]) {
-      ctx.fillStyle = ctx.strokeStyle = col;
-      for (const [k, f] of m.lanes) {
-        if (!kinds.includes(k)) continue;
-        path(f, true); ctx.fill(); ctx.stroke();
-      }
+    ctx.lineWidth = 1.2 * px;
+    for (const [p, col] of [[P.s, DR_MAPC.side], [P.h, DR_MAPC.shoulder], [P.d, DR_MAPC.road]]) {
+      ctx.fillStyle = ctx.strokeStyle = col; ctx.fill(p); ctx.stroke(p);
     }
     // lane markings, only once they are big enough to read / 区画線（拡大時のみ）
     if (v.s > 0.6) {
       ctx.lineCap = 'butt';
-      ctx.lineWidth = Math.max(1, Math.min(3, 0.15 * v.s));
-      const dash = [3 * v.s, 5 * v.s];
-      for (const [col, broken, f] of m.marks || []) {
-        ctx.strokeStyle = col === 'y' ? DR_MAPC.yellow : DR_MAPC.white;
-        ctx.setLineDash(broken ? dash : []);
-        path(f, false); ctx.stroke();
+      ctx.lineWidth = Math.max(1, Math.min(3, 0.15 * v.s)) * px;
+      for (const [p, col, broken] of [[P.w, DR_MAPC.white, false], [P.wb, DR_MAPC.white, true],
+                                      [P.y, DR_MAPC.yellow, false], [P.yb, DR_MAPC.yellow, true]]) {
+        ctx.strokeStyle = col; ctx.setLineDash(broken ? [3, 5] : []); ctx.stroke(p);
       }
       ctx.setLineDash([]);
     }
   } else {
     // older delivery_sim: lane centre lines only / 旧形式: 車線中心線のみ
-    ctx.strokeStyle = '#33415a'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.lineWidth = Math.max(1.2, 3.4 * v.s);
-    for (const pl of m.roads) { path(pl.flat(), false); ctx.stroke(); }
+    ctx.strokeStyle = '#33415a'; ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(1.2, 3.4 * v.s) * px;
+    ctx.stroke(P.roads);
   }
-  DR.base = cv; DR.baseKey = key; DR.baseMap = m;
-  return cv;
+  DR.base = {cv, map:m, s:v.s, cx:v.cx, cy:v.cy, BW, BH, W, H, dpr};
 }
+
+// draw the base layer for the current view: reuse (pan), stretch (zoom, sharp
+// again once the wheel stops) or render anew / 移動は再利用、拡大縮小は伸縮後に描き直し
+function drBaseDraw(ctx, W, H, dpr) {
+  const v = DR.view;
+  let b = DR.base;
+  const fresh = b && b.map === DR.map && b.dpr === dpr && b.W === W && b.H === H;
+  if (fresh && b.s === v.s) {
+    if (Math.abs(b.cx - v.cx) * v.s > (b.BW - W) / 2 || Math.abs(b.cy - v.cy) * v.s > (b.BH - H) / 2) {
+      drBaseRender(W, H, dpr); b = DR.base;
+    }
+  } else if (fresh) {
+    clearTimeout(DR.zoomTimer);
+    DR.zoomTimer = setTimeout(() => { drBaseRender(W, H, dpr); drRequest(); }, 140);
+  } else {
+    drBaseRender(W, H, dpr); b = DR.base;
+  }
+  const k = v.s / b.s;          // 1 unless zooming / 拡大縮小中以外は 1
+  const ox = (b.cx - b.BW / (2 * b.s) - v.cx) * v.s + W / 2;
+  const oy = (b.cy - b.BH / (2 * b.s) - v.cy) * v.s + H / 2;
+  ctx.drawImage(b.cv, ox, oy, b.BW * k, b.BH * k);
+}
+
+// one redraw per screen frame however many mouse events arrive / 1 フレームに 1 回
+function drRequest() {
+  if (DR.raf) return;
+  DR.raf = requestAnimationFrame(() => { DR.raf = 0; drDrawMap(); });
+}
+const drFont = () => DR.font || (DR.font = getComputedStyle(document.body).fontFamily);
 
 function drDrawMap() {
   const cv = $('dmap'), dpr = window.devicePixelRatio || 1;
@@ -5809,14 +5839,14 @@ function drDrawMap() {
   ctx.fillStyle = m && m.lanes ? DR_MAPC.ground : '#0c1119'; ctx.fillRect(0, 0, W, H);
   DR.hits = [];
   if (!m) {
-    ctx.fillStyle = C.mute; ctx.font = '13px ' + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = C.mute; ctx.font = '13px ' + drFont();
     ctx.textAlign = 'center';
     ctx.fillText(t('dr_nomap'), W / 2, H / 2);
     return;
   }
   if (!DR.view) drFit();
   const v = DR.view;
-  ctx.drawImage(drBaseLayer(W, H, dpr), 0, 0, W, H);
+  drBaseDraw(ctx, W, H, dpr);
   const R = k => Math.max(k, k * v.s / 2.2);     // marker size grows when zoomed in
   // charge station / 充電所
   ctx.fillStyle = '#78ff3c33'; ctx.strokeStyle = '#78ff3c';
@@ -5826,7 +5856,7 @@ function drDrawMap() {
   }
   if (m.station.length) {
     const p = drP(m.station[0][0], m.station[0][1]);
-    ctx.fillStyle = '#78ff3c'; ctx.font = '600 11px ' + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = '#78ff3c'; ctx.font = '600 11px ' + drFont();
     ctx.textAlign = 'left'; ctx.fillText(t('dr_lg_station'), p[0] + 10, p[1] - 8);
     DR.hits.push({x:p[0], y:p[1], r:12, tip:t('dr_lg_station') + ' · ' + m.station.length + ' pads'});
   }
@@ -5835,7 +5865,7 @@ function drDrawMap() {
     const p = drP(x, y), r = R(4.5);
     ctx.fillStyle = '#ffd22833'; ctx.strokeStyle = '#ffd228'; ctx.lineWidth = 1.5;
     ctx.fillRect(p[0] - r, p[1] - r, 2 * r, 2 * r); ctx.strokeRect(p[0] - r, p[1] - r, 2 * r, 2 * r);
-    ctx.fillStyle = '#ffd228'; ctx.font = '700 11px ' + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = '#ffd228'; ctx.font = '700 11px ' + drFont();
     ctx.textAlign = 'center'; ctx.fillText('EV', p[0], p[1] + 3);
     DR.hits.push({x:p[0], y:p[1], r:9, tip:t('dr_lg_ev')});
   }
@@ -5851,7 +5881,7 @@ function drDrawMap() {
   const parked = (s.drones || []).filter(d => d.status === 'charging' || d.status === 'standby');
   if (parked.length && m.station.length) {
     const p = drP(m.station[0][0], m.station[0][1]);
-    ctx.font = '600 11.5px ' + getComputedStyle(document.body).fontFamily; ctx.textAlign = 'left';
+    ctx.font = '600 11.5px ' + drFont(); ctx.textAlign = 'left';
     parked.forEach((d, i) => {
       ctx.fillStyle = drBattCol(d.battery);
       ctx.fillText('D' + d.id + ' ' + Math.round(d.battery) + '% ' + drSt(d.status),
@@ -5900,7 +5930,7 @@ function drDrawMap() {
     drBox(ctx, van.x, van.y, Math.max(2.3, 7 / v.s), Math.max(1.1, 3.5 / v.s), van.yaw);
     ctx.fill(); ctx.stroke();
     const p = drP(van.x, van.y);
-    ctx.fillStyle = '#e8eef6'; ctx.font = '700 11px ' + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = '#e8eef6'; ctx.font = '700 11px ' + drFont();
     ctx.textAlign = 'center';
     ctx.fillText('V' + van.id + ' ' + Math.round(van.battery) + '%', p[0], p[1] - 9);
     DR.hits.push({x:p[0], y:p[1], r:10, tip:'VAN ' + van.id + ' · battery ' + Math.round(van.battery) + '% · ' + van.state +
@@ -5926,7 +5956,7 @@ function drDrawMap() {
       ctx.moveTo(p[0] + r, p[1] - r); ctx.lineTo(p[0] - r, p[1] + r); ctx.stroke();
     }
     if (flying || d.status === 'crashed') {     // pad drones are listed by the station
-      ctx.fillStyle = '#e8eef6'; ctx.font = '700 11.5px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillStyle = '#e8eef6'; ctx.font = '700 11.5px ' + drFont();
       ctx.textAlign = 'left';
       ctx.fillText('D' + d.id + ' ' + Math.round(d.battery) + '%', p[0] + r + 3, p[1] + 4);
     }
@@ -5942,7 +5972,7 @@ function drDrawMap() {
   drArrow(ctx, cx - L / 2 * Math.cos(a), cy - L / 2 * Math.sin(a), L * Math.cos(a), L * Math.sin(a),
           w.gust ? '#ff7a59' : '#7fb8ff', 3);
   ctx.fillStyle = w.gust ? '#ff7a59' : '#cfe3ff'; ctx.textAlign = 'center';
-  ctx.font = '700 11px ' + getComputedStyle(document.body).fontFamily;
+  ctx.font = '700 11px ' + drFont();
   ctx.fillText(fmt(w.speed || 0, 1) + ' m/s' + (w.gust ? ' GUST' : ''), cx, cy + 58);
 }
 
@@ -6101,7 +6131,7 @@ $('dmap').addEventListener('wheel', ev => {
   const wx = v.cx + mx / v.s, wy = v.cy + my / v.s;
   v.s = clamp(v.s * (ev.deltaY < 0 ? 1.18 : 1 / 1.18), 0.05, 40);
   v.cx = wx - mx / v.s; v.cy = wy - my / v.s;
-  drDrawMap();
+  drRequest();
 }, {passive:false});
 $('dmap').addEventListener('mousedown', ev => {
   if (!DR.view) return;
@@ -6114,7 +6144,7 @@ window.addEventListener('mousemove', ev => {
   if (DR.drag && DR.view) {
     DR.view.cx = DR.drag.cx - (ev.clientX - DR.drag.x) / DR.view.s;
     DR.view.cy = DR.drag.cy - (ev.clientY - DR.drag.y) / DR.view.s;
-    drDrawMap(); tip.style.display = 'none'; return;
+    drRequest(); tip.style.display = 'none'; return;
   }
   if ($('view-drone').hidden || !DR.hits) return;
   const r = cv.getBoundingClientRect();
@@ -6126,7 +6156,7 @@ window.addEventListener('mousemove', ev => {
   tip.textContent = best.tip; tip.style.display = 'block';
   tip.style.left = Math.min(x + 14, r.width - tip.offsetWidth - 4) + 'px'; tip.style.top = (y + 14) + 'px';
 });
-$('dmap').addEventListener('dblclick', () => { drFit(); drDrawMap(); });
+$('dmap').addEventListener('dblclick', () => { drFit(); drRequest(); });
 /* ------------------------------------------------------- force feedback */
 // Every setting of carla_ffb.py as a slider, built from the schema /ffb
 // sends (ffb_settings.py). Changes are POSTed and carla_ffb.py picks them
