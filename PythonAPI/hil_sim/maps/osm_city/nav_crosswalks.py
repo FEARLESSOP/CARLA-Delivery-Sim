@@ -1,14 +1,77 @@
-"""Crosswalk areas from the zebra paint: line_white pieces ~0.45 x 4 m, grouped, hulled.
+"""Navmesh areas over the road for nav_obj.py (guide ch. 7, 31).
   python nav_crosswalks.py mesh_dir out.npz
-横断歩道の範囲を白線（ゼブラ）から作る。"""
-import glob, os, sys
+
+With <build>/nav_areas.json (pavements.py, Japanese maps): the crossing bands
+widened over the kerb (crosswalk), the dropped-kerb aprons across estate junction
+mouths and the kerb connectors (sidewalk), and the park / playground lawns that
+stay grass; faces on the built road surface (z from the nearest road vertex).
+Otherwise: crosswalk hulls from the zebra paint (line_white pieces ~0.45 x 4 m,
+grouped, hulled), as before.
+npz: V, I, hulls (crosswalk faces), SV, SI (sidewalk faces), lawns (wkt list).
+横断歩道・交差点口の帯・芝生（公園）をナビメッシュ用に作る。"""
+import glob, json, os, sys
 import numpy as np
 import shapely
+from shapely import wkt
 from shapely.geometry import Polygon, MultiPoint
 from shapely.ops import unary_union
 from shapely.geometry.polygon import orient
 from shapely import STRtree
 mesh_dir, out = sys.argv[1], sys.argv[2]
+areas_f = os.path.join(os.path.dirname(os.path.abspath(mesh_dir.rstrip("/"))), "nav_areas.json")
+
+
+def surface(fams, mats=None):
+    """Vertices of the built surfaces (z source). / 高さの元になる頂点。"""
+    V = []
+    for f in glob.glob(os.path.join(mesh_dir, "*.npz")):
+        if os.path.basename(f).rsplit("_", 2)[0] not in fams:
+            continue
+        d = np.load(f)
+        V += [d[k] for k in d.files if k.endswith("|V") and (mats is None or k[:-2] in mats)]
+    return np.concatenate(V) if V else np.zeros((0, 3))
+
+
+def faces(polys, V, tree, lift):
+    """Constrained-Delaunay faces of polygons, z = nearest surface vertex + lift. / 面を作る。"""
+    FV, FI, off = [], [], 0
+    for p in polys:
+        for q in getattr(p, "geoms", [p]):
+            if q.geom_type != "Polygon" or q.area < 0.05:
+                continue
+            q = shapely.segmentize(q, 1.0)
+            tris = shapely.get_parts(shapely.constrained_delaunay_triangles(q))
+            if not len(tris):
+                continue
+            C = shapely.get_coordinates(shapely.get_exterior_ring(tris)).reshape(-1, 4, 2)[:, :3]
+            a, b, c = C[:, 0], C[:, 1], C[:, 2]
+            cr = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
+            C = C[np.abs(cr) > 1e-9]
+            cr = cr[np.abs(cr) > 1e-9]
+            C[cr < 0] = C[cr < 0][:, ::-1]                       # ccw from above / 上から反時計回り
+            P = C.reshape(-1, 2)
+            idx = tree.query_nearest(shapely.points(P[:, 0], P[:, 1]), all_matches=False)[1]
+            FV.append(np.c_[P, V[idx, 2] + lift])
+            FI.append(np.arange(len(P)).reshape(-1, 3) + off)
+            off += len(P)
+    if not FV:
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
+    return np.concatenate(FV), np.concatenate(FI)
+
+
+if os.path.exists(areas_f):
+    A = json.load(open(areas_f))
+    V = surface(("Road_Road", "Road_Sidewalk"))
+    tree = STRtree(shapely.points(V[:, 0], V[:, 1]))
+    cw = [wkt.loads(h) for h in A.get("crosswalk", [])]
+    sw = [wkt.loads(h) for h in A.get("sidewalk", [])]
+    HV, HI = faces(cw, V, tree, 0.005)
+    SV, SI = faces(sw, V, tree, -0.02)          # (just under: a kerb top beside it is still marked)
+    np.savez(out, V=HV, I=HI, hulls=np.array([h.wkt for h in cw]), SV=SV, SI=SI,
+             lawns=np.array(A.get("lawns", [])))
+    print(len(cw), "crosswalks", len(sw), "sidewalk aprons", len(A.get("lawns", [])), "lawns (nav_areas.json)")
+    sys.exit(0)
+
 tris, zs = [], []
 for f in glob.glob(os.path.join(mesh_dir, "Road_Marking*.npz")):
     d = np.load(f)

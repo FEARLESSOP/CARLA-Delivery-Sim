@@ -364,8 +364,10 @@ finally:
 names = [n for n, _ in LAUNCHED]
 first, second = names[:names.index("manual_control") + 1], names[names.index("manual_control") + 1:]
 check("pipeline exits 0 after the second window quits", rc == 0, str(rc))
-check("startup map via config.py, the switch via load_world_map",
-      LOADS == ["config.py:OitaKosen", "OitaStation"], str(LOADS))
+# both the startup map and the switch go through load_world_map (120 s + confirm):
+# config.py's 10 s timed out on the extended OitaStation (2026-11-09)
+check("startup map and the switch via load_world_map",
+      LOADS == ["OitaKosen", "OitaStation"], str(LOADS))
 # the real signal timing runs only on maps with maps.json "signal_timing" (OitaKosen)
 # 信号時間は maps.json に "signal_timing" があるマップ（OitaKosen）だけ
 check("every client started again after the switch (same set, less the timing)",

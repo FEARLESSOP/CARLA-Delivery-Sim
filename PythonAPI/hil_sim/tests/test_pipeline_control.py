@@ -53,6 +53,7 @@ class FakeProc(object):
 # 監視ループの 1 秒ごとにダッシュボードの依頼を 1 件
 SCRIPT = {
     2: ("traffic", {"vehicles": 25, "walkers": 4, "cyclists": 0}),
+    3: ("delivery", {"vans": 3, "charge_stations": 4, "charge_mode": "random"}),
     4: ("delivery", {"vans": 0}),
     6: ("helper", {"name": "ffb", "on": False}),
     8: ("vehicle", {"vehicle": "vehicle.toyota.supra_a70"}),
@@ -125,21 +126,41 @@ tr = cmds("generate_traffic")
 check("traffic restarted with the new counts", len(tr) >= 2 and tr[1][tr[1].index("-n") + 1] == "25"
       and tr[1][tr[1].index("-w") + 1] == "4", [c[c.index("-n") + 1] for c in tr])
 check("the old traffic was stopped first", "generate_traffic" in STOPPED)
-check("pods off: the delivery sim stopped, not restarted", "delivery" in STOPPED and len(cmds("delivery")) == 1)
+dl = cmds("delivery")
+check("no charging-station flags at start (0 = road-side chargers)", bool(dl) and "--charge-stations" not in dl[0], dl[:1])
+check("charging stations: the delivery sim restarted with --charge-stations 4 --charge-mode random",
+      len(dl) >= 2 and dl[1][dl[1].index("--charge-stations") + 1] == "4"
+      and dl[1][dl[1].index("--charge-mode") + 1] == "random", dl[1:2])
+check("pods off: the delivery sim stopped, not restarted", "delivery" in STOPPED and len(cmds("delivery")) == 2)
 check("pods off: the drone camera wall closed", "drone_cams" in STOPPED)
 check("force feedback off", "ffb" in STOPPED and len(cmds("ffb")) == 1)
 mcs = cmds("manual_control")
 check("driving window restarted with the new car", len(mcs) >= 2
       and mcs[1][mcs[1].index("--start-vehicle") + 1] == "vehicle.toyota.supra_a70")
-check("map switch to Town03 like F5", LOADS == ["Town03"], LOADS)
+# the startup map loads through load_world_map too (config.py's 10 s was too short, 2026-11-09)
+check("map switch to Town03 like F5", LOADS[1:] == ["Town03"], LOADS)
 check("after the switch the new car is kept", mcs[-1][mcs[-1].index("--start-vehicle") + 1] == "vehicle.toyota.supra_a70")
 check("after the switch traffic keeps the new counts", tr[-1][tr[-1].index("-n") + 1] == "25")
-check("after the switch no delivery sim (pods 0)", len(cmds("delivery")) == 1)
+check("after the switch no delivery sim (pods 0)", len(cmds("delivery")) == 2)
 check("stop: the pipeline returns 0", rc == 0, rc)
 phases = [s.get("phase") for s in STATES]
 check("state file: running, then switching", "running" in phases and "switching" in phases, sorted(set(phases)))
 mid = [s for s in STATES if s.get("phase") == "running" and s.get("vehicles") == 25]
 check("state file shows the live values", bool(mid) and mid[-1]["delivery"] == 0 and mid[-1]["ffb"] is False
       and mid[-1]["launcher"] is True, mid[-1] if mid else STATES[-1:])
+chg = [s for s in STATES if s.get("charge_stations") == 4]
+check("state file shows the charging stations", bool(chg) and chg[-1].get("charge_mode") == "random",
+      chg[-1:] if chg else STATES[-1:])
+
+print("=== charging-station flags / 充電ステーションの引数 ===")
+zp = os.path.join(TMP, "zones.json")
+rp.delivery_zones.save("OitaKosen", {"charge": [{"x": 10, "y": 20}, {"x": 50, "y": 60, "yaw": 90}]}, zp)
+check("random 0: nothing (road-side chargers)", rp.charge_station_args(0, "random", "OitaKosen", zp) == [])
+check("random 5", rp.charge_station_args(5, "random", "OitaKosen", zp) == ["--charge-stations", "5", "--charge-mode", "random"])
+check("random is capped at 12", rp.charge_station_args(40, "random", "OitaKosen", zp)[1] == "12")
+check("manual: every placed spot, the stepper ignored",
+      rp.charge_station_args(0, "manual", "Japan/Maps/OitaKosen/OitaKosen", zp) == ["--charge-stations", "2", "--charge-mode", "manual"])
+check("manual without spots on this map: nothing", rp.charge_station_args(6, "manual", "Town03", zp) == [])
+check("unknown mode falls back to random", rp.charge_station_args(3, "bogus", "Town03", zp)[-1] == "random")
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(1 if FAILS else 0)

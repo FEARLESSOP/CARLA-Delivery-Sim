@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, Map as MapIcon, Play, RotateCcw, Search, TerminalSquare, Zap } from 'lucide-react'
 import '@/i18n/launch'
 import { launcherAPI, type CarEntry, type ControlRequest, type LaunchOptions, type LauncherInfo, type MapEntry, type OptionSpec } from '@/lib/api'
@@ -12,6 +12,8 @@ import Aurora from '@/components/bits/Aurora'
 import ShinyText from '@/components/bits/ShinyText'
 import StarBorder from '@/components/bits/StarBorder'
 import SpotlightCard from '@/components/bits/SpotlightCard'
+import ChargeStations from './ChargeStations'
+import { CHARGE_KEYS, chargeCount, chargeMode, chargeSummary, usePlacedStations, type Placed } from './charge'
 
 // The Simulation page: the launch form when nothing runs, live controls while
 // it runs (launcher.py, pipeline_control.py). Built from launch_options.py's
@@ -116,12 +118,15 @@ function OptionField({ o, value, onChange, info }: {
   }
 }
 
-function GroupPanel({ g, title, info, opts, set, open: open0 = true }: {
+function GroupPanel({ g, title, info, opts, set, open: open0 = true, extra }: {
   g: string; title: string; info: LauncherInfo; opts: LaunchOptions; set: (k: string, v: LaunchOptions[string]) => void; open?: boolean
+  /** a custom block after the fields (the delivery group's charging stations) / 追加の欄 */
+  extra?: ReactNode
 }) {
   const [open, setOpen] = useState(open0)
-  const fields = info.schema.filter((o) => o.group === g && o.type !== 'map')
-  if (!fields.length) return null
+  // charging stations have their own card / 充電ステーションは専用の欄
+  const fields = info.schema.filter((o) => o.group === g && o.type !== 'map' && !CHARGE_KEYS.includes(o.key))
+  if (!fields.length && !extra) return null
   return (
     <section className="rounded-xl border border-line bg-surface/50">
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
@@ -132,6 +137,7 @@ function GroupPanel({ g, title, info, opts, set, open: open0 = true }: {
       {open && (
         <div className="divide-y divide-line/60 px-4 pb-3">
           {fields.map((o) => <OptionField key={o.key} o={o} info={info} value={opts[o.key]} onChange={(v) => set(o.key, v)} />)}
+          {extra && <div className="pt-3">{extra}</div>}
         </div>
       )}
     </section>
@@ -158,7 +164,7 @@ function LogPanel({ active }: { active: boolean }) {
 }
 
 /** What will start, in one glance. / 起動内容の要約 */
-function Summary({ info, opts }: { info: LauncherInfo; opts: LaunchOptions }) {
+function Summary({ info, opts, placed }: { info: LauncherInfo; opts: LaunchOptions; placed: Placed }) {
   const t = useT()
   const car = info.catalog.cars.find((c) => c.id === opts.start_vehicle)
   const spec = (k: string) => info.schema.find((o) => o.key === k)!
@@ -168,6 +174,7 @@ function Summary({ info, opts }: { info: LauncherInfo; opts: LaunchOptions }) {
     [label(t, spec('walkers')), opts.traffic ? String(opts.walkers) : '0'],
     [label(t, spec('cyclists')), opts.traffic ? String(opts.cyclists) : '0'],
     [label(t, spec('delivery')), String(opts.delivery)],
+    [t('l_cs_title'), chargeSummary(t, opts, placed.n)],
     [label(t, spec('start_vehicle')), car?.name ?? String(opts.start_vehicle)],
     [label(t, spec('control_res')), String(opts.control_res)],
   ]
@@ -192,6 +199,7 @@ function LaunchForm({ info }: { info: LauncherInfo }) {
   const defaults = useMemo(() => Object.fromEntries(info.schema.map((o) => [o.key, o.default])) as LaunchOptions, [info.schema])
   const last = info.launcher?.last_exit
   const launch = async () => { setBusy(true); try { await launcherAPI.launch(opts); await refreshSim() } finally { setTimeout(() => setBusy(false), 1500) } }
+  const placed = usePlacedStations(String(opts.map), chargeMode(opts) === 'manual')
   return (
     <div className="space-y-5">
       <div className="relative overflow-hidden rounded-2xl border border-line bg-surface">
@@ -224,11 +232,12 @@ function LaunchForm({ info }: { info: LauncherInfo }) {
             <LiveTag kind="map" />
           </div>
           <MapPicker maps={info.catalog.maps} value={String(opts.map)} onPick={(m) => set('map', m)} />
-          <Summary info={info} opts={opts} />
+          <Summary info={info} opts={opts} placed={placed} />
         </SpotlightCard>
         <div className="space-y-3">
           {info.groups.filter(([g]) => g !== 'world').map(([g]) => (
-            <GroupPanel key={g} g={g} title={t(`grp_${g}`)} info={info} opts={opts} set={set} open={g !== 'advanced' && g !== 'display'} />
+            <GroupPanel key={g} g={g} title={t(`grp_${g}`)} info={info} opts={opts} set={set} open={g !== 'advanced' && g !== 'display'}
+              extra={g === 'delivery' ? <ChargeStations info={info} opts={opts} set={set} map={String(opts.map)} placed={placed} /> : undefined} />
           ))}
         </div>
       </div>
@@ -250,16 +259,25 @@ function LiveControls({ info }: { info: LauncherInfo }) {
   const [opts, setOpts] = useState<LaunchOptions>({
     ...base, map: ps.map, vehicles: ps.vehicles, walkers: ps.walkers, cyclists: ps.cyclists, delivery: ps.delivery,
     start_vehicle: ps.start_vehicle || base.start_vehicle,
+    charge_stations: ps.charge_stations ?? chargeCount(base), charge_mode: ps.charge_mode ?? chargeMode(base),
   })
   const set = (k: string, v: LaunchOptions[string]) => setOpts((o) => ({ ...o, [k]: v }))
   const [sent, setSent] = useSent()
   const [sureMap, setSureMap] = useState<string | null>(null)
   const send = async (req: ControlRequest, tag: string) => { await launcherAPI.control(req); setSent(tag); refreshSim() }
   const spec = (k: string) => info.schema.find((o) => o.key === k)!
+  const placed = usePlacedStations(ps.map, chargeMode(opts) === 'manual')
+  // manual: the count sent is the number of spots placed (the pipeline reads
+  // the spots themselves), so placing more enables Apply; older pipelines do
+  // not report the stations: compare with the defaults
+  // 手動では配置数を送る（追加すると適用可）。古いパイプラインは既定値と比較
+  const chargeSend = chargeMode(opts) === 'manual' ? placed.n ?? 0 : chargeCount(opts)
+  const chargeDirty = chargeSend !== (ps.charge_stations ?? 0) || chargeMode(opts) !== (ps.charge_mode ?? 'random')
 
   const trafficDirty = opts.vehicles !== ps.vehicles || opts.walkers !== ps.walkers || opts.cyclists !== ps.cyclists
   const helpers: [string, boolean][] = [
     ['ffb', ps.ffb], ['traction_fx', ps.traction_fx], ['weather_cycle', ps.weather_cycle],
+    ...(ps.road_overlay !== undefined ? [['road_overlay', ps.road_overlay] as [string, boolean]] : []),
     ['sensor_viewer', ps.running.includes('sensor_viewer')], ['drone_cams', ps.running.includes('drone_cams')],
   ]
   // restart-only options that differ from what runs / 実行中と異なる再起動項目
@@ -304,10 +322,17 @@ function LiveControls({ info }: { info: LauncherInfo }) {
           <Card title={t('grp_delivery')} actions={<LiveTag kind="live" />}>
             <Stepper label={label(t, spec('delivery'))} value={Number(opts.delivery)} min={0} max={spec('delivery').max ?? 10}
               onChange={(v) => set('delivery', v)} />
+            {/* LastMile hubs with mini pods, changed live together with the drone pods / ミニポッドのハブ */}
+            <Stepper label={label(t, spec('minipod_hubs'))} value={Number(opts.minipod_hubs ?? 0)} min={0} max={spec('minipod_hubs').max ?? 6}
+              onChange={(v) => set('minipod_hubs', v)} />
+            {/* LastMile charging stations, applied with the pods / 充電ステーション（ポッドと一緒に適用） */}
+            <ChargeStations info={info} opts={opts} set={set} map={ps.map} placed={placed} />
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs text-fg-mute">{t('l_pods_h')}</span>
-              <Button variant="primary" size="sm" disabled={opts.delivery === ps.delivery}
-                onClick={() => send({ action: 'delivery', vans: Number(opts.delivery) }, t('grp_delivery'))}>
+              <Button variant="primary" size="sm"
+                disabled={opts.delivery === ps.delivery && Number(opts.minipod_hubs ?? 0) === Number(ps.minipod_hubs ?? 0) && !chargeDirty}
+                onClick={() => send({ action: 'delivery', vans: Number(opts.delivery), lmh: Number(opts.minipod_hubs ?? 0),
+                  charge_stations: chargeSend, charge_mode: chargeMode(opts) }, t('grp_delivery'))}>
                 <Zap className="h-3.5 w-3.5" aria-hidden />{t('l_apply')}</Button>
             </div>
           </Card>

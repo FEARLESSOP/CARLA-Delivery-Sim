@@ -298,6 +298,120 @@ def test_stop_landmark_at_line():
     assert 1.0 + (jp_signs.STOP_STEPS - 1) * 1.0 <= jp_signs.STOP_TOL               # 1 m before the line + slides
 
 
+def _core_placer(lanes, cw, asphalt, buildings=None):
+    """A Placer with only what settle_core() reads. / settle_core 用の最小構成"""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    class L(object):
+        building_area = buildings if buildings is not None else Polygon()
+    P = object.__new__(jp_signs.Placer)
+    P.lane_area, P.cw, P.core_road = lanes, cw, asphalt
+    P.kerb_edge = unary_union([cw, asphalt])
+    P.L, P.posts, P.dropped, P.stop_posts = L(), [], [], {}
+    P.core_moved, P.core_dropped = [], []
+    P.ground_z = lambda x, y: 0.15
+    P.clashes = lambda *a, **k: []
+    return P
+
+
+def _post(P, kind, x, y, face=(-1.0, 0.0), **kw):
+    p = {"x": x, "y": y, "face": np.array(face), "plates": [(kind, False, "t")], **kw}
+    P.posts.append(p)
+    return p
+
+
+def test_core_asphalt():
+    """core_merge.core_asphalt: the model's Roads + markings (x scaled), not its
+    tactile paving, clipped to the core rectangle, cached. / モデルの車道アスファルト"""
+    import core_merge
+    with tempfile.TemporaryDirectory() as d:
+        meta = {"core": {"bounds": [-10, -10, 10, 10], "x_scale": 0.5}}
+        assert core_merge.core_asphalt(d, meta) is None                      # no core_layers.npz / 無し
+        tri = lambda *p: [[x, y, 0.0] for x, y in p]                          # noqa: E731
+        np.savez(os.path.join(d, "core_layers.npz"),
+                 Roads=np.array([tri((0, 0), (8, 0), (8, 4)), tri((0, 0), (8, 4), (0, 4))], np.float32),
+                 Roads_mat=np.zeros(2, np.int16), Roads_names=np.array(["M_asphalt"]),
+                 Road_Markings=np.array([tri((0, 4), (8, 4), (8, 4.2)), tri((0, -3), (4, -3), (4, -1))], np.float32),
+                 Road_Markings_mat=np.array([0, 1], np.int16), Road_Markings_names=np.array(["M_line_white", "M_tactile"]))
+        g = core_merge.core_asphalt(d, meta)
+        assert abs(g.area - 4 * 4.2 / 2 - 4 * 4 / 2) < 0.05, g.area           # x halved, tactile left out
+        assert os.path.exists(os.path.join(d, "core", "asphalt.wkb"))
+        assert core_merge.core_asphalt(d, meta).equals(g)
+        assert core_merge.core_asphalt(d, {}) is None
+
+
+def test_core_asphalt_posts():
+    """settle_core(): a post on the embedded model's asphalt shoulder moves to
+    the nearest free spot off it (plate half width + 5 cm), a post already off it
+    and one on a signal pole stay, a 止まれ stays 0-2.95 m before its line (its
+    206 follows) or is left out, a move across a lane (the other side of the
+    road) is refused, maps without a core are untouched.
+    モデルのアスファルト上の支柱を最寄りの縁石側へ移す規則。"""
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+    lanes, cw = box(-50, -3, 50, 3), box(-50, -3.2, 50, 3.2)
+    asphalt = unary_union([box(-50, -4.5, 50, 4.5), box(20, 3, 30, 6.4)])      # shoulders + a corner apron
+    house = unary_union([box(-24, 4.6, -19.6, 8.0), box(-35, -8.0, -28.7, -4.6)])
+    P = _core_placer(lanes, cw, asphalt, house)
+    a = _post(P, "noparking", 0.0, 4.0)                                        # on the shoulder / 路肩の上
+    b = _post(P, "noparking", 10.0, 5.6)                                       # 1.1 m off it / 既に外
+    c = _post(P, "crossing", 25.0, 5.0, face=(0.0, -1.0))                      # in the apron / 隅の舗装
+    s = _post(P, "noentry", 40.0, 4.0, signal="tl1")                           # on a signal pole / 信号柱
+    t = _post(P, "tomare", -20.0, 4.2, stops=[(7, np.array([-18.0, 1.5]), np.array([1.0, 0.0]))])
+    P.stop_posts[7] = np.array([-20.0, 4.2])
+    # driving west on the south side, line at x -32: the house covers every spot 0-2.95 m before it
+    # 西行き、停止線 x -32: その手前 0-2.95 m は家で塞がる
+    u = _post(P, "tomare", -30.0, -4.2, face=(1.0, 0.0), stops=[(8, np.array([-32.0, -1.5]), np.array([-1.0, 0.0]))])
+    moved, dropped = P.settle_core()
+    assert (moved, dropped) == (3, 1), (P.core_moved, P.core_dropped)
+    assert abs(a["x"]) < 0.3 and 4.85 - 1e-6 <= a["y"] < 4.96, a                 # straight out, 0.35 off
+    assert (b["x"], b["y"]) == (10.0, 5.6) and (s["x"], s["y"]) == (40.0, 4.0)
+    assert asphalt.distance(jp_signs.Point(c["x"], c["y"])) >= 0.35 - 1e-9 and np.hypot(c["x"] - 25, c["y"] - 5) < 2.0, c
+    assert -19.3 - 1e-6 <= t["x"] <= -18.0 and t["y"] >= 4.85 - 1e-6, t        # slid past the house, before the line
+    assert np.allclose(P.stop_posts[7], (t["x"], t["y"])) and u not in P.posts
+    assert P.core_dropped[0]["kinds"] == ["tomare"] and P.dropped[0][0] == "tomare"
+    for p in P.posts:
+        assert np.allclose(p["face"], [-1.0, 0.0]) or np.allclose(p["face"], [0.0, -1.0])   # facing kept / 向きはそのまま
+    # the same spot without the stop line: moved past the house (1.7 m) / 停止線が無ければ移動
+    P2 = _core_placer(lanes, cw, asphalt, house)
+    v = _post(P2, "noparking", -30.0, -4.2, face=(1.0, 0.0))
+    assert P2.settle_core() == (1, 0) and v["x"] > -28.4 and v["y"] <= -4.85 + 1e-6, v
+    # a narrow street: the only free spot is across the lane / 狭い道: 空きは車線の向こう側のみ
+    P3 = _core_placer(box(-50, -0.6, 50, 0.6), box(-50, -0.65, 50, 0.65), box(-50, -1.0, 50, 1.0), box(-50, 1.6, 50, 9))
+    _post(P3, "noparking", 0.0, 0.95)
+    assert P3.settle_core() == (0, 1) and not P3.posts
+    # no core: nothing happens / コア無し: 何もしない
+    P4 = _core_placer(lanes, cw, asphalt)
+    P4.core_road = None
+    w = _post(P4, "noparking", 0.0, 4.0)
+    assert P4.settle_core() == (0, 0) and (w["x"], w["y"]) == (0.0, 4.0)
+
+
+def test_speed_post_off_core_asphalt():
+    """speed_spot.Spots: a 274 post keeps CORE_CLEAR off the embedded model's
+    asphalt (its shoulder 2 m past the kerb lane): t 1.6 -> the first free t
+    past it on the same (reference) kerb; without a core 1.6 as before.
+    速度標識はモデルのアスファルトから CORE_CLEAR 離す。"""
+    import speed_spot
+    from shapely.geometry import LineString, box
+    pts = [{"s": float(x), "c": [float(x), -1.75], "l": [float(x), 0.0], "r": [float(x), -3.5], "w": 3.5}
+           for x in range(0, 101, 5)]
+    S = object.__new__(speed_spot.Spots)
+    S.lanes = [{"road": 1, "lane": -1, "pts": pts}]
+    S.lane_area = box(0, -3.5, 100, 0)
+    S.cw = S.lane_area.buffer(speed_spot.GUTTER)
+    S.centres = [(LineString([q["c"] for q in pts]), 3.5)]
+    S.lefthand, S.core = True, None
+    t, side, _ = S.choose(1, 50.0)
+    assert abs(t - speed_spot.KERB_T) < 1e-6 and side == "reference kerb", (t, side)
+    S.core = box(0, -8.0, 100, 2.0)                                   # the model's street: 2 m shoulder north
+    t, side, why = S.choose(1, 50.0)
+    assert 2.0 + speed_spot.CORE_CLEAR - 1e-6 <= t <= 2.0 + speed_spot.CORE_CLEAR + 0.11, (t, side)
+    assert side.startswith("reference kerb") and "asphalt" in why, (side, why)
+    assert "asphalt" in S.free(50.0, 1.0) and S.free(50.0, t) == ""
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, type ComponentType } from 'react'
-import { Activity, BarChart3, CarFront, Download, Gauge, Package, Settings2, Square } from 'lucide-react'
+import { Activity, BarChart3, Bot, CarFront, Download, Gauge, Package, Plane, Settings2, Square } from 'lucide-react'
 import '@/i18n/common'
 import { useLang, useT } from '@/lib/i18n'
 import { simPhase, startSim, useSim, type SimPhase } from '@/lib/sim'
@@ -16,15 +16,19 @@ import { DriveAlertBar } from '@/views/drive/alerts'
 const DriveView = lazy(() => import('@/views/drive'))
 const VehicleView = lazy(() => import('@/views/vehicle'))
 const DeliveryView = lazy(() => import('@/views/delivery'))
+const DronesView = lazy(() => import('@/views/drones'))
+const MiniPodsView = lazy(() => import('@/views/minipods'))
 const StatsView = lazy(() => import('@/views/stats'))
 const SettingsView = lazy(() => import('@/views/settings'))
 
-type ViewKey = 'sim' | 'drive' | 'vehicle' | 'delivery' | 'stats' | 'settings'
+type ViewKey = 'sim' | 'drive' | 'vehicle' | 'delivery' | 'drones' | 'minipods' | 'stats' | 'settings'
 const VIEWS: { key: ViewKey; icon: ComponentType<{ className?: string }>; Comp: ComponentType }[] = [
   { key: 'sim', icon: Activity, Comp: LaunchView },
   { key: 'drive', icon: Gauge, Comp: DriveView },
   { key: 'vehicle', icon: CarFront, Comp: VehicleView },
   { key: 'delivery', icon: Package, Comp: DeliveryView },
+  { key: 'drones', icon: Plane, Comp: DronesView },
+  { key: 'minipods', icon: Bot, Comp: MiniPodsView },
   { key: 'stats', icon: BarChart3, Comp: StatsView },
   { key: 'settings', icon: Settings2, Comp: SettingsView },
 ]

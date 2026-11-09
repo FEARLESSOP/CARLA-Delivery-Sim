@@ -48,7 +48,29 @@ import map_switch  # noqa: E402
 import windows_control  # noqa: E402
 # live control from the dashboard, the launcher's files / ダッシュボードからの操作
 import pipeline_control  # noqa: E402
+# the charging-station spots placed on the City Map (read only) / 地図上の充電所地点（読むだけ）
+from delivery import zones as delivery_zones  # noqa: E402
 DATA_DIR = BASE_DIR / "data"                        # simulation database / シミュレーションデータの保存先
+
+
+def charge_station_args(n, mode, map_name, zones_path=None):
+    """delivery_sim.py flags for the LastMile charging stations.
+
+    ``random``: the sim places ``n`` of them itself; ``manual``: every spot
+    placed on the dashboard's City Map for this map (data/delivery_zones.json
+    "charge"), however many. Nothing (the old road-side chargers) when that
+    comes to 0. / LastMile 充電ステーションの delivery_sim 引数（0 なら従来の充電器）。"""
+    mode = mode if mode in ("random", "manual") else "random"
+    if mode == "manual":
+        try:
+            n = len(delivery_zones.load(map_name, zones_path).get("charge") or [])
+        except Exception:           # a broken zones file: no stations / 壊れたファイル
+            n = 0
+    try:
+        n = max(0, min(delivery_zones.MAX_CHARGE, int(n)))
+    except (TypeError, ValueError):
+        n = 0
+    return ["--charge-stations", str(n), "--charge-mode", mode] if n > 0 else []
 
 
 def map_is_left_hand(map_name):
@@ -433,6 +455,9 @@ def main():
                    help="no day/night cycle or dynamic weather (weather_cycle.py; "
                         "the dashboard's Day & weather card can also turn each off) "
                         "/ 昼夜サイクル・天気変化なし")
+    p.add_argument("--no-road-overlay", action="store_true",
+                   help="do not start road_overlay.py (the O key / dashboard card that "
+                        "draws the road logic around your car) / 道路ロジック表示を起動しない")
     p.add_argument("--dashboard-port", type=int, default=5000)
     p.add_argument("--external-dashboard", action="store_true",
                    help="the dashboard is already running (the launcher started it): "
@@ -454,6 +479,14 @@ def main():
                         "4k (default 1080p)")
     p.add_argument("--fov", type=float, default=100.0,
                    help="Driver-view field of view in degrees (default 100)")
+    p.add_argument("--screens", choices=("single", "triple"), default="single",
+                   help="triple: the driving window across three side-by-side monitors "
+                        "(5760x1080 on three 1080p screens) / 3 画面表示")
+    p.add_argument("--screen-layout", choices=("angled", "flat"), default="angled",
+                   help="three screens: angled (side monitors turned in, a camera per "
+                        "screen) or flat (one wide camera)")
+    p.add_argument("--triple-fov", type=float, default=150.0,
+                   help="three screens: field of view across all three (default 150)")
     p.add_argument("--autopilot", action="store_true",
                    help="Start the hero vehicle in autopilot")
     p.add_argument("--agent", default=None, metavar="POLICY",
@@ -466,6 +499,18 @@ def main():
                    help="Also run N car + drone delivery vans (delivery_sim.py, "
                         "docs/DELIVERY.md); each order goes to exactly one van "
                         "/ 車+ドローンの配送車を N 台起動（各注文は 1 台のみが担当）")
+    p.add_argument("--minipod-hubs", type=int, default=0, metavar="N",
+                   help="Also run N LastMile hubs that deliver with 3 Mini Pods each "
+                        "(delivery_sim.py --lmh N, docs/DELIVERY.md) / ミニポッドで配達する "
+                        "LastMile ハブを N 台起動")
+    p.add_argument("--charge-stations", type=int, default=0, metavar="N",
+                   help="LastMile charging stations the delivery sim places on free ground "
+                        "beside a road (--charge-mode random; 0 = off: the road-side "
+                        "chargers) / LastMile 充電ステーションの数（0 = 従来の充電器）")
+    p.add_argument("--charge-mode", choices=("random", "manual"), default="random",
+                   help="random: the sim places --charge-stations of them; manual: every "
+                        "spot placed on the dashboard's Delivery map for this map "
+                        "/ random はシミュが配置、manual は地図に置いた地点を全て使う")
     p.add_argument("--delivery-args", default="",
                    help='Extra options for delivery_sim.py, e.g. '
                         '"--first-now --drone-prob 0.7" '
@@ -675,13 +720,13 @@ def main():
             return True
 
         def load_startup_map(name):
-            cmd = [str(VENV_PY), str(UTIL_DIR / "config.py"),
-                   "--host", args.host, "--port", str(args.port),
-                   "--map", name]
+            # load_world_map waits up to 120 s and then checks the loaded map:
+            # util/config.py gives up after 10 s, and the clients started next
+            # timed out on the extended OitaStation while it was still loading
+            # (2026-11-09) / 大きなマップは 10 秒では読めない: 待ってから確認する
             print("[pipeline] loading map %s" % name)
-            rc = subprocess.call(cmd, cwd=str(UTIL_DIR))
-            if rc != 0:
-                print("[pipeline] map load failed (rc=%d), continuing anyway" % rc)
+            if not load_world_map(args.host, args.port, name):
+                print("[pipeline] map load failed or unconfirmed (%s), continuing anyway" % name)
             time.sleep(3.0)
 
         if not args.no_sim:
@@ -787,11 +832,11 @@ def main():
                 cmd.append("--hybrid")
             return cmd
 
-        def delivery_cmd():
+        def delivery_cmd(map_name=None):
             """delivery_sim.py for the current options. / 現在の設定の delivery_sim.py。"""
             cmd = [str(VENV_PY), "delivery_sim.py",
                    "--host", args.host, "--port", str(args.port),
-                   "--map", "", "--vans", str(args.delivery),
+                   "--map", "", "--vans", str(args.delivery), "--lmh", str(args.minipod_hubs),
                    "--vehicles", "0", "--walkers", "0",
                    "--tm-port", str(args.tm_port)]
             if not args.no_traffic:
@@ -799,6 +844,9 @@ def main():
             # start delivering at once instead of after a 20-90 s wait
             # 20〜90 秒待たずにすぐ配送を始める
             cmd.append("--first-now")
+            # LastMile charging stations (none: the road-side chargers) / 充電ステーション
+            cmd += charge_station_args(args.charge_stations, args.charge_mode,
+                                       map_name or current_map)
             if args.delivery_args:
                 cmd += shlex.split(args.delivery_args)
             return cmd
@@ -812,6 +860,8 @@ def main():
                    "--start-vehicle", start_vehicle,
                    "--fov", str(args.fov),
                    "--fps", str(args.fps),
+                   "--screens", args.screens, "--screen-layout", args.screen_layout,
+                   "--triple-fov", str(args.triple_fov),
                    "--mirror-fps", str(args.mirror_fps),
                    # F5 asks us to switch the map instead of loading it there
                    # F5 はマップを自分で読まず、パイプラインに切替を依頼する
@@ -843,7 +893,8 @@ def main():
             restart_left.update({"generate_traffic": 3, "dashboard": 3,
                                  "agent": 3, "delivery": 3,
                                  "ffb": 3, "traction_fx": 3,
-                                 "signal_timing": 3, "weather_cycle": 3})
+                                 "signal_timing": 3, "weather_cycle": 3,
+                                 "road_overlay": 3})
             watchdog_armed_at = float("inf")
 
             if not args.no_traffic:
@@ -887,9 +938,10 @@ def main():
                 helper_cmds["agent"] = cmd
                 children.append((launch(cmd, BASE_DIR, "agent"), "agent"))
 
-            if args.delivery > 0:
-                # Car + drone delivery vans. With the traffic script running it
-                # owns the synchronous tick, so the vans only follow it
+            if args.delivery > 0 or args.minipod_hubs > 0:
+                # Car + drone delivery vans and LastMile hubs with Mini Pods.
+                # With the traffic script running it owns the synchronous
+                # tick, so the vans only follow it
                 # (--passive); without traffic nobody steps the world at a fixed
                 # rate, so delivery_sim becomes the tick master itself.
                 # The map is already loaded (also after an F5 switch), so
@@ -900,7 +952,7 @@ def main():
                 # delivery_sim 自身が tick マスタになる。マップは読込済み（F5
                 # 切替後も同様）なので --map "" で現在のマップを使う。建物・住所・
                 # ヤードは delivery_sim が読込済みワールドから取得する。
-                cmd = delivery_cmd()
+                cmd = delivery_cmd(map_name)
                 helper_cmds["delivery"] = cmd
                 children.append((launch(cmd, BASE_DIR, "delivery"), "delivery"))
             elif args.drone_cams:
@@ -945,6 +997,15 @@ def main():
                        "--host", args.host, "--port", str(args.port)]
                 helper_cmds["weather_cycle"] = cmd
                 children.append((launch(cmd, BASE_DIR, "weather_cycle"), "weather_cycle"))
+
+            if not args.no_road_overlay:
+                # The road logic overlay (O key, dashboard card): idle until it
+                # is turned on in data/road_overlay.json; only draws debug lines.
+                # 道路ロジック表示（O キー・ダッシュボード）。オンにするまで何もしない。
+                cmd = [str(VENV_PY), "road_overlay.py",
+                       "--host", args.host, "--port", str(args.port)]
+                helper_cmds["road_overlay"] = cmd
+                children.append((launch(cmd, BASE_DIR, "road_overlay"), "road_overlay"))
 
             profile = map_signal_timing(map_name)
             if profile is not None:
@@ -1020,9 +1081,11 @@ def main():
             + (["--strength", str(args.ffb_strength)] if args.ffb_strength is not None else []),
             "traction_fx": lambda: [str(VENV_PY), "traction_fx.py", "--host", args.host, "--port", str(args.port)],
             "weather_cycle": lambda: [str(VENV_PY), "weather_cycle.py", "--host", args.host, "--port", str(args.port)],
+            "road_overlay": lambda: [str(VENV_PY), "road_overlay.py", "--host", args.host, "--port", str(args.port)],
         }
         helper_flags = {"ffb": ("ffb", True), "traction_fx": ("no_traction_fx", False),
-                        "weather_cycle": ("no_weather_cycle", False)}
+                        "weather_cycle": ("no_weather_cycle", False),
+                        "road_overlay": ("no_road_overlay", False)}
 
         def write_state(phase):
             # the last known state (every child is polled elsewhere each loop;
@@ -1031,9 +1094,12 @@ def main():
             pipeline_control.write_json(pipeline_control.STATE_PATH, {
                 "phase": phase, "pid": os.getpid(), "t": time.time(), "map": current_map,
                 "vehicles": args.vehicles, "walkers": args.walkers, "cyclists": args.cyclists,
-                "traffic": not args.no_traffic, "delivery": args.delivery, "start_vehicle": start_vehicle,
+                "traffic": not args.no_traffic, "delivery": args.delivery,
+                "minipod_hubs": args.minipod_hubs, "charge_stations": args.charge_stations,
+                "charge_mode": args.charge_mode, "start_vehicle": start_vehicle,
                 "ffb": args.ffb, "traction_fx": not args.no_traction_fx,
-                "weather_cycle": not args.no_weather_cycle, "running": alive,
+                "weather_cycle": not args.no_weather_cycle,
+                "road_overlay": not args.no_road_overlay, "running": alive,
                 "launcher": bool(args.external_dashboard)})
 
         def restart_child(name, cmd, grace):
@@ -1079,7 +1145,16 @@ def main():
                 restart_child("generate_traffic", traffic_cmd(current_map), 20.0)
             elif a == "delivery":
                 args.delivery = max(0, int(req.get("vans", 0)))
-                restart_child("delivery", delivery_cmd() if args.delivery > 0 else None, 15.0)
+                if req.get("lmh") is not None:          # optional: older requests keep the hubs / 省略可
+                    args.minipod_hubs = max(0, min(6, int(req["lmh"])))
+                # charging stations, optional like lmh / 充電ステーション（省略可）
+                if req.get("charge_stations") is not None:
+                    args.charge_stations = max(0, min(delivery_zones.MAX_CHARGE,
+                                                      int(req["charge_stations"])))
+                if req.get("charge_mode") in ("random", "manual"):
+                    args.charge_mode = req["charge_mode"]
+                on = args.delivery > 0 or args.minipod_hubs > 0
+                restart_child("delivery", delivery_cmd() if on else None, 15.0)
                 if args.delivery > 0:
                     windows.unavailable.pop("drone_cams", None)
                 else:

@@ -68,6 +68,7 @@ import random
 import subprocess
 import sys
 import glob
+import json
 import threading
 import time
 
@@ -581,6 +582,38 @@ def centre_damper(s_norm):
 
 # ----------------------------------------------------------------- main ----
 
+class AutopilotWatch:
+    """The driving window's smooth autopilot (data/autopilot_state.json): while
+    it drives, the wheel is turned to its steering by a position servo instead
+    of the tyre-force model. None when off or stale.
+    自動運転中は data/autopilot_state.json のハンドル位置へサーボで回す。"""
+
+    PATH = os.path.join(BASE_DIR, "data", "autopilot_state.json")
+
+    def __init__(self):
+        self._t, self._val = 0.0, None
+
+    def poll(self, now):
+        if now - self._t < 0.05:
+            return self._val
+        self._t = now
+        try:
+            with open(self.PATH) as fh:
+                d = json.load(fh)
+            fresh = time.time() - float(d.get("t", 0.0)) < 0.6
+            self._val = clamp(float(d["wheel"]), -1.0, 1.0) if d.get("on") and fresh else None
+        except (OSError, ValueError, KeyError, TypeError):
+            self._val = None
+        return self._val
+
+
+def servo_force(target, x, rate):
+    """Force -1..1 turning the wheel from ``x`` to ``target`` (both -1..1),
+    damped by the wheel's speed ``rate`` [full lock/s]. / 位置サーボの力。"""
+    f = clamp(T.get("auto_kp", 3.0) * (target - x), -T.get("auto_max", 0.55), T.get("auto_max", 0.55))
+    return clamp(f - T.get("auto_kd", 0.9) * rate, -1.0, 1.0)
+
+
 def find_hero(world):
     t0, said = time.time(), False
     while True:
@@ -602,6 +635,8 @@ def drive(wheel, car, steering, strength, verbose):
     rate, s_prev = 0.0, None        # wheel speed [full lock/s] / ハンドル角速度
     last_log = last_poll = last_status = 0.0
     watcher = TuningWatcher()
+    auto = AutopilotWatch()
+    xt, auto_f, x_prev, xrate = None, 0.0, None, 0.0
     t_prev = time.monotonic()
     while car.alive:
         now = time.monotonic()
@@ -620,6 +655,33 @@ def drive(wheel, car, steering, strength, verbose):
 
         st = car.state
         x = wheel.angle()
+        if x_prev is not None:
+            xrate += (1.0 - math.exp(-dt / 0.02)) * ((x - x_prev) / dt - xrate)
+        x_prev = x
+
+        # Autopilot: the wheel is turned to the car's steering (a position
+        # servo, smoothed), not pulled round by the tyre model.
+        # 自動運転中：タイヤモデルではなく位置サーボでハンドルを操舵角へ回す。
+        ap = auto.poll(now)
+        if ap is not None:
+            xt = x if xt is None else xt + (1.0 - math.exp(-dt / 0.06)) * (ap - xt)
+            step = T.get("auto_slew", 6.0) * dt
+            auto_f += clamp(servo_force(xt, x, xrate) - auto_f, -step, step)
+            wheel.force(auto_f)
+            wheel.condition(ecodes.FF_DAMPER, T.get("auto_damper", 0.08))
+            wheel.condition(ecodes.FF_FRICTION, 0.0)
+            if now - last_status > 0.2:
+                last_status = now
+                ffb_settings.write_status({
+                    "hero": car.hero.type_id, "kmh": round(st["kmh"], 1) if st else 0.0,
+                    "wheel": round(x, 3), "autopilot": True, "target": round(xt, 3),
+                    "output": round(auto_f, 3), "tuning_mtime": watcher.mtime})
+            time.sleep(max(0.0, 1.0 / HZ - (time.monotonic() - now)))
+            continue
+        if xt is not None:
+            # autopilot just ended: let the force fade, no jolt / 終了時は力を抜く
+            xt, auto_f = None, 0.0
+            steer_f = 0.0
         if st is None:
             wheel.force(0.0)
             time.sleep(1.0 / HZ)

@@ -12,7 +12,9 @@ centroid lies over the road surface (carriageway + kerb):
                     tree crowns, lamp arms above 4.5 m are allowed)
 On Japanese maps (maps.json "road_style": "japan") buildings and their lots
 are also tested against footways, cycleways and drives (user's rule 1 covers
-footways); other maps keep the check above unchanged.
+footways); other maps keep the check above unchanged. Shop-front props
+(kind "jp_shopfront", shopfront_jp.py) are tested against the carriageway,
+kerb, drives and cycleways below 4.5 m.
 On hilly maps (terrain_field.npz) every height is measured from the
 road surface / ground below the vertex (terrain.Drape), not from z = 0.
 Every triangle is tested whole (vertical faces by their base edge), not
@@ -58,7 +60,17 @@ def main():
     ap.add_argument("--json")
     a = ap.parse_args()
     meta = json.load(open(os.path.join(a.out, "meta.json")))
+    import build as _build
+    if _build.road_style(meta.get("name"), "ring_guardrail"):
+        meta["ring_guardrail"] = True        # as build.py: nothing paved behind the ring rail / build.py と同じ
     L = layout.Layout(meta, os.path.join(a.out, "lanes.json"), a.osm)
+    if getattr(L, "pavements", None) is not None:
+        # Japan: the pavement network as build.py finished it (islands dropped,
+        # landings) from the build's own crossings / 日本: build.py と同じ歩道網の仕上げ
+        import pickle
+        cr = pickle.load(open(os.path.join(a.out, "crossings.pkl"), "rb")).get("crossings", [])
+        stops = [p for p, t, nid in L.osm.points(lambda t: t.get("highway") == "bus_stop")]
+        L.pavements.finish(cr, stops)
     # hilly maps: heights count from the road surface / ground below / 起伏のある地図では路面・地面からの高さ
     D = terrain.drape_for(a.out, L)
     road_b = L.road_all.buffer(-0.02)        # buildings: carriageway and kerb / 建物: 車道＋縁石
@@ -68,6 +80,9 @@ def main():
                                     L.driveways.buffer(-0.02)])
         print("buildings tested against carriageway, kerb, footways, cycleways and drives")
     road = L.carriageway.buffer(-0.02)       # the rest: carriageway / その他: 車道
+    # shop-front props (shopfront_jp.py) stand on footways and lots: never on the
+    # carriageway, kerb, drives or cycleways below 4.5 m / 店先の小物: 車道・縁石・私道・自転車道に不可
+    road_p = shapely.union_all([L.road_all.buffer(-0.02), L.driveways.buffer(-0.02), L.cycleways.buffer(-0.02)])
     area = None
     if a.site:
         site = [p for p, t in L.osm.areas(lambda t: t.get("name") == a.site)]
@@ -76,6 +91,7 @@ def main():
         area = site[0].buffer(30.0)
         road = road.intersection(area)
         road_b = road_b.intersection(area)
+        road_p = road_p.intersection(area)
         # the site's own driveways and car-park aisles count as road there
         # (buildings over them at any height, others below 4.5 m) / 敷地内の車路も道路扱い
         drive = L.driveways.intersection(site[0].buffer(5.0)).buffer(-0.05)
@@ -87,6 +103,7 @@ def main():
         if o["kind"] in ("Road_Road", "Road_Marking", "Road_Curb"):
             continue
         building = o["name"].startswith("SM_")
+        shopfront = o.get("kind") == "jp_shopfront"
         d = np.load(os.path.join(a.out, "meshes", o["name"] + ".npz"))
         for k in d.files:
             if not k.endswith("|V"):
@@ -113,7 +130,7 @@ def main():
                 k = np.argsort(tri[flat][:, :, 2], axis=1)[:, :2]
                 e = np.take_along_axis(tri[flat][:, :, :2], k[:, :, None], axis=1)
                 polys_[flat] = shapely.linestrings(e)
-            hit = shapely.intersects(polys_, road_b if building else road)
+            hit = shapely.intersects(polys_, road_b if building else road_p if shopfront else road)
             if hit.any():
                 pts = cen[sel][hit]
                 fails.append({"object": o["name"], "material": mat, "triangles": int(hit.sum()),

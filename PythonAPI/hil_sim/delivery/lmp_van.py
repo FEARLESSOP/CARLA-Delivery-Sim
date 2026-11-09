@@ -30,7 +30,11 @@ LastMile ポッドの走行中・停車地での作業（delivery_sim.Van に組
 次へ向かい、合流地点で回収する。
 """
 
+import math
+
+from delivery import boxes
 from delivery import lmp_rig as R
+from delivery import zones
 from delivery.backends import IN_VAN, FLYING
 from delivery.planning import DRONE, FACE_TO_FACE
 
@@ -157,6 +161,14 @@ class LmpVanMixin(object):
         face-to-face stop, else this stop. / 合流地点（次が対面配達ならそこ）。"""
         i = self.stops.index(stop) if stop in self.stops else -1
         nxt = self.stops[i + 1] if 0 <= i < len(self.stops) - 1 else None
+        zs = getattr(getattr(self, "fleet", None), "zones", None)
+        if nxt is not None and zs is not None:
+            if zs.air and zs.air.blocked(nxt.location):
+                return stop      # drones never wait over a no-fly zone / 区域上では待たない
+            mine = zs.meet_of(self.vid)
+            if mine and not any(math.hypot(nxt.location[0] - p[0], nxt.location[1] - p[1])
+                                <= zones.MEET_SNAP for p in mine):
+                return stop      # only at the user's meeting points / 指定の合流地点のみ
         return nxt if nxt is not None and nxt.kind == FACE_TO_FACE else stop
 
     def mission_need(self, order, meet_stop=None):
@@ -209,8 +221,12 @@ class LmpVanMixin(object):
             self.lmp_prep(t)
         self.pod.apply(a.mech(self.rig_slots(), self.pod.mech.jacks), self.lmp_units)
         if a.box is not None and self._job and self._job.get("box") is not None:
-            # the box station's intake flap follows the side port / 箱の投入口も連動
-            self.boxes.pose(self._job["box"], self.pod.mech.flap, 0.0)
+            # the box's intake flap follows the side port (a locker: its upper
+            # robot port) / 箱の投入口も連動（ロッカーは上段ポート）
+            if self.boxes.has_locker(self._job["box"]):
+                self.boxes.port(self._job["box"], self.pod.mech.flap, upper=True)
+            else:
+                self.boxes.pose(self._job["box"], self.pod.mech.flap, 0.0)
 
     def _prep_allowed(self):
         if self.state in ("stranded", "ev_charging", "yard_in", "yard_out", "waiting_charger"):
@@ -483,6 +499,13 @@ class LmpVanMixin(object):
         世界の箱の位置のずれと、投入口に届くスライドの伸び量。"""
         tf = self.car.get_transform()
         b = self.boxes.boxes[box].site.loc
+        if self.boxes.has_locker(box):
+            # a parcel locker: stand its upper robot port where the HTML
+            # station's intake would be (station centre STN_D/2 behind it)
+            # ロッカー：上段ポートを HTML の投入口の位置に合わせる
+            px, py, _ = boxes.LOCKER.get("port_upper") or boxes.LOCKER["port"]
+            c = self.boxes.locker_point(box, (px, py - R.STN_D / 2.0, 0.0))
+            b = (c.x, c.y, c.z)
         inv = tf.get_inverse_matrix()
         lx = inv[0][0] * b[0] + inv[0][1] * b[1] + inv[0][2] * b[2] + inv[0][3]
         ly = inv[1][0] * b[0] + inv[1][1] * b[1] + inv[1][2] * b[2] + inv[1][3]
@@ -492,7 +515,10 @@ class LmpVanMixin(object):
     def _hand_over(self, t):
         if self.handover_queue:
             box = (self._job or {}).get("box")
-            if box is not None:
+            if box is not None and self.boxes.has_locker(box):
+                px, py, pz = boxes.LOCKER.get("port_upper") or boxes.LOCKER["port"]
+                c = self.boxes.locker_point(box, (px, py - 0.3, pz))
+            elif box is not None:
                 c = self.boxes.world_point(box, R.station_point(R.CELL_CENTER))
             else:
                 c = self.pod._world(R.H(R.CELL_CENTER))

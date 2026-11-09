@@ -65,10 +65,12 @@ function sigHint(t: TFunc, lang: Lang, kb: KeybindsInfo | null): string {
     if (c.keys?.length) return kbPretty(c.keys[0])
     return null
   }
-  const l = one('signal_left'), r = one('signal_right')
-  return l || r ? t('sig_hint_fmt', { l: l || '-', r: r || '-' }) : t('sig_hint')
+  const l = one('signal_left'), r = one('signal_right'), h = one('hazard')
+  const sig = l || r ? t('sig_hint_fmt', { l: l || '-', r: r || '-' }) : t('sig_hint')
+  return h ? `${sig} · ${t('haz_hint_fmt', { h })}` : sig
 }
 
+type Side = 'left' | 'right' | 'hazard'
 const SIG_KEY: Record<Signal, string> = { off: 'vx_sig_off', left: 'vx_sig_left', right: 'vx_sig_right', hazard: 'vx_sig_hazard' }
 
 /** Turn-signal buttons: POST /signal toggles the server-side state (shared
@@ -77,14 +79,14 @@ function TurnSignals({ signal }: { signal: Signal }) {
   const t = useT()
   const { lang } = useLang()
   const [kb, setKb] = useState<KeybindsInfo | null>(null)
-  const [busy, setBusy] = useState<'left' | 'right' | null>(null)
+  const [busy, setBusy] = useState<Side | null>(null)
   const [err, setErr] = useState(false)
   useEffect(() => {
     const ctl = new AbortController()
     getJSON<KeybindsInfo>('/keybinds', ctl.signal).then(setKb).catch(() => {})
     return () => ctl.abort()
   }, [])
-  const post = async (side: 'left' | 'right') => {
+  const post = async (side: Side) => {
     setBusy(side)
     try { await postJSON('/signal', { side }); setErr(false) } catch { setErr(true) } finally { setBusy(null) }
   }
@@ -107,7 +109,16 @@ function TurnSignals({ signal }: { signal: Signal }) {
         <span className="text-xs text-fg-mute">{t('vx_sig')}</span>
         <Badge tone={signal === 'off' ? 'neutral' : signal === 'hazard' ? 'warn' : 'good'} dot={signal !== 'off'}>{t(SIG_KEY[signal])}</Badge>
       </div>
-      <div className="flex gap-2">{btn('left')}{btn('right')}</div>
+      <div className="flex gap-2">
+        {btn('left')}
+        <Button size="lg" aria-pressed={signal === 'hazard'} aria-label={t('vx_sig_h_aria')}
+          onClick={() => post('hazard')} disabled={busy !== null}
+          className={cn('flex-1', signal === 'hazard' && 'border-warn/60 bg-warn/10 text-warn hover:bg-warn/15')}>
+          <TriangleAlert className={cn('h-6 w-6', signal === 'hazard' && 'vx-blink')} aria-hidden />
+          <span className="text-sm">{t('vx_sig_hazard')}</span>
+        </Button>
+        {btn('right')}
+      </div>
       <p className="mt-1.5 text-center text-xs text-fg-mute">{sigHint(t, lang, kb)}</p>
       {err && <p className="mt-1 text-center text-xs text-danger" role="alert">{t('vx_sig_err')}</p>}
     </div>

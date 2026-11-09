@@ -1,6 +1,7 @@
 // The Delivery page: car + drone delivery sim (delivery_sim.py). The City Map
-// is the hero; KPIs above it, wind beside it, the fleet tables, totals, the
-// event feed and the LastMile pod showcase below.
+// is the hero; KPIs above it, wind beside it, the charging stations, the fleet
+// tables (pods with Send to charge), totals, the event feed and the LastMile
+// pod showcase below.
 // 配送ページ：市街地図を中心に、KPI・風・機体一覧・集計・イベント・ポッド
 import type { ReactNode } from 'react'
 import '@/i18n/delivery'
@@ -12,6 +13,7 @@ import CountUp from '@/components/bits/CountUp'
 import CityMap from './CityMap'
 import WindCard from './WindCard'
 import PodPanel from './PodPanel'
+import { StationsPanel } from './StationsPanel'
 import { DronesTable, EventsFeed, PodsTable, StatsCard } from './tables'
 import { AT_STATION, DOWN, FLYING, IN_POD, useDeliveryState } from './shared'
 import type { DeliveryState } from './types'
@@ -113,6 +115,8 @@ export default function DeliveryView() {
           <WindCard state={s} />
         </div>
       </div>
+
+      <StationsPanel state={s} />
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <DronesTable state={s} />

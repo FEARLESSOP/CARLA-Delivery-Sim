@@ -145,7 +145,10 @@ class AKENO(object):
         self.road = L.road_all
         self.carriageway = L.carriageway
         self.paths = drop_slivers(unary_union([L.footpaths, L.cycleways, L.driveways]))
-        self.no_go = unary_union([self.road, self.paths, L.islands])
+        # the pavement network (pavements.py) can hand in polygons that touch
+        # themselves: make each valid before the union (GEOS side location conflict)
+        # 歩道網の多角形が自己接触することがあるため、和集合の前に修正する
+        self.no_go = unary_union([shapely.make_valid(g) for g in (self.road, self.paths, L.islands)])
         shapely.prepare(self.no_go)
         keep = self.no_go.buffer(CLEAR)
         self.blocks = {}
@@ -382,7 +385,7 @@ class AKENO(object):
         if edge is None:
             return 0.0
         f = LineString(list(orient(edge, 1.0).exterior.coords))
-        stop = unary_union([self.no_go.buffer(0.4), self.footprint.buffer(0.3)])
+        stop = unary_union([shapely.make_valid(self.no_go.buffer(0.4)), shapely.make_valid(self.footprint.buffer(0.3))])
         g = f.difference(stop)
         cen = p["poly"].centroid
         sides = set(p.get("net_sides", ["w", "s"]))

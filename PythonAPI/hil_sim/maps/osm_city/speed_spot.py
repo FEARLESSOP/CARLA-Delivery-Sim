@@ -15,7 +15,10 @@ extended) and of the carriageway:
 "Free" = at least LANE_CLEAR from every driving-lane edge, outside the
 carriageway (Layout.carriageway when the map's .osm is known, else the
 lanes + 0.4 m gutter), and further than CARLA's CheckSignalsOnRoads snap
-(0.7 lane widths + margin) from every lane centre line.
+(0.7 lane widths + margin) from every lane centre line; with an embedded
+model (meta "core") also CORE_CLEAR off its asphalt (core_merge.core_asphalt:
+shoulders and corners wider than the lanes), so the post stands on its
+pavement / kerb top.
 
   .venv/bin/python speed_spot.py <out_dir> <in.xodr> <out.xodr>
     re-checks the 274 signals of an existing xodr and rewrites ONLY the t of
@@ -42,6 +45,7 @@ CARLA_SNAP, SNAP_MARGIN = 0.7, 0.25
 GUTTER = 0.4
 CW_CLEAR = 0.5         # pole behind the 0.2 m kerb, not on it / 縁石の後ろ
 SEARCH = 8.0           # how far past the kerb a post may go / 歩道から外への探索範囲
+CORE_CLEAR = 0.4       # embedded model: post this far off its asphalt (plate half 0.3 + 0.1) / モデルの車道から
 
 
 def _map_osm(name):
@@ -86,6 +90,12 @@ class Spots(object):
                 print("speed_spot: no Layout (%s): lanes + gutter used" % e)
         if self.cw is None:
             self.cw = self.lane_area.buffer(GUTTER)
+        # embedded model: its asphalt is road too / 埋め込みモデルの車道アスファルト
+        self.core = None
+        if self.meta.get("core"):
+            import core_merge
+            g = core_merge.core_asphalt(out, self.meta)
+            self.core = g if g is not None and not g.is_empty else None
         self.lefthand = bool(self.meta.get("lefthand", False))
 
     def free(self, x, y):
@@ -98,6 +108,8 @@ class Spots(object):
         for ln, w in self.centres:
             if ln.distance(p) < CARLA_SNAP * w + SNAP_MARGIN:
                 return "within CARLA's snap of a lane centre"
+        if self.core is not None and self.core.distance(p) < CORE_CLEAR:
+            return "on or within %.1f m of the embedded model's asphalt" % CORE_CLEAR
         return ""
 
     def road_at(self, road, s):
@@ -146,7 +158,7 @@ class Spots(object):
         if not found:
             return None, None, "; ".join(why)
         extra, _, t, side = min(found)
-        return t, side + ("" if extra < 0.05 else " +%.1f m (past a neighbouring lane)" % extra), "; ".join(why)
+        return t, side + ("" if extra < 0.05 else " +%.1f m (past a neighbouring lane or the model asphalt)" % extra), "; ".join(why)
 
 def patch(out, src, dst):
     """Rewrite the t of 274 signals that stand on a lane; nothing else changes."""

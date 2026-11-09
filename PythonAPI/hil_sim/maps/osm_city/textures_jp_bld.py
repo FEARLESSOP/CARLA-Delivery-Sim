@@ -60,6 +60,12 @@ PALETTE = {
     "paleblue": (176, 196, 210), "blue": (96, 128, 170), "brick_red": (150, 86, 66),
     "twotone_brick": (122, 94, 78), "slate_grey": (100, 100, 99), "slate_brown": (88, 62, 54),
     "brick_beige": (188, 160, 140),
+    # city-centre offices (OitaStation core Street View, photos/core_C1..C5, 2026-11-08): precast /
+    # stone panel cladding and curtain-wall glass tints / 駅前の事務所: パネル外装・カーテンウォール
+    "panel_white": (216, 216, 210), "panel_grey": (176, 177, 174), "panel_darkgrey": (92, 95, 98),
+    "panel_beige": (198, 188, 170), "panel_brown": (150, 100, 84),
+    "curtain_blue": (78, 110, 138), "curtain_green": (84, 120, 112), "curtain_dark": (52, 60, 68),
+    "curtain_silver": (140, 150, 158), "louvre": (168, 172, 174),
 }
 
 # wall colour -> pattern variants (the plain name is ceramic board siding)
@@ -81,7 +87,7 @@ UV_TILE = {}
 UV_PRE = {"jp_lot": 2.0, "jp_roof_flat": 2.0}
 # one texture per face, and the UV spot of a plain part for small faces
 # 面ごとに 1 枚のテクスチャ（小さな面は無地の部分の UV）
-PER_FACE = {"jp_door": (0.5, 0.15), "jp_door_steel": (0.5, 0.25), "jp_shutter": (0.5, 0.5),
+PER_FACE = {"jp_glass_office": (0.5, 0.5), "jp_door": (0.5, 0.15), "jp_door_steel": (0.5, 0.25), "jp_shutter": (0.5, 0.5),
             "jp_ac_unit": (0.92, 0.5), "jp_glass_frosted": (0.5, 0.5), "jp_glass_dark": (0.5, 0.5)}
 FULL_ALWAYS = {"jp_ac_unit"}
 MATERIALS = {}          # name: (texture, None, roughness, metallic, smooth) / 材質表
@@ -140,11 +146,25 @@ for _k in ("red", "green", "brown"):
 _mat("jp_shopfront", 0.1, 0.0, (3.6, 3.0))
 for _k in PER_FACE:
     _mat(_k, {"jp_door": 0.55, "jp_door_steel": 0.45, "jp_shutter": 0.45, "jp_ac_unit": 0.55,
-              "jp_glass_frosted": 0.25, "jp_glass_dark": 0.05}[_k],
+              "jp_glass_frosted": 0.25, "jp_glass_dark": 0.05, "jp_glass_office": 0.05}[_k],
          {"jp_shutter": 0.5, "jp_glass_dark": 0.2}.get(_k, 0.0))
 for _p in ("1", "2", "3"):
     for _v in ("a", "b"):
         _mat("jp_glass_%s%s" % (_p, _v), 0.05, 0.0)
+# city-centre offices, hotels, car parks (buildings_jp b_office / b_carpark): wall UVs metric
+# and anchored (v = local height), floor lines at FLOOR_Z0 + k FLOOR_M (the first upper floor
+# of an office at 4.8 m), so joints, spandrels and streaks sit on the floors
+# 駅前の事務所・ホテル・立体駐車場（UV は高さ基準、床線 = FLOOR_Z0 + k FLOOR_M）
+FLOOR_M, FLOOR_Z0 = 3.6, 1.2
+PANELS = ("white", "grey", "darkgrey", "beige", "brown")
+CURTAINS = ("blue", "green", "dark", "silver")
+for _k in PANELS:
+    _mat("jp_panel_" + _k, 0.62, 0.0, (3.6, 7.2))
+for _k in CURTAINS:
+    _mat("jp_curtain_" + _k, 0.06, 0.0, (7.2, 7.2))
+for _v in ("a", "b"):
+    _mat("jp_ribbon_" + _v, 0.06, 0.0, (6.0, 7.2))
+_mat("jp_louvre", 0.4, 0.5, (2.0, 2.0))
 
 
 # ---------------------------------------------------------------- helpers
@@ -973,6 +993,135 @@ def glass_dark(rng, W=512, H=410):
     return col, 0.004 * fr, np.where(fr, 0.4, 0.04), W / 3.0, fr * 0.6
 
 
+# ---------------------------------------------------------------- city-centre offices
+def floor_d(Z):
+    """Height (m) above the storey's floor line (office module). / 階の床線からの高さ。"""
+    return (Z - FLOOR_Z0) % FLOOR_M
+
+
+def panel(c, rng, W=576, H=1152, ppm=160.0):
+    """Precast / stone panel cladding on a 3.6 x 7.2 m tile: panels 1.8 m wide,
+    horizontal joints at the floor line and 1.2 m above it, per-panel tone,
+    granite speckle, dirt hanging from every joint (no foot band: the panels
+    climb whole towers; the podium carries the base band). / PC・石パネル外装。"""
+    X, Z = grid(H, W, ppm)
+    fd = floor_d(Z)
+    jv = groove(dist_to_lines(X, 1.8), 0.007)
+    jh = np.maximum(groove(fd, 0.007), groove(fd - 1.2, 0.007))
+    j = np.maximum(jv, jh)
+    ix = np.floor(X / 1.8).astype(int)
+    iz = np.floor((Z - FLOOR_Z0) / 1.2).astype(int)
+    pv = np.array([rng.normal(0, 0.025) for _ in range(64)])
+    tone = pv[(ix * 7 + iz * 3) % 64] + 0.02 * sm(H, W, 0.5 * ppm, rng)
+    speck = rng.random((H, W))
+    tone += 0.05 * (speck < 0.03) - 0.05 * (speck > 0.97) + 0.012 * sm(H, W, 0.8, rng)
+    tone -= 0.18 * j
+    col = colour_field(c, tone)
+    starts = [FLOOR_Z0 + FLOOR_M * k + o for k in range(-1, 3) for o in (0.0, 1.2)]
+    st = streaks(H, W, ppm, rng, 70, [z for z in starts if 0 < z < H / ppm], length=(0.4, 1.8),
+                 width=(0.02, 0.12), amount=(0.05, 0.16))
+    col = stain(col, st, (92, 88, 82))
+    h = -0.005 * j + 0.0008 * sm(H, W, 1.0, rng)
+    rough = 0.6 + 0.12 * j + 0.04 * st
+    return col, h, rough, ppm
+
+
+def curtain(c, rng, W=720, H=720, ppm=100.0):
+    """Curtain-wall glass on a 7.2 x 7.2 m tile (two storeys, four 1.8 m
+    panels): a 1.2 m spandrel at each floor line (opaque, darker), vision
+    glass reflecting the sky with a per-panel tilt, some ceiling lights and
+    lowered blinds behind, aluminium mullions and transoms (metallic).
+    カーテンウォール（スパンドレル、映り込み、方立・無目）。"""
+    X, Z = grid(H, W, ppm)
+    fd = floor_d(Z)
+    c = np.array(c, np.float64)
+    sky = np.array((178, 196, 212.0))
+    ix = np.floor(X / 1.8).astype(int)
+    iz = np.floor((Z - FLOOR_Z0) / FLOOR_M).astype(int)
+    tilt = np.array([rng.normal(0, 0.07) for _ in range(32)])[(ix * 5 + iz * 3) % 32]
+    t = np.clip((fd - 0.9) / 2.7, 0, 1)
+    refl = (0.32 + 0.3 * t + tilt)[..., None]
+    col = c[None, None] * (1 - refl) + sky[None, None] * refl * (0.55 + 0.45 * c[None, None] / 255.0)
+    # the floor behind: blinds part-way down, a band of ceiling lights / 室内: ブラインド・照明
+    blind = np.array([rng.uniform(0.0, 1.0) for _ in range(32)])[(ix * 11 + iz * 7) % 32]
+    bl = (fd > 3.3 - 2.4 * blind) & (fd < 3.3)
+    slat = (np.abs(dist_to_lines(Z, 0.05)) < 0.01) & bl
+    col[bl] = col[bl] * 0.82 + np.array((200, 200, 196.0)) * 0.18
+    col[slat] *= 0.9
+    lit = (np.abs(fd - 3.2) < 0.04) & (np.array([rng.random() < 0.5 for _ in range(32)])[(ix * 3 + iz) % 32])
+    col[lit] = col[lit] * 0.6 + 120
+    spand = (fd < 0.9) | (fd > 3.3)
+    col[spand] = c * 0.62 * (1 + 0.04 * sm(H, W, 3.0, rng))[spand][..., None] + 10
+    frame = (np.abs(dist_to_lines(X, 1.8)) < 0.035) | (np.abs(fd - 0.9) < 0.03) | (np.abs(fd - 3.3) < 0.03) | \
+        (np.abs(dist_to_lines(fd, FLOOR_M)) < 0.03)
+    col[frame] = (150, 154, 158)
+    h = 0.012 * frame + 0.0 * X
+    rough = np.where(frame, 0.35, np.where(spand, 0.18, 0.04))
+    met = frame * 0.8 + spand * 0.1
+    return col, h, rough, ppm, met
+
+
+def ribbon(rng, variant, W=600, H=720, ppm=100.0):
+    """Ribbon-window glass on a 6.0 x 7.2 m tile: the strip from 1.0 to 3.0 m
+    above each floor line, mullions every 1.5 m, venetian blinds at random
+    heights, the sky reflected; silver ('a') or bronze ('b') frames.
+    水平連続窓のガラス（方立 1.5 m、ブラインド、映り込み）。"""
+    X, Z = grid(H, W, ppm)
+    fd = floor_d(Z)
+    t = np.clip((fd - 1.0) / 2.0, 0, 1)
+    nr = np.random.default_rng(rng.randint(0, 1 << 30))
+    top, bot = (np.array((176, 194, 208.0)), np.array((72, 86, 98.0))) if variant == "a" else \
+        (np.array((140, 150, 156.0)), np.array((46, 52, 58.0)))
+    col = bot[None, None] * (1 - t[..., None]) + top[None, None] * t[..., None]
+    ix = np.floor(X / 1.5).astype(int)
+    iz = np.floor((Z - FLOOR_Z0) / FLOOR_M).astype(int)
+    blind = np.array([rng.uniform(0.0, 1.0) for _ in range(40)])[(ix * 7 + iz * 13) % 40]
+    bl = fd > 3.0 - 2.0 * blind
+    col[bl] = col[bl] * 0.55 + np.array((214, 212, 204.0)) * 0.45
+    col[bl & (np.abs(dist_to_lines(Z, 0.04)) < 0.008)] *= 0.88
+    col *= (1 + 0.03 * sm(H, W, 20.0, nr))[..., None]
+    fc = (178, 180, 182) if variant == "a" else (78, 66, 56)
+    frame = (np.abs(dist_to_lines(X, 1.5)) < 0.03) | (np.abs(fd - 1.0) < 0.035) | (np.abs(fd - 3.0) < 0.035)
+    col[frame] = fc
+    return col, 0.006 * frame, np.where(frame, 0.35, 0.04), ppm, frame * (0.8 if variant == "a" else 0.4)
+
+
+def glass_office(rng, W=320, H=288):
+    """A punched office / hotel window (one texture per window): an aluminium
+    frame with a centre mullion, venetian blinds part-way down, a dim floor
+    with a ceiling light, the sky reflected. / 事務所の窓（ブラインド・照明）。"""
+    nr = np.random.default_rng(rng.randint(0, 1 << 30))
+    u = (np.arange(W)[None, :] + 0.5) / W + np.zeros((H, 1))
+    v = (np.arange(H)[:, None] + 0.5) / H + np.zeros((1, W))
+    col = np.array((70, 82, 92.0)) * (1 - v[..., None]) + np.array((168, 186, 200.0)) * v[..., None]
+    for half in (0, 1):
+        m = (u < 0.5) if half == 0 else (u >= 0.5)
+        b = rng.uniform(0.2, 1.0)
+        bl = m & (v > 1 - 0.85 * b)
+        col[bl] = col[bl] * 0.5 + np.array((216, 214, 206.0)) * 0.5
+        col[bl & ((v * 40) % 1.0 < 0.18)] *= 0.86
+    col[np.abs(v - 0.9) < 0.012] += 40
+    col *= (1 + 0.03 * sm(H, W, 25.0, nr))[..., None]
+    fr = (u < 0.03) | (u > 0.97) | (v < 0.04) | (v > 0.96) | (np.abs(u - 0.5) < 0.012)
+    col[fr] = (172, 175, 178)
+    return col, 0.004 * fr, np.where(fr, 0.35, 0.04), W / 1.8, fr * 0.75
+
+
+def louvre(c, rng, W=512, ppm=256.0):
+    """Horizontal aluminium louvres every 0.1 m (car-park decks, rooftop plant
+    screens): lit slat tops, dark gaps showing the deck behind.
+    横ルーバー（立体駐車場・屋上目隠し）。"""
+    H = W
+    X, Z = grid(H, W, ppm)
+    t = (Z % 0.1) / 0.1
+    slat = t > 0.3
+    tone = np.where(slat, 0.15 * (t - 0.65), -0.7) + 0.02 * sm(H, W, 0.3 * ppm, rng)
+    col = colour_field(c, tone)
+    col = stain(col, 0.3 * streaks(H, W, ppm, rng, 25, [], length=(0.3, 1.5), amount=(0.1, 0.3)), (96, 92, 86))
+    h = 0.02 * np.sin(np.clip(t - 0.3, 0, 0.7) / 0.7 * np.pi)
+    return col, h, np.where(slat, 0.4, 0.8), ppm, slat * 0.6
+
+
 # ---------------------------------------------------------------- writer
 def load_palette(d):
     """PALETTE updated with colour_notes.json "palette_jp" (the build dir is
@@ -1060,6 +1209,14 @@ def write(d):
     put("jp_shutter", shutter(rs("sh")[1]))
     put("jp_glass_frosted", frosted(rs("fg")[1]))
     put("jp_glass_dark", glass_dark(rs("gd")[1]))
+    put("jp_glass_office", glass_office(rs("go")[1]))
+    for k in PANELS:
+        put("jp_panel_" + k, panel(P["panel_" + k], rs("pn" + k)[0]), exag=1.5)
+    for k in CURTAINS:
+        put("jp_curtain_" + k, curtain(P["curtain_" + k], rs("cw" + k)[0]), exag=1.0)
+    for v in ("a", "b"):
+        put("jp_ribbon_" + v, ribbon(rs("rb" + v)[1], v), exag=1.0)
+    put("jp_louvre", louvre(P["louvre"], rs("lv")[0]), exag=1.0)
     for p in (1, 2, 3):
         for v in ("a", "b"):
             put("jp_glass_%d%s" % (p, v), window(rs("w%d%s" % (p, v))[1], p, v))
@@ -1115,6 +1272,7 @@ def finish(m, seed, style):
         pre = UV_PRE.get(mat, 1.0)
         du = rng.random()
         anchored = mat.startswith(("jp_wall", "jp_tile", "jp_block", "jp_foundation", "jp_kanban", "jp_shopfront",
-                                   "jp_concrete", "jp_ishigaki", "jp_retaining"))
+                                   "jp_concrete", "jp_ishigaki", "jp_retaining", "jp_panel", "jp_curtain",
+                                   "jp_ribbon"))
         dv = 0.0 if anchored else rng.random()
         part[2] = [np.column_stack([uv[:, 0] * pre / sx + du, uv[:, 1] * pre / sy + dv]) for uv in part[2]]

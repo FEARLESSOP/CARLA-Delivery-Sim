@@ -18,6 +18,8 @@ way (planning.leg_altitude). Positions are (x, y, z) in CARLA world metres.
 
 import math
 
+from delivery import zones
+
 IDLE = "idle"
 TAKEOFF = "takeoff"
 CRUISE = "cruise"
@@ -37,6 +39,38 @@ def _move_towards(p, target, max_step):
     if n <= max_step or n == 0.0:
         return tuple(target), True
     return tuple(p[i] + d[i] / n * max_step for i in range(3)), False
+
+
+class _Route(object):
+    """Horizontal flight to a (possibly moving) target, round the no-fly zones
+    (zones.ACTIVE); a straight line when there are none. Re-planned when the
+    target moves 5 m or the zones change.
+    飛行禁止区域を迂回する水平移動（区域が無ければ直線）。目標が 5 m 動くか区域が
+    変わると再計画。"""
+
+    def __init__(self):
+        self.pts, self.goal, self.ver = None, None, -1
+
+    def step(self, f, target, z, speed, dt):
+        air = zones.ACTIVE["air"]
+        if air is None:
+            self.pts = None
+            return f._step((target[0], target[1], z), speed, dt)
+        if (self.pts is None or self.ver != zones.ACTIVE["ver"] or
+                math.hypot(target[0] - self.goal[0], target[1] - self.goal[1]) > 5.0):
+            self.pts = air.path(f.pos, target)
+            self.goal, self.ver = (target[0], target[1]), zones.ACTIVE["ver"]
+        last = len(self.pts) <= 1
+        wp = target if last else self.pts[0]
+        if f._step((wp[0], wp[1], z), speed, dt):
+            if last:
+                return True
+            self.pts.pop(0)
+        return False
+
+    def aim(self, target):
+        """Where the drone is heading now: the next corner, else the target."""
+        return self.pts[0] if self.pts and len(self.pts) > 1 else target
 
 
 class Sortie(object):
@@ -74,6 +108,7 @@ class Sortie(object):
         self.target_i = 0
         self._timer = 0.0
         self.distance = 0.0
+        self._route = _Route()
 
     @property
     def done(self):
@@ -99,7 +134,7 @@ class Sortie(object):
                 self.state = CRUISE
         elif s == CRUISE:
             d = self.drops[i]
-            if self._step((d[0], d[1], self.leg_z[i]), self.h_speed, dt):
+            if self._route.step(self, d, self.leg_z[i], self.h_speed, dt):
                 self.state = DESCEND
         elif s == DESCEND:
             d = self.drops[i]
@@ -115,7 +150,7 @@ class Sortie(object):
                 self.state = RETURN
         elif s == RETURN:
             h = self.home_fn()
-            if self._step((h[0], h[1], self.leg_z[i]), self.h_speed, dt):
+            if self._route.step(self, h, self.leg_z[i], self.h_speed, dt):
                 self.state = LAND
         elif s == LAND:
             h = self.home_fn()
@@ -141,6 +176,8 @@ class Sortie(object):
             t = self.drops[self.target_i]
         else:
             t = self.home_fn()
+        if self.state in (CRUISE, RETURN):
+            t = self._route.aim(t)
         dx, dy = t[0] - self.pos[0], t[1] - self.pos[1]
         if dx * dx + dy * dy < 1.0:
             return None             # straight up or down: keep the last heading
@@ -164,6 +201,7 @@ class Transfer(object):
         self.state = TAKEOFF
         self.distance = 0.0
         self.loaded = False
+        self._route = _Route()
 
     @property
     def done(self):
@@ -181,7 +219,7 @@ class Transfer(object):
                 self.state = CRUISE
         elif self.state == CRUISE:
             h = self.target_fn()
-            if self._step((h[0], h[1], self.cruise_z), self.h_speed, dt):
+            if self._route.step(self, h, self.cruise_z, self.h_speed, dt):
                 self.state = LAND
         elif self.state == LAND:
             h = self.target_fn()
@@ -193,6 +231,8 @@ class Transfer(object):
 
     def heading(self):
         t = self.target_fn()
+        if self.state == CRUISE:
+            t = self._route.aim(t)
         dx, dy = t[0] - self.pos[0], t[1] - self.pos[1]
         if dx * dx + dy * dy < 1.0:
             return None
@@ -231,6 +271,7 @@ class Mission(object):
         self._timer = 0.0
         self.distance = 0.0
         self.hold_s = 0.0               # time spent holding / 待機時間
+        self._route = _Route()
 
     @property
     def done(self):
@@ -260,7 +301,7 @@ class Mission(object):
             if self._step((self.pos[0], self.pos[1], self.cruise_z), self.v_speed, dt):
                 self.state = CRUISE
         elif s == CRUISE:
-            if self._step((d[0], d[1], self.cruise_z), self.h_speed, dt):
+            if self._route.step(self, d, self.cruise_z, self.h_speed, dt):
                 self.state = DESCEND
         elif s == DESCEND:
             if self._step((d[0], d[1], d[2] + self.drop_height), self.v_speed, dt):
@@ -274,7 +315,7 @@ class Mission(object):
             if self._step((self.pos[0], self.pos[1], self.meet_z), self.v_speed, dt):
                 self.state = TO_MEET
         elif s == TO_MEET:
-            if self._step((self.meet[0], self.meet[1], self.meet_z), self.h_speed, dt):
+            if self._route.step(self, self.meet, self.meet_z, self.h_speed, dt):
                 self.state = HOLD
                 events.append(("at_meet", None))
         elif s == HOLD:
@@ -283,7 +324,7 @@ class Mission(object):
                 self.state = RETURN
         elif s == RETURN:
             h = self.land_fn()
-            if self._step((h[0], h[1], self.pos[2]), self.h_speed * 0.5, dt):
+            if self._route.step(self, h, self.pos[2], self.h_speed * 0.5, dt):
                 self.state = LAND
         elif s == LAND:
             h = self.land_fn()
@@ -300,6 +341,8 @@ class Mission(object):
             t = self.land_fn()
         else:
             t = self.meet
+        if self.state in (CRUISE, TO_MEET, RETURN):
+            t = self._route.aim(t)
         dx, dy = t[0] - self.pos[0], t[1] - self.pos[1]
         if dx * dx + dy * dy < 1.0:
             return None

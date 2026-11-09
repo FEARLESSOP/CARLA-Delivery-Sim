@@ -55,6 +55,7 @@ class Order(object):
     van: int = None          # which van owns it once dispatched / 担当車
     failed_t: float = None
     fail_reason: str = None  # why it could not be delivered / 配達失敗の理由
+    zone: int = None         # the pod whose delivery zone it was made for / 担当ゾーンのポッド
 
     @property
     def drop(self):
@@ -90,6 +91,14 @@ class OrderGenerator(object):
     busy_buildings: set = field(default_factory=set)
     skipped: int = 0         # batches dropped because every building was busy
     boxes: list = field(default_factory=list)   # box stations: face-to-face orders go to these / 対面注文の配達先
+    # delivery zones (delivery/zones.py): the next batch only uses buildings
+    # where ``area(point)`` holds and is tagged ``area_key``; drone orders
+    # never go where ``no_drone(point)`` (a no-fly zone)
+    # 配送ゾーン：次のバッチは area(点) が真の建物だけ、no_drone(点) にはドローン注文なし
+    area: object = None
+    area_key: object = None
+    no_drone: object = None
+    empty_area: int = 0      # batches dropped: no free building in the zone / ゾーン内に建物なし
 
     def schedule_from(self, t, immediate=False):
         gap = self.rng.uniform(self.min_gap, self.max_gap) / max(self.fleet_size, 1)
@@ -116,7 +125,11 @@ class OrderGenerator(object):
         n = self.rng.randint(self.min_batch, self.max_batch)
         kinds = [DRONE if self.rng.random() < self.drone_prob else FACE_TO_FACE
                  for _ in range(n)]
-        free = [b for b in self.buildings if b.id not in self.busy_buildings]
+        free = [b for b in self.buildings if b.id not in self.busy_buildings
+                and (self.area is None or self.area(b.drop))]
+        if not free and self.area is not None:
+            self.empty_area += 1
+            return []
         if not free:
             # every building already has an undelivered order (the vans are
             # far behind): drop this batch rather than double-book a building
@@ -125,12 +138,15 @@ class OrderGenerator(object):
             self.skipped += 1
             return []
         chosen = []
-        n_drone = kinds.count(DRONE)
+        flyable = free if self.no_drone is None else [b for b in free if not self.no_drone(b.drop)]
+        n_drone = min(kinds.count(DRONE), len(flyable))
+        kinds = [DRONE] * n_drone + [FACE_TO_FACE] * (n - n_drone)
         if n_drone:
-            chosen += self._pick_cluster(free, n_drone)
+            chosen += self._pick_cluster(flyable, n_drone)
         if self.boxes:
             # face to face: a free box station in the world / 対面：空いている箱
-            rest = [b for b in self.boxes if b.id not in self.busy_buildings]
+            rest = [b for b in self.boxes if b.id not in self.busy_buildings
+                    and (self.area is None or self.area(b.drop))]
         else:
             rest = [b for b in free if b not in chosen]
         chosen += self.rng.sample(rest, min(n - len(chosen), len(rest)))
@@ -142,7 +158,7 @@ class OrderGenerator(object):
         self._next_batch_id += 1
         orders = []
         for kind, b in zip(kinds, chosen):
-            orders.append(Order(self._next_order_id, kind, b, t, batch_id))
+            orders.append(Order(self._next_order_id, kind, b, t, batch_id, zone=self.area_key))
             self._next_order_id += 1
             self.busy_buildings.add(b.id)
         return orders
@@ -195,21 +211,29 @@ class Dispatcher(object):
     def orders(self):
         return [o for b in self.queue for o in b]
 
-    def assign(self, free_vans):
+    def assign(self, free_vans, can=None):
         """``free_vans``: list of (van_id, (x, y, z)). Returns [(van_id, batch)].
+        ``can(batch, van_id)``: may that van take it (delivery zones)? A batch
+        no free van may take keeps its place in the queue.
 
         空車のリスト [(車 ID, 位置)] を受け取り、[(車 ID, バッチ)] を返す。
+        ``can`` は配送ゾーンの判定（担当できる空車が無いバッチは順番を保って待つ）。
         """
         free = list(free_vans)
-        out = []
+        out, keep = [], []
         while self.queue and free:
             batch = self.queue.pop(0)
             c = centroid([o.drop for o in batch])
-            pick = min(free, key=lambda v: dist2d(v[1], c))
+            ok = [v for v in free if can is None or can(batch, v[0])]
+            if not ok:
+                keep.append(batch)
+                continue
+            pick = min(ok, key=lambda v: dist2d(v[1], c))
             free.remove(pick)
             for o in batch:
                 o.van = pick[0]
             out.append((pick[0], batch))
+        self.queue[:0] = keep
         return out
 
 

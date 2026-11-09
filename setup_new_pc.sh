@@ -219,7 +219,7 @@ else
   cd "$HIL" || die "no $HIL"
   FAILS=0
   for t in tests/test_launcher.py tests/test_pipeline_control.py tests/test_delivery.py tests/test_traction_fx.py \
-           tests/test_weather_cycle.py tests/test_traffic_profile.py; do
+           tests/test_weather_cycle.py tests/test_traffic_profile.py tests/test_zones.py tests/test_hero_autopilot.py tests/test_triple_screen.py tests/test_recovery.py; do
     if timeout 300 "$VPY" "$t" >/tmp/setup_test.log 2>&1; then ok "$t"; else FAILS=$((FAILS+1)); note "$t failed (see /tmp/setup_test.log)"; fi
   done
 fi

@@ -214,9 +214,88 @@ def save(mesh_dir, objs):
     json.dump(man, open(man_p, "w"), indent=0)
 
 
+def road_tree(out):
+    """The carriageway exactly as check_roads.py tests it (layout.py, from the
+    road logic and the OSM), map frame; with an embedded model (maps.json "core")
+    also its asphalt, wider than the lanes (core_merge.core_asphalt, as jp_signs.py).
+    / check_roads と同じ車道の範囲（埋め込みモデルはそのアスファルトも）"""
+    import shapely
+    import layout
+    import core_merge
+    meta = json.load(open(os.path.join(out, "meta.json")))
+    osm = None
+    for v in json.load(open(os.path.join(HERE, "..", "maps.json"))).values():
+        if isinstance(v, dict) and v.get("name") == meta["name"]:
+            osm = os.path.expanduser(v["osm"])
+            break
+    if osm is None:
+        return None, None
+    L = layout.Layout(meta, os.path.join(out, "lanes.json"), osm)
+    road = L.carriageway.buffer(-0.02)
+    core = core_merge.core_asphalt(out, meta)
+    if core is not None and not core.is_empty:
+        road = shapely.union(road, core.buffer(-0.02))
+    shapely.prepare(road)
+    return road, None
+
+
+def clear_of_road(tree, polys, x, y, face):
+    """Pole and housing (map frame, the head's own footprint + 5 cm) clear of
+    the built carriageway (check_roads.py tests the same)."""
+    import shapely
+    from shapely.geometry import LineString
+    w = (POLE_R + GAP_POLE)
+    g = LineString([(x - face[0] * w, y - face[1] * w), (x + face[0] * DEPTH, y + face[1] * DEPTH)]).buffer(LAMP / 2 + 0.05)
+    return not shapely.intersects(tree, g)
+
+
+def settle(data, out):
+    """hokousha_crossings.py places the poles off the road logic's driving
+    lanes; the built carriageway also covers the paved junction corners: a head
+    standing on it is moved back from the road (away from the way it faces,
+    up to 4 m, sideways up to 2 m) or left out; hokousha.json follows.
+    / 造った車道にかかる灯器を後ろへずらす（無理なら外す）"""
+    tree, polys = road_tree(out)
+    if tree is None:
+        return 0, 0
+    moved = dropped = 0
+    for cr in data["crossings"]:
+        keep = []
+        for h in cr.get("heads", []):
+            x, y, fx, fy = h["x"], -h["y"], h["face"][0], -h["face"][1]
+            if clear_of_road(tree, polys, x, y, (fx, fy)):
+                keep.append(h)
+                continue
+            px, py = -fy, fx
+            spot = None
+            for back in (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0):
+                for side in (0.0, 1.0, -1.0, 2.0, -2.0):
+                    q = (x - fx * back + px * side, y - fy * back + py * side)
+                    if clear_of_road(tree, polys, q[0], q[1], (fx, fy)):
+                        spot = q
+                        break
+                if spot:
+                    break
+            if spot is None:
+                dropped += 1
+                print("[jp_hokousha] crossing %s: head at (%.1f, %.1f) on the carriageway, no clear spot: left out"
+                      % (cr["id"], x, y))
+                continue
+            h["x"], h["y"] = round(spot[0], 2), round(-spot[1], 2)
+            moved += 1
+            keep.append(h)
+        if "heads" in cr:
+            cr["heads"] = keep
+    return moved, dropped
+
+
 def build(out):
     data = json.load(open(os.path.join(out, "hokousha.json")))
     name = data["map"]
+    moved, dropped = settle(data, out)
+    if moved or dropped:
+        json.dump(data, open(os.path.join(out, "hokousha.json"), "w"), indent=1, ensure_ascii=False)
+        print("[jp_hokousha] %d heads moved off the built carriageway, %d left out" % (moved, dropped))
     objs = []
     for cr in data["crossings"]:
         if not cr.get("signal") or not cr.get("heads"):

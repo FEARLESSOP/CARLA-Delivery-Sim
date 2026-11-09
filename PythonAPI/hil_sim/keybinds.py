@@ -98,7 +98,7 @@ _act("transmission", "gears", "press", "Manual / automatic", "MT / AT 切替",
 
 _act("signal_left", "signals", "press", "Left turn signal", "左ウインカー", [], ["button:11"])
 _act("signal_right", "signals", "press", "Right turn signal", "右ウインカー", [], ["button:10"])
-_act("hazard", "signals", "press", "Hazard lights", "ハザードランプ")
+_act("hazard", "signals", "press", "Hazard lights", "ハザードランプ", ["e"], ["button:8"])
 
 _act("camera_next", "camera", "press", "Next camera (eye / hood / chase)",
      "次のカメラ（視点 / ボンネット / 追跡）", ["tab"], ["button:2"])
@@ -106,6 +106,10 @@ _act("mirrors", "camera", "press", "Toggle mirrors", "ミラー表示切替", ["
 _act("glance_left", "camera", "hold", "Glance left (hold)", "左をチラ見（押している間）", ["z"])
 _act("glance_right", "camera", "hold", "Glance right (hold)", "右をチラ見（押している間）", ["x"])
 _act("recording", "camera", "press", "Camera recording", "カメラ録画切替", ["r"])
+# the road logic (OpenDRIVE) drawn around the car, road_overlay.py; no wheel default
+# 道路ロジック表示（road_overlay.py）。ホイールの既定は無し
+_act("road_overlay", "camera", "press", "Road logic overlay (what the AI drives on)",
+     "道路ロジック表示（AI が使う道路情報）", ["o"])
 
 _act("eye_fwd", "eye", "press", "Eye forward", "視点を前へ", ["ctrl+i"])
 _act("eye_back", "eye", "press", "Eye back", "視点を後ろへ", ["ctrl+k"])

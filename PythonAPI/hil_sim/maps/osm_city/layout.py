@@ -24,6 +24,7 @@ drives on (the collision of an imported CARLA map is its visible mesh):
 """
 
 import json
+import os
 import math
 
 import numpy as np
@@ -49,6 +50,9 @@ LEVEL_H, GROUND_H = 2.8, 3.6
 MEDIAN_MIN_W = 0.6       # narrower gaps between carriageways are paved / これより狭い隙間は舗装
 MEDIAN_JUNCTION_CLEAR = 3.0
 BAY_DEPTH, BAY_LEN, BAY_TAPER = 3.0, 15.0, 10.0     # bus bay / バス停車帯
+SEAM_LEN = 18.0          # core seam fill: wedge length outside the edge / 境界の台形の長さ
+SEAM_WIDE = 8.0          # a model band this much wider than the street holds more than it (a plaza) / 帯がこれ以上広いと別物（広場）
+SEAM_JUNCTION_CLEAR = 1.5
 HEAD_TAPER = 10.0        # dead-end turning head: taper length along the street / 袋小路の転回部のすり付け長
 # road_fixes maps: a dead end's turning loop (roadnet.py -> turnloops.py: a
 # forward bulb, centre radius 3.5-5 m); a car's front corner sweeps past the
@@ -92,8 +96,15 @@ def lane_poly(lane):
 
 
 class Layout(object):
-    def __init__(self, meta, lanes_json, osm_path):
+    def __init__(self, meta, lanes_json, osm_path, write_bays=False):
+        """write_bays: build.py's Layout picks the bus bays and writes them to
+        bus_bays.json beside lanes.json; every later Layout (check_roads,
+        shopfront_jp, jp_signs, check_markings, ...) builds the same bays from it
+        (signs.py rewrites lanes.json with other speeds before jp_speeds.py, so
+        the >= 40 km/h test alone gave them other bays). / build.py がバス停車帯を
+        決めて bus_bays.json に書き、後の Layout は同じ停車帯を使う"""
         self.meta = meta
+        self.write_bays = write_bays
         import os
         fp = os.path.join(os.path.dirname(os.path.abspath(lanes_json)), "road_features.json")
         self.features = json.load(open(fp)) if os.path.exists(fp) else {}
@@ -103,6 +114,7 @@ class Layout(object):
         self.approaches = data["approaches"]
         self.lights = data["lights"]
         self.osm = OSM(osm_path, meta)
+        self.lanes_json = lanes_json
         self.build_roads()
         self.build_paths()
         self.build_areas()
@@ -175,6 +187,8 @@ class Layout(object):
                 islands += polys(self.medians)
         if self.meta.get("bus_bays"):
             self.add_bus_bays(jp)
+        if self.meta.get("core"):
+            self.add_seam_fill(jp)
         # lanes are sampled every metre: drop the points a straight run does
         # not need (within 2 cm) / 直線部の不要な点を除く（2 cm 以内）
         self.carriageway = clean(set_precision(self.carriageway.simplify(0.02), 0.001), 1.0)
@@ -211,6 +225,10 @@ class Layout(object):
         self.dead_ends = 0
         self.dead_end_junctions = set()
         self.dead_end_heads_by_j = {}
+        # the lanes each head is made of (loop + the street's last metres): the
+        # head's paving beyond its lanes takes its heights from these alone
+        # (terrain.Drape) / 転回部を成す車線（高さはこれらから）
+        self.dead_end_head_lanes = {}
         for j, idx in byj.items():
             if not all(turn(self.lanes[i]) > 100.0 for i in idx):
                 continue                     # an ordinary junction / 通常の交差点
@@ -281,6 +299,7 @@ class Layout(object):
             for i in idx:
                 out[i] = hull
             self.dead_end_heads_by_j[j] = (hull, zh)
+            self.dead_end_head_lanes[j] = sorted(mine)
             self.dead_ends += 1
         self.head_keepout = unary_union(keepout) if keepout else None
         # the finished heads (props.py keeps lamps off their kerbs) / 完成した転回部
@@ -308,9 +327,17 @@ class Layout(object):
         on the kerb side of the nearest lane outside junctions. Model only
         (the road logic has no lane there). / バス停の停車帯（縁石を後退させる）。"""
         left = self.meta.get("lefthand", False)
+        bays_fp = os.path.join(os.path.dirname(os.path.abspath(self.lanes_json)), "bus_bays.json")
+        fixed = None                     # stop node id -> road of its bay (build.py's choice) / 停留所 -> 道路
+        if not self.write_bays and os.path.exists(bays_fp):
+            fixed = {str(b["stop"]): b["road"] for b in json.load(open(bays_fp))["bays"]}
+        elif self.write_bays and os.path.exists(bays_fp):
+            os.remove(bays_fp)           # never a stale list from an earlier build / 古い一覧は消す
         kerbs = []
         for l in self.lanes:
-            if l["junction"] >= 0 or (l["speed"] or 0) < 11.0:
+            if l["junction"] >= 0:
+                continue
+            if (l["speed"] or 0) < 11.0 if fixed is None else l["road"] not in fixed.values():
                 continue
             kerbs.append(l)
         # the kerb-side lane of each road section: keep-left lane -1 (its left
@@ -339,7 +366,10 @@ class Layout(object):
         for p, t, nid in self.osm.points(lambda t: t.get("highway") == "bus_stop"):
             if not self.bounds.buffer(-20).contains(p) or str(nid) in skip:
                 continue
-            d, e, cl, l = min(((g.distance(p), g, c, l) for g, c, l in edges), key=lambda v: v[0])
+            mine = edges if fixed is None else [v for v in edges if v[2]["road"] == fixed.get(str(nid))]
+            if not mine:
+                continue
+            d, e, cl, l = min(((g.distance(p), g, c, l) for g, c, l in mine), key=lambda v: v[0])
             sc = cl.project(p)
             a, b = cl.interpolate(max(0.0, sc - 1.0)), cl.interpolate(min(cl.length, sc + 1.0))
             c0 = cl.interpolate(sc)
@@ -380,12 +410,148 @@ class Layout(object):
                                   # for the bay's markings: its outline and the lane edge
                                   # along its mouth (travel direction) / 標示用: 形状と入口の車線端
                                   "poly": bay, "edge": substring(e, s0, s0 + total_len)})
+        if self.write_bays:
+            json.dump({"_doc": "bus bays picked by build.py (layout.add_bus_bays); later Layouts build the same ones",
+                       "bays": [{k: b[k] for k in ("stop", "name", "road", "x", "y")} for b in self.bus_bays]},
+                      open(bays_fp, "w"), indent=1, ensure_ascii=False)
         if bays:
             self.carriageway = clean(unary_union([self.carriageway] + bays).intersection(self.bounds), 1.0)
+
+    def add_seam_fill(self, jp):
+        """Embedded model (meta "core", guide ch. 35): where a street crosses the
+        core edge, pave the wedge between the model's asphalt band at the edge
+        (Roads + markings of core_layers.npz, x scaled, 0.3 m inside) and the
+        carriageway SEAM_LEN m outside (convex hull of the two cross-sections,
+        outside the rectangle only), so the generated asphalt meets the model's
+        edge to edge and the kerb line tapers back. Skipped where the band holds
+        more than the street (a plaza, the other carriageway: > SEAM_WIDE m
+        wider), where the wedge would reach a junction, an OSM crossing or
+        another road's lanes. Kerbs, footways and buildings follow the new edge.
+        / 境界で生成車道をモデルのアスファルト帯まで台形に広げる（交差点・横断歩道・他道路は避ける）"""
+        import sys
+        from core_merge import core_rect
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fit_core_widths import Asphalt, core_layers
+        r = core_rect(self.meta)
+        bd = os.path.dirname(os.path.abspath(self.lanes_json))
+        core = dict(self.meta["core"])
+        asp = Asphalt(core_layers(bd, core), r, float(core.get("x_scale", 1.0)))
+        rect = box(*r)
+        edge = rect.exterior
+        c = self.carriageway
+        junc = unary_union(jp).buffer(SEAM_JUNCTION_CLEAR)
+        cross = [p for p, t, nid in self.osm.points(lambda t: t.get("highway") == "crossing")]
+        cross += [ln for ln, t, _ in self.osm.lines("highway") if t.get("footway") == "crossing"]
+        cross = unary_union([g.buffer(2.0) for g in cross]) if cross else Polygon()
+        # where each street lane crosses the edge / 各車線が境界を越える点
+        hits = []
+        for l in self.lanes:
+            if l["junction"] >= 0:
+                continue
+            C = [q["c"] for q in l["pts"]]
+            if len(C) < 2:
+                continue
+            X = LineString(C).intersection(edge)
+            for g in getattr(X, "geoms", [X]):
+                if g.geom_type == "Point":
+                    hits.append((g, l))
+        groups = []
+        for g, l in hits:
+            for grp in groups:
+                if grp[0][0].distance(g) < 14.0:
+                    grp.append((g, l))
+                    break
+            else:
+                groups.append([(g, l)])
+        self.seam_fill, self.seam_log = [], []
+        added = []
+        x0, y0, x1, y1 = r
+        for grp in groups:
+            m = Point(np.mean([g.x for g, _ in grp]), np.mean([g.y for g, _ in grp]))
+            dist = {"W": abs(m.x - x0), "E": abs(m.x - x1), "S": abs(m.y - y0), "N": abs(m.y - y1)}
+            side = min(dist, key=dist.get)
+            out_dir = {"W": (-1.0, 0.0), "E": (1.0, 0.0), "S": (0.0, -1.0), "N": (0.0, 1.0)}[side]
+            e_dir = np.array([out_dir[1], -out_dir[0]])
+            # the road direction (outwards), from the lanes near the crossing / 道路方向（外向き）
+            ds = []
+            for g, l in grp:
+                C = np.array([q["c"] for q in l["pts"]])
+                i = int(np.argmin(np.hypot(C[:, 0] - g.x, C[:, 1] - g.y)))
+                a, b = C[max(i - 3, 0)], C[min(i + 3, len(C) - 1)]
+                d = (b - a) / (np.linalg.norm(b - a) or 1.0)
+                ds.append(d if d @ np.array(out_dir) > 0 else -d)
+            d = np.mean(ds, axis=0); d /= np.linalg.norm(d) or 1.0
+            cosang = float(abs(d @ np.array(out_dir)))
+            if cosang < 0.5:
+                self.seam_log.append((round(m.x, 1), round(m.y, 1), "crosses the edge too obliquely"))
+                continue
+            n = np.array([-d[1], d[0]])
+            # model band along the edge, 0.3 m inside / 境界の 0.3 m 内側のモデルの帯
+            base = np.array([m.x, m.y]) - np.array(out_dir) * 0.3
+            ts = np.arange(-30.0, 30.01, 0.05)
+            P = base[None, :] + e_dir[None, :] * ts[:, None]
+            on = asp.on(P[:, 0], P[:, 1])
+            k0 = int(np.argmin(np.abs(ts)))
+            if not on[k0]:
+                self.seam_log.append((round(m.x, 1), round(m.y, 1), "street middle off the model's asphalt"))
+                continue
+            a_ = k0
+            while a_ > 0 and on[a_ - 1]:
+                a_ -= 1
+            b_ = k0
+            while b_ < len(ts) - 1 and on[b_ + 1]:
+                b_ += 1
+            ea, eb = np.array([m.x, m.y]) + e_dir * ts[a_], np.array([m.x, m.y]) + e_dir * ts[b_]
+            # the carriageway across the road SEAM_LEN outside (shorter before a junction)
+            # 外側 SEAM_LEN m の車道断面（交差点の手前で短く）
+            sec, L = None, None
+            for Ltry in (SEAM_LEN, 15.0, 12.0, 9.0):
+                q = np.array([m.x, m.y]) + d * Ltry
+                cut = LineString([q - n * 20.0, q + n * 20.0]).intersection(c)
+                segs = [g for g in getattr(cut, "geoms", [cut]) if g.geom_type == "LineString" and not g.is_empty]
+                seg = min(segs, key=lambda g: g.distance(Point(q)), default=None)
+                if seg is None or seg.distance(Point(q)) > 1.0:
+                    continue
+                wedge = MultiPolygon().union(shapely.convex_hull(shapely.MultiPoint(
+                    [tuple(ea), tuple(eb)] + list(seg.coords)))).difference(rect)
+                if wedge.intersects(junc):
+                    continue
+                sec, L = seg, Ltry
+                break
+            if sec is None:
+                self.seam_log.append((round(m.x, 1), round(m.y, 1), "junction within 9 m outside, or no carriageway"))
+                continue
+            band_w = float(np.hypot(*(eb - ea))) * cosang
+            gen_w = float(sec.length)
+            if band_w > gen_w + SEAM_WIDE:
+                self.seam_log.append((round(m.x, 1), round(m.y, 1), "band %.1f m vs street %.1f m: holds more" % (band_w, gen_w)))
+                continue
+            extra = wedge.difference(c)
+            if extra.is_empty or extra.area < 0.5:
+                continue
+            if extra.intersects(cross):
+                self.seam_log.append((round(m.x, 1), round(m.y, 1), "OSM crossing in the wedge"))
+                continue
+            mine = {l["road"] for _, l in grp}
+            other = unary_union([lane_poly(l) for l in self.lanes if l["road"] not in mine
+                                 and l["junction"] < 0 and lane_poly(l).distance(extra) < 2.0])
+            if not other.is_empty and extra.intersects(other.buffer(0.5)):
+                self.seam_log.append((round(m.x, 1), round(m.y, 1), "another road's lanes beside the wedge"))
+                continue
+            added.append(extra)
+            self.seam_fill.append(dict(x=round(m.x, 1), y=round(m.y, 1), side=side, band=round(band_w, 2),
+                                       street=round(gen_w, 2), length=L, area=round(extra.area, 1)))
+        if added:
+            self.carriageway = clean(unary_union([self.carriageway] + added).intersection(self.bounds), 1.0)
+        print("seam fill: %d wedges paved to the model's asphalt (%.0f m2), %d crossings skipped%s"
+              % (len(self.seam_fill), sum(w["area"] for w in self.seam_fill), len(self.seam_log),
+                 ("; " + "; ".join("(%s, %s) %s" % w for w in self.seam_log[:12])) if self.seam_log else ""))
 
     # -- footways / 歩道
     def build_paths(self):
         osm = self.osm
+        self.jp = self.meta.get("road_style") == "japan"
+        self.xodr = os.path.join(os.path.dirname(os.path.abspath(self.lanes_json)), self.meta.get("name", "") + ".xodr")
         parts, bridges, crossings = [], [], []
         covered = []
         for ln, t, wid in osm.lines("highway"):
@@ -414,6 +580,16 @@ class Layout(object):
         self.footbridges = bridges
         self.crossing_ways = crossings
         self.covered_ways = covered
+        if self.jp:
+            # Japanese maps: one pavement network (pavements.py): 歩道 on MAIN / TERT
+            # and OSM-sidewalk roads from the kerb back, round corners, to the
+            # side-street zebras; 路側帯 strips on the estate streets; no verge band
+            # 日本: 歩道網（幹線の歩道・脇道の横断歩道・生活道路の路側帯）
+            import pavements
+            self.inside, self.paved_inside = self.ring_inside()
+            self.pavements = pavements.Network(self, self.footpaths, self.xodr)
+            self.default_band = self.pave_band
+            return
         # default footpath where OSM maps none beside a road / OSM に歩道が無い道路の既定歩道
         motorway = unary_union([lane_poly(l) for l in self.lanes if (l["speed"] or 0) >= 24.0])
         band = self.carriageway.buffer(KERB_W + VERGE + FOOTPATH, quad_segs=3).difference(
@@ -470,19 +646,8 @@ class Layout(object):
         self.driveways = clean(self.driveways.difference(taken), 2.0)
         # beyond the ring road there is only green (trees along the edge, a
         # noise barrier where an expressway runs) / 外周道路の外は緑地のみ
-        from shapely import wkt
-        inside = wkt.loads(self.meta["ring_wkt"]).buffer(self.meta["ring_w"] / 2 + KERB_W + VERGE + FOOTPATH + 0.5)
+        inside, paved_in = self.ring_inside()
         self.inside = inside
-        paved_in = inside
-        if self.meta.get("ring_guardrail"):
-            # a guardrail lines the ring's outer kerb (props.py): nothing paved
-            # behind it (OSM stubs leaving the map and the default footpath band
-            # lay as grey patches on the grass outside the rail)
-            # 外周にガードレールがある地図: その外側には何も舗装しない
-            probe = wkt.loads(self.meta["ring_wkt"]).exterior.interpolate(0.0)
-            piece = next((p for p in polys(self.carriageway) if p.buffer(0.5).contains(probe)), None)
-            if piece is not None:
-                paved_in = Polygon(piece.exterior).buffer(KERB_W, quad_segs=4)
         self.paved_inside = paved_in
         for name in ("driveways", "parking", "footpaths", "cycleways", "pools", "pitches", "playgrounds",
                      "construction", "water"):
@@ -492,6 +657,11 @@ class Layout(object):
         for name in ("pools", "pitches", "playgrounds", "construction", "water", "parks", "forest"):
             setattr(self, name, clean(getattr(self, name).difference(taken.buffer(0.5)), 0.5))
         self.parking = clean(self.parking.difference(taken).difference(self.driveways), 2.0)
+        if self.jp:
+            # the pavement runs on across private drive mouths (車両乗入れ部: same
+            # level, kerb dropped); the drive starts behind it / 歩道は乗入れ部でも続く
+            self.driveways = clean(self.driveways.difference(self.pave_band), 2.0)
+            self.parking = clean(self.parking.difference(self.pave_band), 2.0)
         self.footpaths = clean(self.footpaths.difference(self.driveways).difference(self.parking), 0.3)
         self.cycleways = clean(self.cycleways.difference(self.driveways).difference(self.parking), 0.3)
 
@@ -499,6 +669,10 @@ class Layout(object):
     def build_buildings(self):
         osm = self.osm
         keep_off = self.carriageway.buffer(BUILD_CLEAR + FACADE_DEPTH, quad_segs=3)
+        if self.jp and getattr(self, "pave_band", None) is not None and not self.pave_band.is_empty:
+            # Japan: footways count as road for buildings (check_roads): the facade
+            # depth clear of the pavement too / 日本: 歩道も建物から離す
+            keep_off = unary_union([keep_off, self.pave_band.buffer(FACADE_DEPTH, quad_segs=2)])
         skip_ways, skip_areas = self.landmark_exclusion()
         self.landmark_areas = skip_areas
         raw = []
@@ -526,8 +700,38 @@ class Layout(object):
         taken = Polygon()
         self.buildings, self.cut_buildings, self.dropped = [], 0, 0
         ring_keep = self.ring_inner()
+        # maps.json "core": the embedded model keeps only its station building and
+        # railway (core_merge.core_keep); our buildings replace the rest, off those
+        # 埋め込みモデルは駅ビルと鉄道だけ残す。他は生成建物に置き換える
+        from core_merge import core_hard, core_keep
+        bd = os.path.dirname(os.path.abspath(self.lanes_json))
+        keep = core_keep(bd, self.meta)
+        # and off the model's own streets, pavements and plazas / モデルの道路・歩道・広場にも建てない
+        hard = core_hard(bd, self.meta)
+        self.core_hard = None
+        if hard is not None and not hard.is_empty:
+            self.core_hard = hard.simplify(0.1)
+            keep_off = unary_union([keep_off, self.core_hard.buffer(0.3)])
+        self.core_keep = keep
+        self.core_skipped = 0
+        if keep is not None and keep.is_empty:
+            keep = None
+        if keep is not None:
+            # a 0.5 m raster outline: simplify once, buffer once (per building it took hours)
+            # ラスタ由来の外形は一度だけ単純化・膨張する
+            keep = keep.simplify(0.3)
+            keep_buf = keep.buffer(0.5)
+            shapely.prepare(keep); shapely.prepare(keep_buf)
         for p, t in raw:
             p = make_valid(p)
+            if keep is not None and keep_buf.intersects(p):
+                if p.intersection(keep).area > 0.3 * p.area:
+                    self.core_skipped += 1          # the station itself (OSM has it too) / 駅ビル自体
+                    continue
+                p = make_valid(p.difference(keep_buf))
+                if p.is_empty:
+                    self.core_skipped += 1
+                    continue
             q = p.difference(keep_off).difference(taken.buffer(0.5)).intersection(ring_keep)
             q = clean(q, 8.0)
             parts = polys(q)
@@ -622,6 +826,24 @@ class Layout(object):
         if each:
             return per
         return unary_union(areas) if areas else None
+
+    def ring_inside(self):
+        """(inside the ring's inner pavement, where anything may be paved): with
+        maps.json "ring_guardrail" nothing is paved behind the ring's outer kerb.
+        外周道路の内側（舗装してよい範囲）。"""
+        from shapely import wkt
+        inside = wkt.loads(self.meta["ring_wkt"]).buffer(self.meta["ring_w"] / 2 + KERB_W + VERGE + FOOTPATH + 0.5)
+        paved_in = inside
+        if self.meta.get("ring_guardrail"):
+            # a guardrail lines the ring's outer kerb (props.py): nothing paved
+            # behind it (OSM stubs leaving the map and the default footpath band
+            # lay as grey patches on the grass outside the rail)
+            # 外周にガードレールがある地図: その外側には何も舗装しない
+            probe = wkt.loads(self.meta["ring_wkt"]).exterior.interpolate(0.0)
+            piece = next((p for p in polys(self.carriageway) if p.buffer(0.5).contains(probe)), None)
+            if piece is not None:
+                paved_in = Polygon(piece.exterior).buffer(KERB_W, quad_segs=4)
+        return inside, paved_in
 
     def ring_inner(self):
         """Inside of the ring road's inner pavement (buildings stay inside it). / 外周道路の内側。"""

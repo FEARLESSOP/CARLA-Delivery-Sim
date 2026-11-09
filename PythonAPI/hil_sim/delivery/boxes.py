@@ -16,13 +16,23 @@ its footprint and under the customer's spot, nothing in the way up to 2 m.
 After a delivery the parcel stays in the box; a pedestrian comes along the
 pavement a while later, opens the compartment, takes it and walks off.
 
+Parcel lockers (``lockers=True``, the default once the LastMile Hub props are
+installed) replace the stations: the web viewer's Apartment B locker
+(static.prop.lmhlocker) with two robot ports. The low one is at Mini Pod bay
+height, so the locker stands LOCKER_SET m behind the kerb and a Mini Pod
+reverses up onto the pavement to it (mini.js m_aptB); the upper one, added
+straight above, is at the LMP-4 side-port tray height, and the LMP-4 parked in
+the kerb lane slides its arm out to it. The customer collects from the locker.
+
 世界に置かれた LastMile 箱型ステーション（ポストのように街に点在）。対面注文は
 いずれかの箱に配達する。歩道の縁石のすぐ内側に置き、投入口は車道側、受取口は
 歩道側。ポッドのサイドポートは左側なので、左側通行のマップでのみ使う。配達後、
 歩行者が来て荷物を受け取る。
 """
 
+import json
 import math
+import os
 import random
 from dataclasses import dataclass
 
@@ -39,6 +49,18 @@ MAX_REACH = 3.0                           # longest side-port slide allowed / �
 CLEAR_H = 2.0                             # nothing in the way up to this height / この高さまで空き
 PARK_AHEAD = -R.STN_X                     # pod centre is this far ahead of the box / 箱より前方の車体中心
 
+# the Mini Pods' parcel locker (lmh_parts.json "locker", from the model) / ミニポッド用ロッカー
+LOCKER_BP, LOCKER_FLAP_BP = "static.prop.lmhlocker", "static.prop.lmhlockerflap"
+LOCKER_SET = 0.8                          # port face behind the kerb's top edge (pod fits in front) / 縁石から投入口
+LOCKER_GAP = 0.6                          # between station and locker along the kerb / 箱とロッカーの間隔
+LOCKER = {"size": [2.4, 0.8, 2.18], "bbox_min": [-1.2, -0.025, 0.0], "bbox_max": [1.2, 0.775, 2.18],
+          "port": [0.0, 0.575, 0.47], "flap_pivot": [0.0, 0.555, 0.65], "flap_open_deg": 77.0}
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "lmh_parts.json")) as _f:
+        LOCKER.update(json.load(_f).get("locker") or {})
+except (OSError, ValueError):
+    pass
+
 
 @dataclass
 class BoxSite(object):
@@ -47,6 +69,7 @@ class BoxSite(object):
     yaw: float          # same as the pod's heading when parked beside it / 駐車時の車の向き
     park: tuple         # where the pod's centre stops / 車体中心の停車位置
     walk_from: tuple    # pavement point the customer comes from / 客の出発点
+    locker: tuple = None  # ground point under the Mini Pods' locker, same yaw / ロッカーの原点
 
 
 def _tup(l):
@@ -162,9 +185,11 @@ def reachable(planner):
     return ok
 
 
-def find_box_sites(world, wmap, rng, spacing=110.0, max_boxes=30, step=12.0, planner=None):
+def find_box_sites(world, wmap, rng, spacing=110.0, max_boxes=30, step=12.0, planner=None, lockers=False):
     """Spread-out kerb-side pavement spots for box stations (keep-left maps).
     With a route planner, only spots a pod can drive to and away from.
+    ``lockers``: only spots with room for a Mini Pod locker beside the
+    station (behind it along the lane) and for the pod docked at its port.
     歩道沿いの箱の設置場所（左側通行マップ用）。"""
     can_reach = reachable(planner)
     has_sidewalks = _any_sidewalk(wmap)
@@ -210,17 +235,35 @@ def find_box_sites(world, wmap, rng, spacing=110.0, max_boxes=30, step=12.0, pla
         if kerb is None:
             continue
         k_off, gz = kerb
-        off = k_off + KERB_GAP + HALF_D
-        if R.SLIDE_MAX - (-off - R.STN_ZC) > MAX_REACH:
-            continue                                      # too far for the arm / アームが届かない
-        cx, cy = L.x + nx * off, L.y + ny * off
-        if any(math.hypot(cx - s.loc[0], cy - s.loc[1]) < spacing for s in sites):
-            continue
-        pts = [carla.Location(cx + f.x * a + nx * b, cy + f.y * a + ny * b, gz)
-               for a in (-HALF_W, 0.0, HALF_W) for b in (-HALF_D, HALF_D)]
-        pts.append(carla.Location(cx + nx * (HALF_D + 0.55), cy + ny * (HALF_D + 0.55), gz))   # customer / 客
+        if lockers:
+            # the parcel locker: front (+y local) to the road, its port face
+            # LOCKER_SET behind the kerb (a Mini Pod docks on the pavement in
+            # front of it); the LMP-4's arm must reach its upper port
+            # ロッカー：正面を車道へ、縁石から LOCKER_SET 奥（ミニポッドは歩道上で接続）
+            lo, hi, port = LOCKER["bbox_min"], LOCKER["bbox_max"], LOCKER["port"]
+            off = k_off + LOCKER_SET + port[1]
+            if R.SLIDE_MAX - (-(k_off + LOCKER_SET + R.STN_D / 2.0) - R.STN_ZC) > MAX_REACH:
+                continue                                  # too far for the arm / アームが届かない
+            cx, cy = L.x + nx * off, L.y + ny * off
+            if any(math.hypot(cx - s.loc[0], cy - s.loc[1]) < spacing for s in sites):
+                continue
+            pts = [carla.Location(cx + f.x * a - nx * b, cy + f.y * a - ny * b, gz)
+                   for a in (lo[0] + 0.05, 0.0, hi[0] - 0.05) for b in (lo[1] + 0.05, port[1])]
+            pts += [carla.Location(cx + f.x * a - nx * (port[1] + d), cy + f.y * a - ny * (port[1] + d), gz)
+                    for a in (-0.3, 0.3) for d in (0.1, 0.7)]          # docked pod, customer / ポッド・客
+        else:
+            off = k_off + KERB_GAP + HALF_D
+            if R.SLIDE_MAX - (-off - R.STN_ZC) > MAX_REACH:
+                continue                                  # too far for the arm / アームが届かない
+            cx, cy = L.x + nx * off, L.y + ny * off
+            if any(math.hypot(cx - s.loc[0], cy - s.loc[1]) < spacing for s in sites):
+                continue
+            pts = [carla.Location(cx + f.x * a + nx * b, cy + f.y * a + ny * b, gz)
+                   for a in (-HALF_W, 0.0, HALF_W) for b in (-HALF_D, HALF_D)]
+            pts.append(carla.Location(cx + nx * (HALF_D + 0.55), cy + ny * (HALF_D + 0.55), gz))   # customer / 客
         if not all(_clear_column(world, p, gz) for p in pts):
             continue                                      # not all on the pavement, or blocked / 歩道外・障害物
+        locker = (cx, cy, gz) if lockers else None
         park = wmap.get_waypoint(carla.Location(cx - nx * off + f.x * PARK_AHEAD,
                                                 cy - ny * off + f.y * PARK_AHEAD, L.z))
         if park is None or park.is_junction or park.road_id != wp.road_id or park.lane_id != wp.lane_id:
@@ -231,7 +274,7 @@ def find_box_sites(world, wmap, rng, spacing=110.0, max_boxes=30, step=12.0, pla
         if not back:
             continue
         sites.append(BoxSite(len(sites) + 1, (cx, cy, gz), wp.transform.rotation.yaw,
-                             _tup(park.transform.location), _tup(back[0].transform.location)))
+                             _tup(park.transform.location), _tup(back[0].transform.location), locker))
         if len(sites) >= max_boxes:
             break
     return sites
@@ -243,6 +286,10 @@ class _Box(object):
         self.tf = carla.Transform(carla.Location(*site.loc), carla.Rotation(yaw=site.yaw))
         self.pose_key = (0.0, 0.0)
         self.parcels = []                 # parcel actors in the compartment / 区画内の荷物
+        self.where = []                   # per parcel: "station" or "locker" / 保管場所
+        self.locker = self.lflap = self.uflap = None   # parcel locker, low + upper port flaps / ロッカー
+        self.ltf = None
+        self.flap_key = {False: 0.0, True: 0.0}
         self.pickup_t = None
         self.customer = None              # [walker, phase, timer, carried parcel] / 客の状態
 
@@ -250,11 +297,25 @@ class _Box(object):
 class BoxStations(object):
     """The box stations in the world and their customers. / 箱と受取客。"""
 
-    def __init__(self, world, client, sites, rng=None):
+    def __init__(self, world, client, sites, rng=None, lockers=False):
         self.world, self.client, self.rng = world, client, rng or random.Random()
         lib = world.get_blueprint_library()
         self.lib = lib
         self.boxes = {}
+        if lockers and lib.filter(LOCKER_BP) and lib.filter(LOCKER_FLAP_BP):
+            # parcel lockers: one per site, two robot ports (Mini Pod low,
+            # LMP-4 high) / 宅配ロッカー（下段ミニポッド・上段 LMP-4）
+            for s in sites:
+                tf = carla.Transform(carla.Location(*s.loc), carla.Rotation(yaw=s.yaw))
+                lk = world.try_spawn_actor(lib.find(LOCKER_BP), tf)
+                if lk is None:
+                    continue
+                b = self.boxes[s.id] = _Box(s, None, None, None)
+                b.locker, b.ltf = lk, tf
+                b.lflap = world.spawn_actor(lib.find(LOCKER_FLAP_BP), self._flap_tf(0.0), attach_to=lk)
+                if LOCKER.get("flap_pivot_upper"):
+                    b.uflap = world.spawn_actor(lib.find(LOCKER_FLAP_BP), self._flap_tf(0.0, True), attach_to=lk)
+            return
         if not (lib.filter(STATION_BP) and lib.filter(FLAP_BP) and lib.filter(DOOR_BP)):
             return
         local = R.station_local(0.0, 0.0)
@@ -280,22 +341,55 @@ class BoxStations(object):
         b = self.boxes[box_id]
         return b.tf.transform(carla.Location(*local))     # transform() changes its argument / 引数を書き換える
 
+    def has_locker(self, box_id):
+        b = self.boxes.get(box_id)
+        return b is not None and b.locker is not None
+
+    def locker_point(self, box_id, local):
+        """A point in the locker's frame -> world. / ロッカー座標の点をワールドへ。"""
+        return self.boxes[box_id].ltf.transform(carla.Location(*local))
+
+    @staticmethod
+    def _flap_tf(f, upper=False):
+        x, y, z = LOCKER["flap_pivot_upper" if upper else "flap_pivot"]
+        return carla.Transform(carla.Location(x, y, z), carla.Rotation(roll=LOCKER["flap_open_deg"] * f))
+
+    def port(self, box_id, flap, upper=False):
+        """Open / close a robot-port flap of the locker (hinged at the top,
+        swings inward): the low one (Mini Pods) or the upper one (LMP-4).
+        ロボットポートの扉（下段：ミニポッド、上段：LMP-4）。"""
+        b = self.boxes.get(box_id)
+        a = None if b is None else (b.uflap if upper else b.lflap)
+        f = round(flap, 3)
+        if a is None or f == b.flap_key[upper]:
+            return
+        b.flap_key[upper] = f
+        self.client.apply_batch([carla.command.ApplyTransform(a.id, self._flap_tf(f, upper))])
+
     def pose(self, box_id, flap, cell_door):
         """Open / close the intake flap and the compartment door. / 扉の開閉。"""
         b = self.boxes.get(box_id)
         key = (round(flap, 3), round(cell_door, 3))
-        if b is None or key == b.pose_key:
+        if b is None or b.flap is None or key == b.pose_key:
             return
         b.pose_key = key
         local = R.station_local(flap, cell_door)
         self.client.apply_batch([carla.command.ApplyTransform(b.flap.id, self._tf(local["LMPStationFlap"])),
                                  carla.command.ApplyTransform(b.door.id, self._tf(local["LMPStationDoor"]))])
 
-    def store(self, box_id, t):
-        """A parcel is in the compartment; a customer will come for it. / 荷物を保管。"""
+    def store(self, box_id, t, locker=False):
+        """A parcel is in the compartment (or the locker: filed inside, out of
+        sight); a customer will come for it. / 荷物を保管。"""
         b = self.boxes.get(box_id)
         if b is None:
             return
+        if (locker or b.station is None) and b.locker is not None:
+            b.parcels.append(None)
+            b.where.append("locker")
+            if b.pickup_t is None:
+                b.pickup_t = t + self.rng.uniform(20.0, 60.0)
+            return
+        b.where.append("station")
         cx, cy, cz = R.station_point(R.CELL_CENTER)
         p = self.world.try_spawn_actor(self.lib.find(PARCEL_BP),
                                        carla.Transform(carla.Location(cx, cy, cz + R.PARCEL_XL_H / 2.0)),
@@ -329,7 +423,12 @@ class BoxStations(object):
     def _walk(self, b, t, dt):
         w, phase, timer, carried = b.customer
         b.customer[2] = timer + dt
-        front = self.world_point(b.site.id, R.station_point(R.CUSTOMER_FRONT))
+        at_locker = bool(b.where) and b.where[0] == "locker"
+        if at_locker:
+            px, py, _ = LOCKER["port"]
+            front = self.locker_point(b.site.id, (px, py + 0.55, 0.0))
+        else:
+            front = self.world_point(b.site.id, R.station_point(R.CUSTOMER_FRONT))
         home = carla.Location(*b.site.walk_from)
         target = front if phase == "to_box" else home
         try:
@@ -347,9 +446,12 @@ class BoxStations(object):
             b.customer[1:3] = ["open", 0.0]
         elif phase == "open":                             # door, parcel to hands, door / 扉→受取→扉
             u = b.customer[2]
-            self.pose(b.site.id, 0.0, min(u / 0.6, 1.0) if u < 1.4 else max(1.0 - (u - 1.4) / 0.6, 0.0))
+            if not at_locker:
+                self.pose(b.site.id, 0.0, min(u / 0.6, 1.0) if u < 1.4 else max(1.0 - (u - 1.4) / 0.6, 0.0))
             if u >= 0.9 and carried is None and b.parcels:
                 p = b.parcels.pop(0)
+                if b.where:
+                    b.where.pop(0)
                 if p is not None:
                     p.destroy()
                 b.customer[3] = self.world.try_spawn_actor(
@@ -372,7 +474,7 @@ class BoxStations(object):
                             a.destroy()
                         except RuntimeError:
                             pass
-            for a in b.parcels + [b.flap, b.door, b.station]:
+            for a in b.parcels + [b.uflap, b.lflap, b.locker, b.flap, b.door, b.station]:
                 if a is not None:
                     try:
                         a.destroy()

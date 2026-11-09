@@ -161,13 +161,17 @@ if ground:
     bpy.ops.object.mode_set(mode="OBJECT")
     
     parts = [o for o in bpy.context.scene.objects if o.name.startswith("Ground")]
-    lot_parts, sidewalk_parts, curb_parts, grass_parts, plaza_parts = [], [], [], [], []
+    lot_parts, plot_parts, sidewalk_parts, curb_parts, grass_parts, plaza_parts = [], [], [], [], [], []
     for p in parts:
         if not p.data.polygons:
             bpy.data.objects.remove(p)
             continue
         mat_name = p.data.materials[p.data.polygons[0].material_index].name
-        if "lot" in mat_name:
+        # M_plot (building plots) contains "lot" but is not a car park: Terrain, not Road
+        # 敷地 (M_plot) は駐車場ではない: Road ではなく Terrain
+        if mat_name.startswith("M_plot"):
+            plot_parts.append(p)
+        elif "lot" in mat_name:
             lot_parts.append(p)
         elif "kerb" in mat_name or "curb" in mat_name:
             curb_parts.append(p)
@@ -189,6 +193,17 @@ if ground:
         if lot_parts:
             bpy.ops.object.join()
         road_obj.name = road_obj.data.name = "Road_Road_Roads"
+
+    # Terrain_Lots_Plots: building plots / 建物の敷地
+    if plot_parts:
+        bpy.ops.object.select_all(action="DESELECT")
+        for p in plot_parts:
+            p.select_set(True)
+        bpy.context.view_layer.objects.active = plot_parts[0]
+        if len(plot_parts) > 1:
+            bpy.ops.object.join()
+        pt = bpy.context.view_layer.objects.active
+        pt.name = pt.data.name = "Terrain_Lots_Plots"
 
     # Road_Curb_Kerb: Street curbs / 縁石
     if curb_parts:

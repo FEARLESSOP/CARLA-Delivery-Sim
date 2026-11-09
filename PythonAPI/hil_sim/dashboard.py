@@ -28,6 +28,7 @@ import glob
 import json
 import math
 import os
+import signal as _signal     # not "signal": a route below is called that / ルート名と衝突回避
 import socket
 import subprocess
 import sys
@@ -47,11 +48,15 @@ import carla
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 from delivery import live as delivery_live
+from delivery import zones as delivery_zones
+import drone_windows
+import minipod_windows
 import ffb_settings
 import keybinds
 import seasons
 import vehicle_tuning
 import weather_cycle
+import road_overlay
 from lane_limits import LaneLimits
 import windows_control
 import launch_options
@@ -1210,6 +1215,38 @@ def delivery_map():
     return jsonify(m)
 
 
+@app.route("/delivery/zones", methods=["GET", "POST"])
+def delivery_zones_route():
+    """Pod delivery zones and no-fly zones of a map (data/delivery_zones.json;
+    delivery_sim.py picks changes up within a second). GET ?map=<name> (default:
+    the delivery sim's map); POST {"map", "pods": {"<pod>": rect}, "nofly": [rect],
+    "meet": {"<pod>": [{"x", "y"}]}, "dist": {"<hub>": [{"x", "y"}]},
+    "charge": [{"x", "y"[, "yaw"]}]} (LastMile charging-station spots).
+    配送ゾーン・飛行禁止区域・充電ステーション地点の取得と保存。"""
+    if request.method == "POST":
+        d = request.get_json(force=True, silent=True) or {}
+        name = delivery_zones.map_key(d.get("map"))
+        if not name:
+            return jsonify({"ok": False, "error": "no map"}), 400
+        saved = delivery_zones.load(name)
+        entry = delivery_zones.save(name, {"pods": d.get("pods"), "nofly": d.get("nofly"),
+                                           "meet": d.get("meet"),
+                                           # an editor that sends no "dist" / "charge"
+                                           # keeps the saved ones / 送られない項目は保存済みを維持
+                                           "dist": d["dist"] if "dist" in d else saved.get("dist"),
+                                           "charge": d["charge"] if "charge" in d else
+                                           saved.get("charge")})
+        return jsonify(dict(entry, ok=True, map=name))
+    name = request.args.get("map")
+    if not name:
+        s = delivery_live.read_json(os.path.join(DELIVERY_DIR, delivery_live.STATE)) or {}
+        name = s.get("map")
+    name = delivery_zones.map_key(name)
+    if not name:
+        return jsonify({"ok": False, "error": "no map", "pods": {}, "nofly": []})
+    return jsonify(dict(delivery_zones.load(name), ok=True, map=name))
+
+
 @app.route("/delivery/pod", methods=["POST"])
 def delivery_pod():
     """Queue a LastMile pod command for delivery_sim: the shell view, or the
@@ -1258,6 +1295,84 @@ def delivery_wind():
         return jsonify({"ok": False, "error": "bad number"}), 400
     delivery_live.send_command(DELIVERY_DIR, clean)
     return jsonify({"ok": True, "sent": clean})
+
+
+@app.route("/delivery/charge", methods=["POST"])
+def delivery_charge():
+    """Send one delivery vehicle (LMP-4 pod or LastMile Hub) to a charging
+    station: delivery_sim marks it charge_asap and it goes the next time it
+    is free. Body {"van": 1..99}. / 配送車両を充電へ向かわせる"""
+    d = request.get_json(force=True, silent=True)
+    van = d.get("van") if isinstance(d, dict) else None
+    if isinstance(van, bool) or not isinstance(van, int) or not 1 <= van <= 99:
+        return jsonify({"ok": False, "error": "van must be an integer 1..99"}), 400
+    clean = {"cmd": "charge", "van": van}
+    delivery_live.send_command(DELIVERY_DIR, clean)
+    return jsonify({"ok": True, "sent": clean})
+
+
+# Drones page: "Open CARLA view" = a native CARLA window for one drone
+# (drone_window.py: a chase camera following the drone body + its onboard
+# cameras), started detached by drone_windows.py. Nothing is streamed here.
+# GET  /drones/window                     {windows: [{drone, pid, running}]}
+# POST /drones/window {drone, action}     action "open" (default; a second open
+#                                         brings it forward or replaces it) | "close"
+# ドローンページ：1 機の CARLA ウィンドウ（drone_window.py）を開く・閉じる
+DRONE_WIN = {"host": "127.0.0.1", "port": 2000}
+
+
+@app.route("/drones/window", methods=["GET", "POST"])
+def drones_window_route():
+    if request.method == "POST":
+        d = request.get_json(force=True, silent=True) or {}
+        try:
+            drone = int(d.get("drone"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "no drone"}), 400
+        try:
+            if d.get("action") == "close":
+                act, info = drone_windows.close_window(drone), {}
+            else:
+                act, info = drone_windows.open_window(drone, DRONE_WIN["host"], DRONE_WIN["port"])
+        except OSError as e:
+            return jsonify({"ok": False, "error": str(e),
+                            "windows": drone_windows.list_windows()}), 500
+        ok = act != "too_many"
+        return jsonify(dict(info, ok=ok, action=act, windows=drone_windows.list_windows(),
+                            **({} if ok else {"error": "at most %d CARLA views at once"
+                                              % drone_windows.MAX_WINDOWS})))
+    return jsonify({"ok": True, "windows": drone_windows.list_windows()})
+
+
+# Mini Pods page: "Open CARLA view" = a native CARLA window for one LastMile
+# mini pod (minipod_window.py: a chase camera behind the pod body + its six
+# onboard cameras; on the hub vehicle while docked), started detached by
+# minipod_windows.py. Same host / port as the drone windows.
+# GET  /minipods/window                {windows: [{id, pid, running}]}
+# POST /minipods/window {id, action}   action "open" (default; a second open
+#                                      brings it forward or replaces it) | "close"
+# ミニポッドページ：1 台の CARLA ウィンドウ（minipod_window.py）を開く・閉じる
+@app.route("/minipods/window", methods=["GET", "POST"])
+def minipods_window_route():
+    if request.method == "POST":
+        d = request.get_json(force=True, silent=True) or {}
+        try:
+            pod = int(d.get("id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "no mini pod id"}), 400
+        try:
+            if d.get("action") == "close":
+                act, info = minipod_windows.close_window(pod), {}
+            else:
+                act, info = minipod_windows.open_window(pod, DRONE_WIN["host"], DRONE_WIN["port"])
+        except OSError as e:
+            return jsonify({"ok": False, "error": str(e),
+                            "windows": minipod_windows.list_windows()}), 500
+        ok = act != "too_many"
+        return jsonify(dict(info, ok=ok, action=act, windows=minipod_windows.list_windows(),
+                            **({} if ok else {"error": "at most %d mini pod CARLA views at once"
+                                              % minipod_windows.MAX_WINDOWS})))
+    return jsonify({"ok": True, "windows": minipod_windows.list_windows()})
 
 
 # Pedal tuning shared with the G923 control script, which watches this
@@ -1611,6 +1726,47 @@ def daycycle_route():
                     "states": list(weather_cycle.STATES)})
 
 
+# Road logic overlay (road_overlay.py, O key in the driving window): the
+# settings live in data/road_overlay.json, the helper reports its state in
+# data/road_overlay_status.json. / 道路ロジック表示の設定と状態
+@app.route("/road_overlay", methods=["GET", "POST"])
+def road_overlay_route():
+    """GET: settings, helper status, layers and legend. POST {on, spectator,
+    radius, max_shapes, refresh, detail_radius, brightness, layers: {name: bool}}.
+    / 設定・状態・凡例の取得と変更"""
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        try:
+            road_overlay.update_control({k: body[k] for k in ("on", "spectator", "layers") + tuple(road_overlay.LIMITS)
+                                         if k in body})
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+    return jsonify({"settings": road_overlay.load_control(), "status": road_overlay.read_status(),
+                    "layers": road_overlay.layer_info(), "legend": road_overlay.legend(),
+                    "limits": road_overlay.LIMITS})
+
+
+# Timetabled buses (bus_schedule.py, run by generate_traffic on OitaStation):
+# its status file, read-only. / 時刻表バスの状態（読み取りのみ）
+BUS_STATUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "bus_status.json")
+BUS_CREDIT = ("出典：大分県オープンデータカタログ（BODIK）「大分バスGTFSデータ」「大分交通GTFSデータ」"
+              "「高速バスGTFSデータ」（CC BY 4.0、大分県）を加工して作成; road names © OpenStreetMap contributors")
+
+
+@app.route("/buses")
+def buses_route():
+    """Buses on the map and the next departures per Oita Station platform;
+    live = the file is fresh (written every 2 s). / 路線バスの状態"""
+    try:
+        with open(BUS_STATUS, encoding="utf-8") as fh:
+            st = json.load(fh)
+        st["live"] = time.time() - float(st.get("t", 0)) < 10.0
+    except (OSError, ValueError):
+        st = {"live": False}
+    st.setdefault("credit", BUS_CREDIT)
+    return jsonify(st)
+
+
 @app.route("/windows", methods=["GET", "POST"])
 def windows_route():
     """GET: every optional window with running / pid / available. POST
@@ -1871,6 +2027,14 @@ def web_assets(name):
     return send_from_directory(os.path.join(WEB_DIST, "assets"), name, max_age=31536000)
 
 
+@app.route("/models/<path:name>")
+def web_models(name):
+    """3D models the app loads by URL (web/public/models -> web/dist/models:
+    lmh_minipod.glb for the Mini Pods page). Revalidated, since the asset
+    build may replace a model under the same name. / 3D モデル。"""
+    return send_from_directory(os.path.join(WEB_DIST, "models"), name, max_age=0)
+
+
 # The page itself is the React app in web/ (built into web/dist by
 # `npm run build`, web/DEV.md). This is shown only when no build exists.
 # 画面は web/ の React アプリ（ビルド前のみ以下を表示）
@@ -1900,6 +2064,11 @@ def main():
     args = p.parse_args()
     global DELIVERY_DIR
     DELIVERY_DIR = args.delivery_live_dir
+    DRONE_WIN.update(host=args.host, port=args.port)
+    # SIGTERM (the launcher stopping us) exits cleanly; the drone windows are
+    # their own processes and close themselves (Esc / their close button)
+    # SIGTERM で正常終了。ドローン窓は独立プロセス
+    _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
 
     log_dir = None if args.no_log else args.log_dir
     t = threading.Thread(

@@ -48,8 +48,12 @@ class LaneLimits(object):
         self._load(wmap)
         if not self.by_section:
             return None
-        wp = wmap.get_waypoint(actor.get_location())
-        if wp is None:
+        return self.limit_wp(wmap, wmap.get_waypoint(actor.get_location()))
+
+    def limit_wp(self, wmap, wp):
+        """km/h of the lane of waypoint ``wp`` (your own maps), else None."""
+        self._load(wmap)
+        if not self.by_section or wp is None:
             return None
         kmh = self.by_section.get((wp.road_id, wp.section_id, wp.lane_id))
         if kmh is None:

@@ -13,6 +13,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CARLA_ROOT="$(cd "$HERE/../../.." && pwd)"
 KEY="$1"; SRC="$2"
+# absolute: later steps run the editor from the CARLA source tree, where a relative
+# build path finds nothing (the foliage step saw 0 leaf textures, 2026-11-07)
+# 絶対パスにする（エディタは別ディレクトリで動くため）
+SRC="$(cd "$SRC" && pwd)"
 CARLA_SRC="${CARLA_SRC:-$HOME/Documents/Dinesh-carla-copy/carla}"
 export UE4_ROOT="${UE4_ROOT:-$HOME/UnrealEngine_4.26}"
 PY="$CARLA_ROOT/carla-venv/bin/python"
@@ -243,4 +247,11 @@ for cfg_dir in ['$CONTENT/$PKG/Config', '$DST/Config']:
         json.dump(data, f, indent=4)
 "
 find "$DST/Maps/$NAME" -maxdepth 2 | head -20 || true
+# CARLA clients keep the map's road logic, navmesh and TM cache in ~/carlaCache
+# and only check that a file EXISTS, never that it is current: the walkers and the
+# TM kept a navmesh / xodr / TM cache days old after re-imports (map guide ch. 7,
+# 2026-11-07). Clear this map's entry so every client fetches the new files.
+# クライアントのキャッシュは存在確認のみで更新されないため、このマップ分を消す
+CACHE="${CARLA_CACHE:-$HOME/carlaCache}/0.9.16/$PKG/Maps/$NAME"
+if [ -d "$CACHE" ]; then rm -rf "$CACHE"; echo "cleared the client cache $CACHE"; fi
 echo "done: restart CARLA, then client.load_world('$NAME')"

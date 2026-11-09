@@ -104,5 +104,18 @@ check("idle again with its exit code", run_until(L, lambda: (st().get("last_exit
 
 L.shutdown()
 check("shutdown marks the launcher off", st().get("phase") == "off")
+
+print("6. charging stations -> flags / 充電ステーションの引数")
+d = launch_options.defaults()
+check("defaults: random, 0 (off)", d["charge_mode"] == "random" and d["charge_stations"] == 0)
+a = launch_options.to_argv({"charge_mode": "manual", "charge_stations": 5})
+check("to_argv passes both to run_pipeline", a[a.index("--charge-mode") + 1] == "manual"
+      and a[a.index("--charge-stations") + 1] == "5", " ".join(a))
+c = launch_options.clean({"charge_mode": "nowhere", "charge_stations": "99"})
+check("clean: unknown mode -> random, count capped at 12", c["charge_mode"] == "random" and c["charge_stations"] == 12, c)
+import run_pipeline  # noqa: E402
+ap = run_pipeline.main.__code__.co_consts      # the flags exist in run_pipeline's parser / 引数が定義済み
+check("run_pipeline knows --charge-stations / --charge-mode",
+      "--charge-stations" in ap and "--charge-mode" in ap)
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(1 if FAILS else 0)

@@ -35,7 +35,7 @@ for key, e in cars.items():
     ok_shift = all(g[i]["down"] < g[i - 1]["up"] * g[i]["ratio"] / g[i - 1]["ratio"] for i in range(1, len(g)))
     check("%s: %d gears, shifts don't hunt" % (key, len(g)), ok_shift)
     check("%s: reverse negative, curve <= 8 points" % key, d["reverse"] < 0 and len(d["torque_curve"]) <= 8)
-    r = views.get(dt.blueprint(e), {}).get("wheel_radius_m", 0.31)
+    r = dt._radius(e, views)       # built radius, else the entry's dry-run radius / 半径
     t100, top = dt.simulate(d, e["mass"], r)
     real = e["drivetrain"]["_real"]["top_kmh"]
     check("%s: top %.0f km/h within 15 %% of real %d" % (key, top, real), abs(top - real) <= 0.15 * real)

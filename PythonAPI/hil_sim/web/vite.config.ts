@@ -6,7 +6,7 @@ import { defineConfig } from 'vite'
 // The dashboard (dashboard.py, Flask on :5000) serves the build from web/dist.
 // `npm run dev` proxies every API route to it for live development.
 const API = ['/api', '/telemetry', '/delivery', '/tuning', '/ffb', '/vehicle_tuning', '/season',
-  '/daycycle', '/windows', '/shutdown', '/signal', '/keybinds', '/sessions', '/download']
+  '/daycycle', '/windows', '/drones', '/shutdown', '/signal', '/keybinds', '/sessions', '/download']
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

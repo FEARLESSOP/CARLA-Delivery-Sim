@@ -200,6 +200,7 @@ class DroneUnit(object):
         self.crash_detail = ""     # where / when it hit something
         self.trips = self.crashes = 0
         self.km = 0.0
+        self.air_s = 0.0            # time in the air this session [s] / 飛行時間
         self.body, self.rotors, self.parcel, self.hook = None, [], None, None
         self.delivered = []         # doorstep / lost parcels with pickup times
         self._attached = None       # the car the props hang on, else free
@@ -401,6 +402,7 @@ class DroneUnit(object):
     def _fly(self, t, dt, wind):
         f = self.flight
         events = []
+        self.air_s += dt
         for ev, _ in f.update(dt):
             if ev == "delivered":
                 if self.parcel_lost:
@@ -591,6 +593,147 @@ class DroneUnit(object):
             box.destroy()
         self.delivered = []
         self._clear_props()
+
+
+class SensorProbe(object):
+    """Rate-limited raycasts for the drones' range sensors (Drones page).
+
+    A round casts at most ``budget_s`` / ``max_rays`` of rays (~0.1 ms each):
+    first the downward ones (height above ground, the lidar rangefinder),
+    then forward and backward along the heading (the stereo obstacle pairs),
+    round-robin over the flying drones, so 12 drones cost the same as 2.
+    Results are cached per drone; between probes the ground height is kept
+    (the height above it still follows the drone's own altitude).
+
+    In synchronous mode a ray waits while the server renders a frame (up to
+    ~50 ms, measured on OitaKosen), so ``start`` runs the rounds on a thread
+    with its OWN client: the sim's loop and its publish never wait for a ray
+    (publish only reads the cache). ``run`` is the same round, inline.
+    ドローンの距離センサー用レイキャスト（予算制で順番に、結果はキャッシュ）。
+    同期モードではレイがフレーム描画を待つことがあるため、別クライアントの
+    スレッドで実行し、シミュのループは待たない。
+    """
+
+    def __init__(self, world, budget_s=0.001, ahead=30.0, behind=30.0, max_rays=12):
+        self.world, self.budget, self.max_rays = world, budget_s, max_rays
+        self.ahead, self.behind = ahead, behind
+        self.cache = {}             # unit id -> {"ground": z|None, "front": m|None, "rear": m|None}
+        self._i = {"ground": 0, "dir": 0}
+        self.threaded = False
+        self.rays = 0               # rays cast so far / これまでのレイ数
+
+    def start(self, host, port, units_fn, period=0.2, budget_s=0.004):
+        """Probe on a daemon thread with its own client, every ``period`` s.
+        ``units_fn()`` returns the drones (their pos / yaw / status are read
+        as they are). / 専用クライアントのスレッドで定期実行。"""
+        def loop():
+            try:
+                c = carla.Client(host, port)
+                c.set_timeout(10.0)
+                self.world = c.get_world()
+            except RuntimeError as e:
+                print("[delivery] sensor probe: no client (%s); no range sensors" % e)
+                return
+            self.budget = budget_s
+            while True:
+                t0 = time.time()
+                try:
+                    self.run(list(units_fn()))
+                except RuntimeError:
+                    time.sleep(1.0)
+                except Exception as e:   # never take the sim down / シミュを止めない
+                    print("[delivery] sensor probe: %s" % e)
+                    time.sleep(1.0)
+                time.sleep(max(period - (time.time() - t0), 0.02))
+        self.threaded = True
+        threading.Thread(target=loop, name="drone-sensor-probe", daemon=True).start()
+
+    def _ground(self, p):
+        hits = self.world.cast_ray(carla.Location(p[0], p[1], p[2] + 0.3),
+                                   carla.Location(p[0], p[1], p[2] - 200.0))
+        return hits[0].location.z if hits else None
+
+    def _along(self, p, yaw, reach):
+        c, s = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
+        a = carla.Location(p[0] + c * 0.5, p[1] + s * 0.5, p[2] + 0.2)
+        b = carla.Location(p[0] + c * reach, p[1] + s * reach, p[2] + 0.2)
+        best = None
+        for h in self.world.cast_ray(a, b):
+            d = math.hypot(h.location.x - p[0], h.location.y - p[1])
+            if best is None or d < best:
+                best = d
+        return best
+
+    def run(self, units):
+        live = [u for u in units if u.status in FLYING]
+        for u in live:
+            self.cache.setdefault(u.id, {"ground": None, "front": None, "rear": None})
+        if not live:
+            return
+        t0 = time.perf_counter()
+        n, cast = len(live), 0
+        for k in range(n):                          # downward first / 下向きを優先
+            if time.perf_counter() - t0 > self.budget * 0.6 or cast >= self.max_rays * 0.6:
+                break
+            u = live[self._i["ground"] % n]
+            self.cache[u.id]["ground"] = self._ground(u.pos)
+            self._i["ground"] = (self._i["ground"] + 1) % n
+            cast += 1
+        jobs = [(u, d) for u in live for d in ("front", "rear")]
+        for k in range(len(jobs)):
+            if time.perf_counter() - t0 > self.budget or cast >= self.max_rays:
+                break
+            u, d = jobs[self._i["dir"] % len(jobs)]
+            yaw = u.yaw if d == "front" else u.yaw + 180.0
+            self.cache[u.id][d] = self._along(u.pos, yaw, self.ahead if d == "front" else self.behind)
+            self._i["dir"] = (self._i["dir"] + 1) % len(jobs)
+            cast += 1
+        self.rays += cast
+
+    def get(self, uid):
+        return self.cache.get(uid, {})
+
+
+def sensor_snapshot(u, wind, probe, station_pos=None):
+    """What the sim knows about ``u`` for delivery.drone_sensors.SensorSuite.
+    ドローンのセンサー計算に渡す状態。"""
+    f = u.flight
+    pos = u.world_pos()
+    phase = getattr(f, "state", None) if f is not None else None
+    flying = u.status in FLYING
+    loaded = bool(flying and f is not None and getattr(f, "loaded", False) and not u.parcel_lost)
+    wspeed = math.hypot(*wind)
+    drain = u.bm.rate(loaded, phase in (TAKEOFF, ASCEND), wspeed) if flying else 0.0
+    cache = probe.get(u.id) if probe is not None else {}
+    if u.status in (FALLING, CRASHED):
+        ground = u._ground_z
+    elif flying:
+        ground = cache.get("ground")
+    else:
+        ground = pos[2]
+    home = None
+    if u.van is not None:
+        try:
+            loc = u.van.car.get_location()
+            home = (loc.x, loc.y, loc.z)
+        except RuntimeError:
+            home = None
+    elif station_pos is not None:
+        home = tuple(station_pos)
+    drop = drop_h = None
+    if flying and phase == DROP and u.order is not None and f is not None:
+        drop = lmp_rig.smooth(1.0 - getattr(f, "_timer", 0.0) / max(f.hover_s, 1e-3))
+        drop_h = pos[2] - u.order.drop[2]
+    return {"status": u.status, "phase": phase, "pos": pos, "yaw": u.yaw,
+            "battery": u.battery.level, "drain": drain, "reserve": u.bm.reserve,
+            "loaded": loaded, "order": u.order.id if (u.order is not None and loaded) else None,
+            "wind": wind, "w_est": u.drift.w_est if flying else None,
+            "drift": u.drift.offset, "saturated": u.drift.saturated and flying,
+            "max_wind": u.drift.max_wind, "ground_z": ground,
+            "obstacles": {"front": cache.get("front"), "rear": cache.get("rear")} if flying else {},
+            "home": home, "fail": u.fail_reason, "parcel_lost": u.parcel_lost,
+            "drop": drop, "drop_h": drop_h, "parcel_wind": u.hz.parcel_wind,
+            "body": u.body is not None, "detail": getattr(u, "crash_detail", ""), "crashes": getattr(u, "crashes", 0)}
 
 
 class AirSimDrone(object):

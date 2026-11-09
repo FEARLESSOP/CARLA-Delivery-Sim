@@ -1,238 +1,1184 @@
 {
-  "_doc": "Your own maps (maps/build_map.sh). source: the model; track_material: the racing surface (its centreline gives the road logic); road_materials: asphalt used for the width; drop: materials removed (sky backdrop); tags: CARLA semantic groups by material; start: where the hero spawns (CARLA coordinates, set from the start line). / \u81ea\u4f5c\u30de\u30c3\u30d7\u306e\u8a2d\u5b9a keep_left: traffic drives on the left (Japan): pods park in the left-most lane. Do not mark keep-left maps rule=\"LHT\" in the OpenDRIVE when the lanes already run the way the cars go (netconvert --lefthand). left_hand_traffic: only for maps that do use CARLA's rule=\"LHT\" lanes; run_pipeline turns hybrid physics off there (the traffic manager moves far-away cars the wrong way on them). buildings_csv: building table (x_east_m, y_north_m, height_m, footprint_m2) for maps whose buildings are not tagged Buildings; delivery_sim uses it for addresses, drone obstacles and the dashboard map.",
-  "marina_bay": {
-    "name": "MarinaBay",
-    "package": "Circuits",
-    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/sources/marina-bay/source/singapore.glb",
-    "track_material": "151Mtl",
-    "road_materials": [
-      "151Mtl",
-      "11861Mtl"
-    ],
-    "start_line": [
-      -614.6,
-      -136.0
-    ],
-    "pole": [
-      -613.7,
-      -147.1
-    ],
-    "drop": [
-      "12151Mtl"
-    ],
-    "tags": {
-      "Road_Road": [
-        "151Mtl",
-        "11861Mtl",
-        "181Mtl"
-      ],
-      "Road_Marking": [
-        "11851Mtl"
-      ],
-      "Road_Grass": [
-        "191Mtl"
-      ]
-    },
-    "lanes": 3,
-    "speed_kmh": 70,
-    "start": {
-      "x": -704.31,
-      "y": -27.02,
-      "z": 0.5,
-      "yaw": -98.0
-    }
+ "_doc": "Your own maps (maps/build_map.sh). source: the model; track_material: the racing surface (its centreline gives the road logic); road_materials: asphalt used for the width; drop: materials removed (sky backdrop); tags: CARLA semantic groups by material; start: where the hero spawns (CARLA coordinates, set from the start line). / 自作マップの設定 keep_left: traffic drives on the left (Japan): pods park in the left-most lane. Do not mark keep-left maps rule=\"LHT\" in the OpenDRIVE when the lanes already run the way the cars go (netconvert --lefthand). left_hand_traffic: only for maps that do use CARLA's rule=\"LHT\" lanes; run_pipeline turns hybrid physics off there (the traffic manager moves far-away cars the wrong way on them). buildings_csv: building table (x_east_m, y_north_m, height_m, footprint_m2) for maps whose buildings are not tagged Buildings; delivery_sim uses it for addresses, drone obstacles and the dashboard map.",
+ "marina_bay": {
+  "name": "MarinaBay",
+  "package": "Circuits",
+  "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/sources/marina-bay/source/singapore.glb",
+  "track_material": "151Mtl",
+  "road_materials": [
+   "151Mtl",
+   "11861Mtl"
+  ],
+  "start_line": [
+   -614.6,
+   -136.0
+  ],
+  "pole": [
+   -613.7,
+   -147.1
+  ],
+  "drop": [
+   "12151Mtl"
+  ],
+  "tags": {
+   "Road_Road": [
+    "151Mtl",
+    "11861Mtl",
+    "181Mtl"
+   ],
+   "Road_Marking": [
+    "11851Mtl"
+   ],
+   "Road_Grass": [
+    "191Mtl"
+   ]
   },
-  "spa_francorchamps": {
-    "name": "SpaFrancorchamps",
-    "package": "Circuits",
-    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/sources/spa-francorchamps/source/spa1998.glb",
-    "track_material": [
-      "ROAD1X",
-      "ROAD2X",
-      "ROAD3X",
-      "ROADGRDX",
-      "ROADJX"
-    ],
-    "road_materials": [
-      "ROAD1X",
-      "ROAD2X",
-      "ROAD3X",
-      "ROADB",
-      "ROADGRDX",
-      "ROADJ",
-      "ROADJX",
-      "ROADL",
-      "ROADPIT",
-      "ROADPITE",
-      "ROADPITF",
-      "ROADROLD",
-      "ROADROLD2",
-      "SEGWIDE1",
-      "SEGWIDE3"
-    ],
-    "start_line": [
-      15.0,
-      10.0
-    ],
-    "pole": [
-      9.25,
-      10.27
-    ],
-    "drop": [
-      "BKA",
-      "BKB",
-      "BKC",
-      "BKD"
-    ],
-    "tags": {
-      "Road_Road": [
-        "ROAD1X",
-        "ROAD2X",
-        "ROAD3X",
-        "ROADB",
-        "ROADGRDX",
-        "ROADJ",
-        "ROADJX",
-        "ROADL",
-        "ROADPIT",
-        "ROADPITE",
-        "ROADPITF",
-        "ROADROLD",
-        "ROADROLD2",
-        "SEGWIDE1",
-        "SEGWIDE3"
-      ],
-      "Road_Marking": [
-        "ROADGRDX",
-        "ROADJ",
-        "ROADJX",
-        "ROADL"
-      ],
-      "Road_Curb": [
-        "RMBLB",
-        "RMBLC",
-        "RMBLD",
-        "RMBLG",
-        "RMBLH"
-      ],
-      "Road_Grass": [
-        "GRASS10",
-        "GRASSX2",
-        "FLDGRASS",
-        "RDGRASS"
-      ]
-    },
-    "lanes": 3,
-    "speed_kmh": 250,
-    "start": {
-      "x": 807.27,
-      "y": 491.42,
-      "z": 0.32,
-      "yaw": -3.2
-    }
-  },
-  "oita_station": {
-    "name": "OitaStation",
-    "package": "Japan",
-    "source": "/home/inouelab/Downloads/oita_station_map_v8/oita_station_map_v8/FBX_Maya_Unreal/oita_station_map_v2.fbx",
-    "osm": "/home/inouelab/Downloads/oita_station_map_v8/oita_station_map_v8/traffic_sumo/oita_station.osm",
-    "speed_kmh": 50,
-    "start": {
-      "x": -22.04,
-      "y": -244.59,
-      "z": 0.5,
-      "yaw": 89.4
-    },
-    "buildings_csv": "~/Downloads/oita_station_map_v8/oita_station_map_v8/buildings.csv",
-    "keep_left": true,
-    "jp_shingo": false
-  },
-  "pasir_ris": {
-    "_doc": "Pasir Ris, Singapore: generated from OpenStreetMap by maps/make_osm_city.sh (osm_city/*). Keep-left. Road logic and 3-D model come from the same lanes; a ring road runs round the inside of the OSM box and along the near side of the Tampines Expressway.",
-    "name": "PasirRis",
-    "package": "Singapore",
-    "osm": "/home/inouelab/Downloads/map (1).osm",
-    "speed_kmh": 50,
-    "start": {
-      "x": 90.2,
-      "y": 5.4,
-      "z": 0.5,
-      "yaw": -89.2
-    },
-    "buildings_csv": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/build/PasirRis/buildings.csv",
-    "keep_left": true
-  },
-  "oita_kosen": {
-    "_doc": "Oita Kosen (Akeno, Oita, Japan): generated from OpenStreetMap by the carla-map-generator skill, with terrain elevation from topoexport (GSI/PLATEAU) GLB. Keep-left. Landmarks: Oita Kosen school, its Akeno dormitory, the 7-Eleven down the road. OSM = the user's export (map (5).osm) merged with an OSM API strip to 33.2288 N for the 7-Eleven (osm_south/south.osm, 2026-11-02); terrain south of the main topoexport comes from the user's add-on export (238C9F, 33.2255-33.2316 N, 131.6475-131.6554 E).",
-    "name": "OitaKosen",
-    "package": "Japan",
-    "osm": "/home/inouelab/Downloads/oita kosen/map_kosen_extended.osm",
-    "terrain_glb": [
-      "/home/inouelab/Downloads/oita kosen/topoexport-064FAE/topoexport_3D_modeling.glb",
-      "/home/inouelab/Downloads/oita kosen/map-addon-topoexport-238C9F(seven))/topoexport_3D_modeling.glb"
-    ],
-    "speed_kmh": 40,
-    "buildings_csv": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/build/OitaKosen/buildings.csv",
-    "keep_left": true,
-    "terrain_sw": [
-      [
-        33.23123,
-        131.64638
-      ],
-      [
-        33.225478,
-        131.647507
-      ]
-    ],
-    "road_fixes": true,
-    "road_style": "japan",
-    "signal_timing": "data/signal_timing_oita.json",
-    "ring_speed_kmh": 100,
-    "_ring_speed_doc": "the outer ring road's limit (osm_city/jp_speeds.py, with 274 posts after every joining street); the other roads keep their real limit (JARTIC zones, real OSM maxspeed, else the legal 60 with a centre line / 30 without). The user asked for it 2026-11-06",
-    "_signal_timing_doc": "run_pipeline.py starts signal_timing.py apply --watch on this map: the Oita police (JARTIC type C) cycle and green/yellow/all-red by weekday/holiday and 5-minute slot, re-applied every slot (the user asked for it at every start, 2026-11-06)",
-    "ring_guardrail": true,
-    "_ring_guardrail_doc": "white W-beam guardrail (props.py) 0.5 m behind the ring road's outer kerb, all the way round: the user asked for a barrier so cars cannot drive onto the grass outside the ring (2026-11-04)",
-    "building_levels": {"_doc": "storeys seen in Street View where OSM has none (General Builder)", "182819852": 3},
-    "osm_fixes": {
-      "_doc": "OSM ways measured against the z20 tiles (kosen_photos, seven_photos; osm_city/osmfix.py, guide ch. 3). 181723925: the north campus lane 2.1-3.8 m south of its kerb line (west end; the curve east of x -71 is on the road); 181723932: the drive west of the guard house is single-track (3.0-3.7 m between wing and guard/sheds, the stop line spans it), so its piece from the south car parks to the forecourt is one-way north, one 2.8 m lane; the forecourt loop gets its 5.6 m width as a tag so its drive band (layout.py) stays off the guard house; 181723926: footway through the red-roof annex, no path in the imagery (dropped; 181723930, which ended inside the annex, now stops at its west wall); 182821712: the side street south of the 7-Eleven 1.4-3.6 m too far north (moved along the main road / cross street, which stay straight); 990182821513: the 7-Eleven car-park entrance from the main road (driveway, dropped kerb); 152626803: the dorm lane between the dining hall and block C lies 3-3.5 m north of the tiles' asphalt and cut the dining hall and the electrical room: its west corner (3251968678) moved 1.0 m south along the street, its east corner (3251968679) 0.6 m south-east, the dead end (1830581185) 3.5 m east into the paved turning area; further south (or east at the dead end) costs the canopies of block C's west door and D's north door and C's north corridor (dorm.py room() measures whole facade edges); the warehouse S1 stands 2.7 m from block C (a single-track squeeze): no two-lane road fits, it stays dropped; 188560912: the 3.5 m stub of the one-way bridge ramp north-west (bridge, layer 2) left between the ring and the two-way street 188560903 is made two-way, so the street's southbound lane is fed from the ring (without U-turns, roadnet --no-turnarounds.except-deadend, nothing entered it); 192089559, 192089561, 192089569, 197011617, 197011634, 197011653, 202926863 and the pieces 192089598 (to node 1829723059) and 20292686801 (from node 2128764864): residential stubs 0.2-7.5 m past a junction (in the road logic), ending at a cycle barrier, steps or nothing, with no room for a forward turning loop (turnloops.py, guide ch. 21): driveways (model only), not in the road logic (2026-11-05)",
-      "move_nodes": {"1921534416": [0.0, 2.1], "1921534411": [-0.9, 3.8],
-                     "8784043695": [0.6, 0.0], "1921534428": [-5.73, -1.53],
-                     "7621205922": [-0.014, -3.39], "1931885551": [-0.022, -3.6], "1931885556": [-0.46, -1.44],
-                     "3251968678": [0.03, -1.0], "3251968679": [0.4, -0.5], "1830581185": [3.5, 0.0]},
-      "drop_ways": ["181723926"],
-      "split_ways": {"181723932": ["1921534441", "1921534403"], "192089598": ["1829723059"], "202926868": ["2128764864"]},
-      "way_tags": {"18172393201": {"oneway": "yes", "lanes": "1", "width": "2.8"}, "18172393202": {"width": "5.6"}, "188560912": {"oneway": "no"}, "192089559": {"highway": "service", "service": "driveway"}, "192089561": {"highway": "service", "service": "driveway"}, "192089569": {"highway": "service", "service": "driveway"}, "192089598": {"highway": "service", "service": "driveway"}, "197011617": {"highway": "service", "service": "driveway"}, "197011634": {"highway": "service", "service": "driveway"}, "197011653": {"highway": "service", "service": "driveway"}, "202926863": {"highway": "service", "service": "driveway"}, "20292686801": {"highway": "service", "service": "driveway"}},
-      "add_ways": [{"id": "990182821513", "pts": [[10.0, -452.5], [21.0, -452.5]],
-                    "tags": {"highway": "service", "service": "driveway", "width": "15", "name": "7-Eleven entrance"}}]
-    },
-    "landmarks": [
-      {"name": "Oita Kosen campus", "_doc": "every building inside the campus outline (OSM area 113350012); building-builder models them (landmarks/kosen.py). footpaths osm: no default pavement band along the campus lanes (layout.py), mapped footways stay", "areas": [113350012], "footpaths": "osm"},
-      {"name": "Akeno dormitory (明野寮)", "_doc": "blocks A-E, office, dining hall/bath, soccer clubroom, electrical room (184178244, RC1 ~8x8 m); plus the dorm site (landuse 184178243); landmarks/dorm.py models them. site_lonlat: blocks B and C + 5.5 m (they stand across the OSM site edge). footpaths osm: no default pavement band along the internal lane inside the site and round B and C; mapped footways stay", "ways": [184178246, 184178241, 184178245, 184178239, 184178240, 184178242, 184178247, 613174397, 184178244], "areas": [184178243], "footpaths": "osm",
-       "site_lonlat": [[131.6526995, 33.2328037], [131.6521989, 33.232604], [131.6522821, 33.2324375], [131.6527932, 33.2326264], [131.652755, 33.2326987], [131.6528143, 33.2327153], [131.6528414, 33.2326699], [131.6533804, 33.2328942], [131.6532866, 33.2330469], [131.6527486, 33.2328252], [131.652759, 33.2328078], [131.6527052, 33.2327928]]},
-      {"name": "7-Eleven 大分明野北店", "_doc": "shop=convenience without a building tag (way 182821513): no generic building or lot on it or within 3 m; landmarks/seven.py models it. site_lonlat: the car park traced on the z20 tile (OSM maps only the shop outline). footpaths osm: no default pavement band inside it (the lot stands on retaining walls straight off the side street and the east lane); the main-road footway stays", "areas": [182821513], "buffer": 3.0, "footpaths": "osm",
-       "site_lonlat": [[131.6520533, 33.2304265], [131.6526877, 33.2304265], [131.6526877, 33.2301604], [131.652675, 33.2301499], [131.6520533, 33.2301499]]}
-    ],
-    "jartic_d": {"csv": "/home/inouelab/Downloads/import/typeD_oita/大分県警_202609_k_2.1.csv", "stops": "add", "no_stop": [{"x": -262.9, "y": -577.8, "why": "Street View Jun 2024 (newest) and Nov 2020: no stop bar, 止まれ or plate at the mouth (sign_photos/sv_stop_road4153_2024-06_mouth.png, sv_stop_road4153_264.jpg)"}]},
-    "area_features": {"osm_fixes": {"_doc": "out of date along the main road south of the campus (z20 tiles 2026, GE, the user's photo 2026-11-04, seven_area_photos): 182819843 (住友化学 明野台社宅S-1) is demolished, now a car park (area_features car_parks); its way (nodes moved, retagged) becomes the long single-storey garage block along the 7-Eleven lot, so the generic buildings keep their order and seeds (added ways go last, layout.py); 182820714 (landuse=construction) is now an 8-storey flat slab with balconies to the south and solar panels on the roof (990182820714, 52 x 12.8 m: roof outline on the tiles shifted 4 m south for the lean) and the narrow shed along the main-road footway (990182820734); colours and forms from the user's photo (wins over GE, ch. 17): the slab pale grey / off-white concrete with solid balcony fronts and blank grey gables (jp:wall/acc/bal/gable), the garage block a white flat-roofed box 2.8 m high, closed towards the slab, shutters on the south (roof:shape, height, jp:doors); the shed ends 0.6 m short of the garage", "drop_ways": ["182820714"], "add_ways": [{"id": "990182820714", "closed": true, "pts": [[22.5, -412.5], [74.3, -412.5], [74.3, -425.3], [22.5, -425.3]], "tags": {"building": "apartments", "building:levels": "8", "roof:shape": "flat", "roof:solar": "west", "name": "明野北 マンション (2-chome)", "jp:wall": "jp_concrete_white", "jp:acc": "jp_wall_grey", "jp:bal": "solid", "jp:gable": "blank"}}, {"id": "990182820734", "closed": true, "pts": [[17.6, -398.5], [21.2, -398.5], [21.2, -428.3], [17.6, -428.3]], "tags": {"building": "shed", "building:levels": "1"}}], "move_nodes": {"1931868044": [-8.757, -50.97], "1931868097": [-8.942, -46.301], "1931868028": [5.174, -47.113], "1931868066": [5.36, -51.781]}, "way_tags": {"182819843": {"building": "garages", "building:levels": "1", "name": null, "roof:shape": "flat", "height": "2.8", "jp:wall": "jp_wall_white", "jp:acc": "jp_wall_white", "jp:doors": "s"}}},
-     "_doc": "What stands on the main road between the 7-Eleven and Oita Kosen that OSM does not have (z20 tiles 2026, Google Earth, the user's photo of 2026-11-04: build/OitaKosen/seven_area_photos; osm_city/landmarks/akeno.py, lon/lat): greenhouses: multi-span vinyl houses on the farmland ways 184179075/77/79/80/83 and 184452633 (OSM farmland only), one platform each, ridge ns/ew, span/eave/rise m; farm_ground: their soil tracks; tree_rows: dense evergreen rows (camphor ~7 m) along the main road's west kerb (kept 6.6 m off the carriageway, off the footway) and the windbreak between the ranges; sand_pitch: Oita Kosen ground 2 (OSM pitch 152626821 has no surface/sport): sand, football lines (centre and goal lines read on the z20 tile), goals, the 12 m ball-stop net on its west and south sides, 2 m chain-link on the rest, along the platform edge (OSM fence way 182813888 lies in the footway band on the south); car_parks: the asphalt car park where 住友化学 明野台社宅S-1 (182819843, demolished) stood, bay rows = aisle-side edge, bays to its left/right", 
-     "greenhouses": [
-      {"id": "A1", "lonlat": [[131.6506658, 33.2309987], [131.6510101, 33.2309987], [131.6510101, 33.2314414], [131.6506658, 33.2314414]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "A2", "lonlat": [[131.6510187, 33.2309987], [131.6513758, 33.2309987], [131.6513758, 33.2314414], [131.6510187, 33.2314414]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "A3", "lonlat": [[131.6513844, 33.2309987], [131.6517545, 33.2309987], [131.6517545, 33.2314414], [131.6513844, 33.2314414]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "B1", "lonlat": [[131.6502592, 33.2304714], [131.6506249, 33.2304714], [131.6506249, 33.2309627], [131.6502592, 33.2309627]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "B2", "lonlat": [[131.6506658, 33.2304714], [131.6509584, 33.2304714], [131.6509584, 33.2309627], [131.6506658, 33.2309627]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "B3", "lonlat": [[131.6509907, 33.2304714], [131.6513393, 33.2304714], [131.6513393, 33.2309627], [131.6509907, 33.2309627]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "B4", "lonlat": [[131.6513629, 33.2304714], [131.6517222, 33.2304714], [131.6517222, 33.2309627], [131.6513629, 33.2309627]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "C1", "lonlat": [[131.6505195, 33.2298235], [131.6508853, 33.2298235], [131.6508853, 33.2303742], [131.6505195, 33.2303742]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "C2", "lonlat": [[131.650896, 33.2298235], [131.651251, 33.2298235], [131.651251, 33.2303742], [131.650896, 33.2303742]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "C3", "lonlat": [[131.6512618, 33.2298235], [131.6513974, 33.2298235], [131.6513974, 33.2303742], [131.6512618, 33.2303742]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "C4", "lonlat": [[131.6514081, 33.2298235], [131.651761, 33.2298235], [131.651761, 33.2303742], [131.6514081, 33.2303742]], "ridge": "ns", "span": 4.0, "eave": 3.2, "rise": 1.1}, 
-      {"id": "D1", "lonlat": [[131.6507949, 33.229514], [131.6517395, 33.229514], [131.6517395, 33.2297101], [131.6507949, 33.2297101]], "ridge": "ew", "span": 4.0, "eave": 3.2, "rise": 1.1}], 
-     "farm_ground": [[[131.6506551, 33.2309663], [131.6517631, 33.2309663], [131.6517631, 33.2314504], [131.6506551, 33.2314504]], [[131.6502484, 33.2304678], [131.6517631, 33.2304678], [131.6517631, 33.2309717], [131.6502484, 33.2309717]], [[131.6505088, 33.2297119], [131.6517631, 33.2297119], [131.6517631, 33.2303814], [131.6505088, 33.2303814]], [[131.6507842, 33.229505], [131.6517502, 33.229505], [131.6517502, 33.2297209], [131.6507842, 33.2297209]]], 
-     "tree_rows": [
-      {"id": "main_road_west", "lonlat": [[131.6517803, 33.2314666], [131.6517706, 33.2297029]], "spacing": 3.0, "height": 7.0, "lateral": 0.0, "road_room": 6.6}, 
-      {"id": "windbreak", "lonlat": [[131.6502613, 33.2304264], [131.6517782, 33.2304264]], "spacing": 3.5, "height": 7.0, "lite": true, "road_room": 6.6}], 
-     "sand_pitch": [{"way": "152626821", "net_sides": ["w", "s"], "net_h": 12.0, "lines": {"centre": [131.6524193, 33.2316249], "length": 102.0, "width": 61.0, "axis_deg": 0.0}}], 
-     "car_parks": [{"lonlat": [[131.6521063, 33.2307602], [131.6526872, 33.2307602], [131.6526872, 33.2310005], [131.6521063, 33.2310005]], "rows": [{"lonlat": [[131.6521332, 33.2309357], [131.6525904, 33.2309357]], "side": "left", "depth": 5.0, "width": 2.5}, {"lonlat": [[131.65223, 33.2308925], [131.652585, 33.2308925]], "side": "right", "depth": 5.0, "width": 2.5}, {"lonlat": [[131.6522946, 33.2307917], [131.652585, 33.2307917]], "side": "left", "depth": 5.0, "width": 2.5}, {"lonlat": [[131.6526227, 33.2309267], [131.6526227, 33.2307647]], "side": "left", "depth": 4.5, "width": 2.5}]}]}
+  "lanes": 3,
+  "speed_kmh": 70,
+  "start": {
+   "x": -704.31,
+   "y": -27.02,
+   "z": 0.5,
+   "yaw": -98.0
   }
+ },
+ "spa_francorchamps": {
+  "name": "SpaFrancorchamps",
+  "package": "Circuits",
+  "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/sources/spa-francorchamps/source/spa1998.glb",
+  "track_material": [
+   "ROAD1X",
+   "ROAD2X",
+   "ROAD3X",
+   "ROADGRDX",
+   "ROADJX"
+  ],
+  "road_materials": [
+   "ROAD1X",
+   "ROAD2X",
+   "ROAD3X",
+   "ROADB",
+   "ROADGRDX",
+   "ROADJ",
+   "ROADJX",
+   "ROADL",
+   "ROADPIT",
+   "ROADPITE",
+   "ROADPITF",
+   "ROADROLD",
+   "ROADROLD2",
+   "SEGWIDE1",
+   "SEGWIDE3"
+  ],
+  "start_line": [
+   15.0,
+   10.0
+  ],
+  "pole": [
+   9.25,
+   10.27
+  ],
+  "drop": [
+   "BKA",
+   "BKB",
+   "BKC",
+   "BKD"
+  ],
+  "tags": {
+   "Road_Road": [
+    "ROAD1X",
+    "ROAD2X",
+    "ROAD3X",
+    "ROADB",
+    "ROADGRDX",
+    "ROADJ",
+    "ROADJX",
+    "ROADL",
+    "ROADPIT",
+    "ROADPITE",
+    "ROADPITF",
+    "ROADROLD",
+    "ROADROLD2",
+    "SEGWIDE1",
+    "SEGWIDE3"
+   ],
+   "Road_Marking": [
+    "ROADGRDX",
+    "ROADJ",
+    "ROADJX",
+    "ROADL"
+   ],
+   "Road_Curb": [
+    "RMBLB",
+    "RMBLC",
+    "RMBLD",
+    "RMBLG",
+    "RMBLH"
+   ],
+   "Road_Grass": [
+    "GRASS10",
+    "GRASSX2",
+    "FLDGRASS",
+    "RDGRASS"
+   ]
+  },
+  "lanes": 3,
+  "speed_kmh": 250,
+  "start": {
+   "x": 807.27,
+   "y": 491.42,
+   "z": 0.32,
+   "yaw": -3.2
+  }
+ },
+ "oita_station": {
+  "_doc": "Oita Station extended (2026-11-08): the user's v8 model (oita_station_map_v8, 768 m square round JR Oita Station) kept as the core, cut at +-384 m; round it, to +-640 m, the city is generated from OpenStreetMap (oita_station_ext.osm, Overpass 2026-11-08) with the buildings OSM lacks added from the user's topoexport (GSI footprints / PLATEAU heights, osm_city/topo_buildings.py) and terrain from the same export; one road logic for the whole map (roadnet, keep-left) with a ring road at the new edge. Origin stays at the station (v8 frame). v8-only import: oita_station_v8.",
+  "name": "OitaStation",
+  "package": "Japan",
+  "osm": "/home/inouelab/Downloads/oita_station_ext/oita_station_ext_topo.osm",
+  "core": {
+   "fbx": "/home/inouelab/Downloads/oita_station_map_v8/oita_station_map_v8/FBX_Maya_Unreal/oita_station_map_v2.fbx",
+   "bounds": [
+    -384.0,
+    -406.0,
+    410.0,
+    412.0
+   ],
+   "x_scale": 0.9983243,
+   "_doc": "the embedded model: everything of it inside bounds [x0, y0, x1, y1] is kept (its ring road and most of its 32 m edge strip are cut away), the generated city is cut away there (osm_city/core_merge.py, core_fbx.py; buildings/trees not generated inside: layout.py, props.py); the edges cross roads square on and clear of junctions (east at 410 keeps the v8 street along x 385 whole, south at -406 clears the junction at y -390); x_scale: v8 projected x with 111319.49 m a degree, this frame with 111132.95 (0.65 m at x 384 otherwise); the terrain is flat over it (terrain.py) and the model is lifted to that level"
+  },
+  "terrain_glb": [
+   "/home/inouelab/Downloads/oita_station_topo/topoexport-C3DC10/topoexport_3D_modeling.glb"
+  ],
+  "terrain_sw": [
+   [
+    33.229256,
+    131.598759
+   ]
+  ],
+  "speed_kmh": 40,
+  "start": {
+   "x": -22.04,
+   "y": -244.59,
+   "z": 2.67,
+   "yaw": 89.4
+  },
+  "buildings_csv": "~/Downloads/oita_station_map_v8/oita_station_map_v8/buildings.csv",
+  "keep_left": true,
+  "road_fixes": true,
+  "road_style": "japan",
+  "bus_schedule": "data/oita_bus",
+  "_bus_schedule": "timetabled Oita buses (bus_schedule.py, generate_traffic --bus-schedule auto): GTFS-JP timetable in hil_sim/data/oita_bus (BODIK, CC BY 4.0); runs only when the loaded road logic reaches the stops (not on the old +-423 m level). This entry must stay before oita_station_v8 (same level name: the first entry wins)",
+  "ring_speed_kmh": 100,
+  "ring_guardrail": true,
+  "jartic_d": {
+   "csv": "/home/inouelab/Downloads/import/typeD_oita/大分県警_202609_k_2.1.csv",
+   "stops": "add"
+  },
+  "_topo_buildings_doc": "osm = oita_station_ext.osm + osm_city/topo_buildings.py --shift 685.06 387.40 --keep-out -384 -406 410 412 (the topoexport's buildings OSM lacks, with height and building:levels)",
+  "osm_fixes": {
+   "_doc": "per-map OSM corrections (osm_city/osmfix.py)",
+   "way_tags": {
+    "125474169": {
+     "roof:shape": "flat",
+     "height": "10.5"
+    },
+    "_125474169": "黒住教 大分教会 (3 storeys): its pitched roof's eave corner reached 0.8 m over the footway finished by pavements.py (check_roads FAIL, 2026-11-08); flat roof, no eave",
+    "76124650901": {
+     "highway": null
+    },
+    "12543518801": {
+     "highway": null
+    },
+    "_76124650901": "portal stub of the dropped tunnel 190646997 (see _split_ways): not a road",
+    "_12543518801": "portal stub of the dropped tunnel 190646995 (see _split_ways): not a road",
+    "12543713301": {
+     "highway": null
+    },
+    "190646990": {
+     "highway": null
+    },
+    "_12543713301": "north-west portal stub of the dropped tunnel 190646997 (see _split_ways): not a road",
+    "_190646990": "north-east portal stub of the dropped tunnel 190646995: the way's first piece after the split (see _split_ways): not a road",
+    "1392685909": {
+     "access": null,
+     "width": "3.5"
+    },
+    "_1392685909": "Oita Station north-plaza bus pool (bus=designated, one-way; platforms 4-7, data/oita_bus stops.json S019/S012/S001/S042): access=no made roadnet skip it; the timetabled buses need a lane: access dropped (roadnet passes the service way as a 30 km/h minor street, oneway and direction kept; CARLA cannot restrict a lane to buses), 3.5 m for buses (2026-11-08)",
+    "413447637": {
+     "access": null,
+     "width": "3.0"
+    },
+    "_413447637": "north-plaza taxi lane (one-way, lanes=1) beside the bus pool, both ends on through roads: access dropped as for 1392685909 (2026-11-08)",
+    "229040933": {
+     "highway": null
+    },
+    "_229040933": "residential way along the station's south-west ground-floor wall (M_brick_jroc_gf, 0-7.2 m), from its dead end under the station corner (node 2376781187, x -51 y 4) to junction 2376781195 (x -156 y 86): the first piece after the split (see _split_ways), untagged: its dead-end loop ran 34 m through the station's columns and walls, its lanes 0.19 m off the wall, and without 414425578 (dropped) the rest is a stub (2026-11-09)"
+   },
+   "drop_ways": [
+    "190646997",
+    "190646995",
+    "414425578",
+    "414814160"
+   ],
+   "_drop_ways_keep_walls": "414425578 (unclassified, x -106 y 45 -> -79 87 -> -182 136): runs through the kept v8 station's ground floor (inside its M_brick_jroc_gf walls) and on between the two station blocks, where the gap is 2.4-2.8 m (station corner at x -105 y 99 on its centre line, M_concrete wall 0-7.2 m along it). 414814160 (unclassified, tunnel=building_passage, x 106 y -78 -> 220 -77, under the railway viaduct east of the station): two of the kept Railway's 1.5 m piers stand inside its lanes (x 131 y -48, x 115 y -59; pier gap 4.65 m). Both are real roads under / beside the elevated station, but the kept v8 model (JR_Oita_City, Railway) has solid walls and piers there and NPCs would drive into them; both ends of both ways are on through roads (no stubs left), no bus route uses them (data/oita_bus shapes) (2026-11-09, core/keep_walls.npz, osm_city/check_keep_walls.py)",
+   "_drop_ways": "190646997 (末広・南春日線) and 190646995: tunnels (tunnel=yes, layer=-1) under the block west of the station; the v8 model has no road there (29 % / 27 % of the generated carriageway on its asphalt, its plots and buildings over it), only the portal stubs with turning heads: dropped (2026-11-08, core/road_drop.json)",
+   "split_ways": {
+    "761246509": [
+     "7112262548"
+    ],
+    "125435188": [
+     "11811872651"
+    ],
+    "125437133": [
+     "2090462378"
+    ],
+    "190646990": [
+     "2010702596"
+    ],
+    "229040933": [
+     "2376781195"
+    ]
+   },
+   "_split_ways": "the stubs from the last junction to the dropped tunnels' portals: 761246509 / 125435188 (south portals, 4-5 m, 761246509 crosses the core edge at x -384) and 125437133 / 190646990 (north portals, 14-18 m, v8 has only a bulb there): split at that junction and the portal piece untagged below, so no dead end and no turning loop over the model's lots and kerbs (2026-11-08, agent-checker); 229040933 split at junction 2376781195 (190293207 continues it): the piece under / along the station untagged (see way_tags), 22904093301 keeps the road to the west (2026-11-09)"
+  }
+ },
+ "oita_station_v8": {
+  "_doc": "The v8 model alone (768 m square + its ring road), imported with prepare_oita.py; kept to roll back the extension (oita_station). Listed after oita_station on purpose: the osm_city steps look settings up by map name and take the first entry named OitaStation.",
+  "name": "OitaStation",
+  "package": "Japan",
+  "source": "/home/inouelab/Downloads/oita_station_map_v8/oita_station_map_v8/FBX_Maya_Unreal/oita_station_map_v2.fbx",
+  "osm": "/home/inouelab/Downloads/oita_station_map_v8/oita_station_map_v8/traffic_sumo/oita_station.osm",
+  "speed_kmh": 50,
+  "start": {
+   "x": -22.04,
+   "y": -244.59,
+   "z": 0.5,
+   "yaw": 89.4
+  },
+  "buildings_csv": "~/Downloads/oita_station_map_v8/oita_station_map_v8/buildings.csv",
+  "keep_left": true,
+  "jp_shingo": false
+ },
+ "pasir_ris": {
+  "_doc": "Pasir Ris, Singapore: generated from OpenStreetMap by maps/make_osm_city.sh (osm_city/*). Keep-left. Road logic and 3-D model come from the same lanes; a ring road runs round the inside of the OSM box and along the near side of the Tampines Expressway.",
+  "name": "PasirRis",
+  "package": "Singapore",
+  "osm": "/home/inouelab/Downloads/map (1).osm",
+  "speed_kmh": 50,
+  "start": {
+   "x": 90.2,
+   "y": 5.4,
+   "z": 0.5,
+   "yaw": -89.2
+  },
+  "buildings_csv": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/build/PasirRis/buildings.csv",
+  "keep_left": true
+ },
+ "oita_kosen": {
+  "_doc": "Oita Kosen (Akeno, Oita, Japan): generated from OpenStreetMap by the carla-map-generator skill, with terrain elevation from topoexport (GSI/PLATEAU) GLB. Keep-left. Landmarks: Oita Kosen school, its Akeno dormitory, the 7-Eleven down the road. OSM = the user's export (map (5).osm) merged with an OSM API strip to 33.2288 N for the 7-Eleven (osm_south/south.osm, 2026-11-02); terrain south of the main topoexport comes from the user's add-on export (238C9F, 33.2255-33.2316 N, 131.6475-131.6554 E).",
+  "name": "OitaKosen",
+  "package": "Japan",
+  "osm": "/home/inouelab/Downloads/oita kosen/map_kosen_extended.osm",
+  "terrain_glb": [
+   "/home/inouelab/Downloads/oita kosen/topoexport-064FAE/topoexport_3D_modeling.glb",
+   "/home/inouelab/Downloads/oita kosen/map-addon-topoexport-238C9F(seven))/topoexport_3D_modeling.glb"
+  ],
+  "speed_kmh": 40,
+  "buildings_csv": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/build/OitaKosen/buildings.csv",
+  "keep_left": true,
+  "terrain_sw": [
+   [
+    33.23123,
+    131.64638
+   ],
+   [
+    33.225478,
+    131.647507
+   ]
+  ],
+  "road_fixes": true,
+  "road_style": "japan",
+  "signal_timing": "data/signal_timing_oita.json",
+  "ring_speed_kmh": 100,
+  "_ring_speed_doc": "the outer ring road's limit (osm_city/jp_speeds.py, with 274 posts after every joining street); the other roads keep their real limit (JARTIC zones, real OSM maxspeed, else the legal 60 with a centre line / 30 without). The user asked for it 2026-11-06",
+  "_signal_timing_doc": "run_pipeline.py starts signal_timing.py apply --watch on this map: the Oita police (JARTIC type C) cycle and green/yellow/all-red by weekday/holiday and 5-minute slot, re-applied every slot (the user asked for it at every start, 2026-11-06)",
+  "ring_guardrail": true,
+  "_ring_guardrail_doc": "white W-beam guardrail (props.py) 0.5 m behind the ring road's outer kerb, all the way round: the user asked for a barrier so cars cannot drive onto the grass outside the ring (2026-11-04)",
+  "building_levels": {
+   "_doc": "storeys seen in Street View where OSM has none (General Builder)",
+   "182819852": 3
+  },
+  "osm_fixes": {
+   "_doc": "OSM ways measured against the z20 tiles (kosen_photos, seven_photos; osm_city/osmfix.py, guide ch. 3). 181723925: the north campus lane 2.1-3.8 m south of its kerb line (west end; the curve east of x -71 is on the road); 181723932: the drive west of the guard house is single-track (3.0-3.7 m between wing and guard/sheds, the stop line spans it), so its piece from the south car parks to the forecourt is one-way north, one 2.8 m lane; the forecourt loop gets its 5.6 m width as a tag so its drive band (layout.py) stays off the guard house; 181723926: footway through the red-roof annex, no path in the imagery (dropped; 181723930, which ended inside the annex, now stops at its west wall); 182821712: the side street south of the 7-Eleven 1.4-3.6 m too far north (moved along the main road / cross street, which stay straight); 990182821513: the 7-Eleven car-park entrance from the main road (driveway, dropped kerb); 152626803: the dorm lane between the dining hall and block C lies 3-3.5 m north of the tiles' asphalt and cut the dining hall and the electrical room: its west corner (3251968678) moved 1.0 m south along the street, its east corner (3251968679) 0.6 m south-east, the dead end (1830581185) 3.5 m east into the paved turning area; further south (or east at the dead end) costs the canopies of block C's west door and D's north door and C's north corridor (dorm.py room() measures whole facade edges); the warehouse S1 stands 2.7 m from block C (a single-track squeeze): no two-lane road fits, it stays dropped; 188560912: the 3.5 m stub of the one-way bridge ramp north-west (bridge, layer 2) left between the ring and the two-way street 188560903 is made two-way, so the street's southbound lane is fed from the ring (without U-turns, roadnet --no-turnarounds.except-deadend, nothing entered it); 192089559, 192089561, 192089569, 197011617, 197011634, 197011653, 202926863 and the pieces 192089598 (to node 1829723059) and 20292686801 (from node 2128764864): residential stubs 0.2-7.5 m past a junction (in the road logic), ending at a cycle barrier, steps or nothing, with no room for a forward turning loop (turnloops.py, guide ch. 21): driveways (model only), not in the road logic (2026-11-05)",
+   "move_nodes": {
+    "1921534416": [
+     0.0,
+     2.1
+    ],
+    "1921534411": [
+     -0.9,
+     3.8
+    ],
+    "8784043695": [
+     0.6,
+     0.0
+    ],
+    "1921534428": [
+     -5.73,
+     -1.53
+    ],
+    "7621205922": [
+     -0.014,
+     -3.39
+    ],
+    "1931885551": [
+     -0.022,
+     -3.6
+    ],
+    "1931885556": [
+     -0.46,
+     -1.44
+    ],
+    "3251968678": [
+     0.03,
+     -1.0
+    ],
+    "3251968679": [
+     0.4,
+     -0.5
+    ],
+    "1830581185": [
+     3.5,
+     0.0
+    ]
+   },
+   "round_corners": {
+    "radius": 6.0,
+    "min_turn": 15.0,
+    "_why": "street corners drawn as one OSM vertex: netconvert's corner curve (radius 0.8 m or a cusp) is tighter than the lane offsets, so 45 lanes folded back over themselves (0.1-0.2 m steps, zigzag waypoints); arcs of radius max(6 m, road width) instead (osmfix.round_corners, guide ch. 30, 2026-11-07)"
+   },
+   "drop_ways": [
+    "181723926"
+   ],
+   "split_ways": {
+    "181723932": [
+     "1921534441",
+     "1921534403"
+    ],
+    "192089598": [
+     "1829723059"
+    ],
+    "202926868": [
+     "2128764864"
+    ]
+   },
+   "way_tags": {
+    "18172393201": {
+     "oneway": "yes",
+     "lanes": "1",
+     "width": "2.8"
+    },
+    "18172393202": {
+     "width": "5.6"
+    },
+    "188560912": {
+     "oneway": "no"
+    },
+    "192089559": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "192089561": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "192089569": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "192089598": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "197011617": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "197011634": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "197011653": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "202926863": {
+     "highway": "service",
+     "service": "driveway"
+    },
+    "20292686801": {
+     "highway": "service",
+     "service": "driveway"
+    }
+   },
+   "add_ways": [
+    {
+     "id": "990182821513",
+     "pts": [
+      [
+       10.0,
+       -452.5
+      ],
+      [
+       21.0,
+       -452.5
+      ]
+     ],
+     "tags": {
+      "highway": "service",
+      "service": "driveway",
+      "width": "15",
+      "name": "7-Eleven entrance"
+     }
+    }
+   ]
+  },
+  "landmarks": [
+   {
+    "name": "Oita Kosen campus",
+    "_doc": "every building inside the campus outline (OSM area 113350012); building-builder models them (landmarks/kosen.py). footpaths osm: no default pavement band along the campus lanes (layout.py), mapped footways stay",
+    "areas": [
+     113350012
+    ],
+    "footpaths": "osm"
+   },
+   {
+    "name": "Akeno dormitory (明野寮)",
+    "_doc": "blocks A-E, office, dining hall/bath, soccer clubroom, electrical room (184178244, RC1 ~8x8 m); plus the dorm site (landuse 184178243); landmarks/dorm.py models them. site_lonlat: blocks B and C + 5.5 m (they stand across the OSM site edge). footpaths osm: no default pavement band along the internal lane inside the site and round B and C; mapped footways stay",
+    "ways": [
+     184178246,
+     184178241,
+     184178245,
+     184178239,
+     184178240,
+     184178242,
+     184178247,
+     613174397,
+     184178244
+    ],
+    "areas": [
+     184178243
+    ],
+    "footpaths": "osm",
+    "site_lonlat": [
+     [
+      131.6526995,
+      33.2328037
+     ],
+     [
+      131.6521989,
+      33.232604
+     ],
+     [
+      131.6522821,
+      33.2324375
+     ],
+     [
+      131.6527932,
+      33.2326264
+     ],
+     [
+      131.652755,
+      33.2326987
+     ],
+     [
+      131.6528143,
+      33.2327153
+     ],
+     [
+      131.6528414,
+      33.2326699
+     ],
+     [
+      131.6533804,
+      33.2328942
+     ],
+     [
+      131.6532866,
+      33.2330469
+     ],
+     [
+      131.6527486,
+      33.2328252
+     ],
+     [
+      131.652759,
+      33.2328078
+     ],
+     [
+      131.6527052,
+      33.2327928
+     ]
+    ]
+   },
+   {
+    "name": "7-Eleven 大分明野北店",
+    "_doc": "shop=convenience without a building tag (way 182821513): no generic building or lot on it or within 3 m; landmarks/seven.py models it. site_lonlat: the car park traced on the z20 tile (OSM maps only the shop outline). footpaths osm: no default pavement band inside it (the lot stands on retaining walls straight off the side street and the east lane); the main-road footway stays",
+    "areas": [
+     182821513
+    ],
+    "buffer": 3.0,
+    "footpaths": "osm",
+    "site_lonlat": [
+     [
+      131.6520533,
+      33.2304265
+     ],
+     [
+      131.6526877,
+      33.2304265
+     ],
+     [
+      131.6526877,
+      33.2301604
+     ],
+     [
+      131.652675,
+      33.2301499
+     ],
+     [
+      131.6520533,
+      33.2301499
+     ]
+    ]
+   }
+  ],
+  "jartic_d": {
+   "csv": "/home/inouelab/Downloads/import/typeD_oita/大分県警_202609_k_2.1.csv",
+   "stops": "add",
+   "no_stop": [
+    {
+     "x": -262.9,
+     "y": -577.8,
+     "why": "Street View Jun 2024 (newest) and Nov 2020: no stop bar, 止まれ or plate at the mouth (sign_photos/sv_stop_road4153_2024-06_mouth.png, sv_stop_road4153_264.jpg)"
+    }
+   ]
+  },
+  "area_features": {
+   "osm_fixes": {
+    "_doc": "out of date along the main road south of the campus (z20 tiles 2026, GE, the user's photo 2026-11-04, seven_area_photos): 182819843 (住友化学 明野台社宅S-1) is demolished, now a car park (area_features car_parks); its way (nodes moved, retagged) becomes the long single-storey garage block along the 7-Eleven lot, so the generic buildings keep their order and seeds (added ways go last, layout.py); 182820714 (landuse=construction) is now an 8-storey flat slab with balconies to the south and solar panels on the roof (990182820714, 52 x 12.8 m: roof outline on the tiles shifted 4 m south for the lean) and the narrow shed along the main-road footway (990182820734); colours and forms from the user's photo (wins over GE, ch. 17): the slab pale grey / off-white concrete with solid balcony fronts and blank grey gables (jp:wall/acc/bal/gable), the garage block a white flat-roofed box 2.8 m high, closed towards the slab, shutters on the south (roof:shape, height, jp:doors); the shed ends 0.6 m short of the garage",
+    "drop_ways": [
+     "182820714"
+    ],
+    "add_ways": [
+     {
+      "id": "990182820714",
+      "closed": true,
+      "pts": [
+       [
+        22.5,
+        -412.5
+       ],
+       [
+        74.3,
+        -412.5
+       ],
+       [
+        74.3,
+        -425.3
+       ],
+       [
+        22.5,
+        -425.3
+       ]
+      ],
+      "tags": {
+       "building": "apartments",
+       "building:levels": "8",
+       "roof:shape": "flat",
+       "roof:solar": "west",
+       "name": "明野北 マンション (2-chome)",
+       "jp:wall": "jp_concrete_white",
+       "jp:acc": "jp_wall_grey",
+       "jp:bal": "solid",
+       "jp:gable": "blank"
+      }
+     },
+     {
+      "id": "990182820734",
+      "closed": true,
+      "pts": [
+       [
+        17.6,
+        -398.5
+       ],
+       [
+        21.2,
+        -398.5
+       ],
+       [
+        21.2,
+        -428.3
+       ],
+       [
+        17.6,
+        -428.3
+       ]
+      ],
+      "tags": {
+       "building": "shed",
+       "building:levels": "1"
+      }
+     }
+    ],
+    "move_nodes": {
+     "1931868044": [
+      -8.757,
+      -50.97
+     ],
+     "1931868097": [
+      -8.942,
+      -46.301
+     ],
+     "1931868028": [
+      5.174,
+      -47.113
+     ],
+     "1931868066": [
+      5.36,
+      -51.781
+     ]
+    },
+    "way_tags": {
+     "182819843": {
+      "building": "garages",
+      "building:levels": "1",
+      "name": null,
+      "roof:shape": "flat",
+      "height": "2.8",
+      "jp:wall": "jp_wall_white",
+      "jp:acc": "jp_wall_white",
+      "jp:doors": "s"
+     }
+    }
+   },
+   "_doc": "What stands on the main road between the 7-Eleven and Oita Kosen that OSM does not have (z20 tiles 2026, Google Earth, the user's photo of 2026-11-04: build/OitaKosen/seven_area_photos; osm_city/landmarks/akeno.py, lon/lat): greenhouses: multi-span vinyl houses on the farmland ways 184179075/77/79/80/83 and 184452633 (OSM farmland only), one platform each, ridge ns/ew, span/eave/rise m; farm_ground: their soil tracks; tree_rows: dense evergreen rows (camphor ~7 m) along the main road's west kerb (kept 6.6 m off the carriageway, off the footway) and the windbreak between the ranges; sand_pitch: Oita Kosen ground 2 (OSM pitch 152626821 has no surface/sport): sand, football lines (centre and goal lines read on the z20 tile), goals, the 12 m ball-stop net on its west and south sides, 2 m chain-link on the rest, along the platform edge (OSM fence way 182813888 lies in the footway band on the south); car_parks: the asphalt car park where 住友化学 明野台社宅S-1 (182819843, demolished) stood, bay rows = aisle-side edge, bays to its left/right",
+   "greenhouses": [
+    {
+     "id": "A1",
+     "lonlat": [
+      [
+       131.6506658,
+       33.2309987
+      ],
+      [
+       131.6510101,
+       33.2309987
+      ],
+      [
+       131.6510101,
+       33.2314414
+      ],
+      [
+       131.6506658,
+       33.2314414
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "A2",
+     "lonlat": [
+      [
+       131.6510187,
+       33.2309987
+      ],
+      [
+       131.6513758,
+       33.2309987
+      ],
+      [
+       131.6513758,
+       33.2314414
+      ],
+      [
+       131.6510187,
+       33.2314414
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "A3",
+     "lonlat": [
+      [
+       131.6513844,
+       33.2309987
+      ],
+      [
+       131.6517545,
+       33.2309987
+      ],
+      [
+       131.6517545,
+       33.2314414
+      ],
+      [
+       131.6513844,
+       33.2314414
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "B1",
+     "lonlat": [
+      [
+       131.6502592,
+       33.2304714
+      ],
+      [
+       131.6506249,
+       33.2304714
+      ],
+      [
+       131.6506249,
+       33.2309627
+      ],
+      [
+       131.6502592,
+       33.2309627
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "B2",
+     "lonlat": [
+      [
+       131.6506658,
+       33.2304714
+      ],
+      [
+       131.6509584,
+       33.2304714
+      ],
+      [
+       131.6509584,
+       33.2309627
+      ],
+      [
+       131.6506658,
+       33.2309627
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "B3",
+     "lonlat": [
+      [
+       131.6509907,
+       33.2304714
+      ],
+      [
+       131.6513393,
+       33.2304714
+      ],
+      [
+       131.6513393,
+       33.2309627
+      ],
+      [
+       131.6509907,
+       33.2309627
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "B4",
+     "lonlat": [
+      [
+       131.6513629,
+       33.2304714
+      ],
+      [
+       131.6517222,
+       33.2304714
+      ],
+      [
+       131.6517222,
+       33.2309627
+      ],
+      [
+       131.6513629,
+       33.2309627
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "C1",
+     "lonlat": [
+      [
+       131.6505195,
+       33.2298235
+      ],
+      [
+       131.6508853,
+       33.2298235
+      ],
+      [
+       131.6508853,
+       33.2303742
+      ],
+      [
+       131.6505195,
+       33.2303742
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "C2",
+     "lonlat": [
+      [
+       131.650896,
+       33.2298235
+      ],
+      [
+       131.651251,
+       33.2298235
+      ],
+      [
+       131.651251,
+       33.2303742
+      ],
+      [
+       131.650896,
+       33.2303742
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "C3",
+     "lonlat": [
+      [
+       131.6512618,
+       33.2298235
+      ],
+      [
+       131.6513974,
+       33.2298235
+      ],
+      [
+       131.6513974,
+       33.2303742
+      ],
+      [
+       131.6512618,
+       33.2303742
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "C4",
+     "lonlat": [
+      [
+       131.6514081,
+       33.2298235
+      ],
+      [
+       131.651761,
+       33.2298235
+      ],
+      [
+       131.651761,
+       33.2303742
+      ],
+      [
+       131.6514081,
+       33.2303742
+      ]
+     ],
+     "ridge": "ns",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    },
+    {
+     "id": "D1",
+     "lonlat": [
+      [
+       131.6507949,
+       33.229514
+      ],
+      [
+       131.6517395,
+       33.229514
+      ],
+      [
+       131.6517395,
+       33.2297101
+      ],
+      [
+       131.6507949,
+       33.2297101
+      ]
+     ],
+     "ridge": "ew",
+     "span": 4.0,
+     "eave": 3.2,
+     "rise": 1.1
+    }
+   ],
+   "farm_ground": [
+    [
+     [
+      131.6506551,
+      33.2309663
+     ],
+     [
+      131.6517631,
+      33.2309663
+     ],
+     [
+      131.6517631,
+      33.2314504
+     ],
+     [
+      131.6506551,
+      33.2314504
+     ]
+    ],
+    [
+     [
+      131.6502484,
+      33.2304678
+     ],
+     [
+      131.6517631,
+      33.2304678
+     ],
+     [
+      131.6517631,
+      33.2309717
+     ],
+     [
+      131.6502484,
+      33.2309717
+     ]
+    ],
+    [
+     [
+      131.6505088,
+      33.2297119
+     ],
+     [
+      131.6517631,
+      33.2297119
+     ],
+     [
+      131.6517631,
+      33.2303814
+     ],
+     [
+      131.6505088,
+      33.2303814
+     ]
+    ],
+    [
+     [
+      131.6507842,
+      33.229505
+     ],
+     [
+      131.6517502,
+      33.229505
+     ],
+     [
+      131.6517502,
+      33.2297209
+     ],
+     [
+      131.6507842,
+      33.2297209
+     ]
+    ]
+   ],
+   "tree_rows": [
+    {
+     "id": "main_road_west",
+     "lonlat": [
+      [
+       131.6517803,
+       33.2314666
+      ],
+      [
+       131.6517706,
+       33.2297029
+      ]
+     ],
+     "spacing": 3.0,
+     "height": 7.0,
+     "lateral": 0.0,
+     "road_room": 6.6
+    },
+    {
+     "id": "windbreak",
+     "lonlat": [
+      [
+       131.6502613,
+       33.2304264
+      ],
+      [
+       131.6517782,
+       33.2304264
+      ]
+     ],
+     "spacing": 3.5,
+     "height": 7.0,
+     "lite": true,
+     "road_room": 6.6
+    }
+   ],
+   "sand_pitch": [
+    {
+     "way": "152626821",
+     "net_sides": [
+      "w",
+      "s"
+     ],
+     "net_h": 12.0,
+     "lines": {
+      "centre": [
+       131.6524193,
+       33.2316249
+      ],
+      "length": 102.0,
+      "width": 61.0,
+      "axis_deg": 0.0
+     }
+    }
+   ],
+   "car_parks": [
+    {
+     "lonlat": [
+      [
+       131.6521063,
+       33.2307602
+      ],
+      [
+       131.6526872,
+       33.2307602
+      ],
+      [
+       131.6526872,
+       33.2310005
+      ],
+      [
+       131.6521063,
+       33.2310005
+      ]
+     ],
+     "rows": [
+      {
+       "lonlat": [
+        [
+         131.6521332,
+         33.2309357
+        ],
+        [
+         131.6525904,
+         33.2309357
+        ]
+       ],
+       "side": "left",
+       "depth": 5.0,
+       "width": 2.5
+      },
+      {
+       "lonlat": [
+        [
+         131.65223,
+         33.2308925
+        ],
+        [
+         131.652585,
+         33.2308925
+        ]
+       ],
+       "side": "right",
+       "depth": 5.0,
+       "width": 2.5
+      },
+      {
+       "lonlat": [
+        [
+         131.6522946,
+         33.2307917
+        ],
+        [
+         131.652585,
+         33.2307917
+        ]
+       ],
+       "side": "left",
+       "depth": 5.0,
+       "width": 2.5
+      },
+      {
+       "lonlat": [
+        [
+         131.6526227,
+         33.2309267
+        ],
+        [
+         131.6526227,
+         33.2307647
+        ]
+       ],
+       "side": "left",
+       "depth": 4.5,
+       "width": 2.5
+      }
+     ]
+    }
+   ]
+  }
+ }
 }

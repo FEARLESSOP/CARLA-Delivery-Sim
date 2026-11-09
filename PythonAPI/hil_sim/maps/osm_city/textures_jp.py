@@ -19,6 +19,14 @@ ground.py uses): asphalt 5 m, pavements 3 m, kerb top 1 m, kerb face 1.2 m
                     grime at road level
   line_white / line_yellow  road paint with wear and glass-bead grain
                     (Japanese yellow is orange-yellow)
+  pave_block        インターロッキング: light grey 0.1 x 0.2 m concrete blocks in
+                    stretcher bond, 3 mm sand joints, chamfered edges, per-block
+                    tone (2 m tile) -- the road pavements (pavements.py, ch. 31)
+  pave_guide        線状ブロック: JIS T 9251 guide block, 4 bars along u (0.3 m
+                    tile, UVs along the strip); pave_warn 点状ブロック: 5 x 5 dots
+  asphalt_rosoku    the 路側帯 strip of the estate streets: the cracked-edge
+                    asphalt texture, its own material so the strip can be its own
+                    (Sidewalk) object
 
 日本式の路面・縁石・路面標示のテクスチャ（手続き生成、高さ場から法線と粗さ）。
 """
@@ -42,6 +50,10 @@ MATERIALS = {
     "kerb_face_jp": ("kerb_face_jp", None, 0.85, 0.0, False),
     "line_white": ("line_white", None, 0.55, 0.0, False),
     "line_yellow": ("line_yellow", None, 0.58, 0.0, False),
+    "pave_block": ("pave_block", None, 0.8, 0.0, False),
+    "pave_guide": ("pave_guide", None, 0.62, 0.0, False),
+    "pave_warn": ("pave_warn", None, 0.62, 0.0, False),
+    "asphalt_rosoku": ("asphalt_crack", None, 0.9, 0.0, False),
 }
 # the general buildings' materials (buildings_jp, General Builder) / 一般建物の材質
 from buildings_jp import MATERIALS as _BUILDING_MATERIALS  # noqa: E402
@@ -53,7 +65,8 @@ MATERIALS.update(_PAINTED)          # textured, with their pattern variants / �
 # 汎用の学校・宗教施設の corridor_dark に暗部テクスチャを使う
 MATERIALS["corridor_dark"] = ("jp_dark", None, 0.9, 0.0, False)
 # metres per texture repeat (ground.py's uv_scale) / テクスチャ 1 枚の大きさ
-TILE = {"asphalt": 5.0, "pavement": 3.0, "kerb": 1.0, "kerb_face": 1.2, "paint": 1.0}
+TILE = {"asphalt": 5.0, "pavement": 3.0, "kerb": 1.0, "kerb_face": 1.2, "paint": 1.0, "pave_block": 2.0,
+        "tactile": 0.3}
 
 
 def smooth(n, sigma, rng):
@@ -168,6 +181,75 @@ def paint(n, rng, c, wear=0.10):
     return col, h, r
 
 
+def blocks(n, rng, tile=2.0, bw=0.2, bh=0.1, joint=0.003, chamfer=0.006, base=(178, 176, 170)):
+    """Interlocking concrete block paving in stretcher bond. Returns (rgb, height
+    in mm, roughness). / インターロッキングブロック（馬目地）。"""
+    mpp = tile / n
+    yy, xx = np.mgrid[0:n, 0:n].astype(np.float64) * mpp
+    row = np.floor(yy / bh).astype(int)
+    xo = xx + (row % 2) * (bw / 2)
+    colm = np.floor(xo / bw).astype(int)
+    fx = xo - colm * bw
+    fy = yy - row * bh
+    # distance to the block edge (joint at the edges) / 目地までの距離
+    dedge = np.minimum(np.minimum(fx, bw - fx), np.minimum(fy, bh - fy))
+    top = np.clip((dedge - joint / 2) / chamfer, 0.0, 1.0)
+    top = top * top * (3 - 2 * top)                      # chamfer / 面取り
+    h = 4.0 * top - 1.0                                  # mm: joint 4 mm down / 目地は 4 mm 低い
+    # per-block tone and tint, a few darker blocks / ブロックごとの色むら
+    nr, nc = int(tile / bh) + 2, int(tile / bw) + 2
+    tone = rng.uniform(0.93, 1.06, (nr, nc))
+    tint = rng.uniform(-2.0, 2.0, (nr, nc, 1)) * np.array([1.0, 0.9, 0.7]) + rng.uniform(-1.5, 1.5, (nr, nc, 3))
+    dark = (rng.random((nr, nc)) < 0.06) * rng.uniform(0.12, 0.2, (nr, nc))
+    tone = tone - dark
+    # wrap the block index so the tile repeats (period: 2 rows, 1 block) / 繰り返し
+    ri = row % int(round(tile / bh))
+    ci = colm % int(round(tile / bw))
+    t = tone[ri, ci]
+    b = np.array(base, np.float64)
+    col = (b[None, None] + tint[ri, ci]) * t[..., None]
+    col *= (0.9 + 0.1 * top)[..., None]                   # chamfer shade / 面取りの陰
+    col = col * (1 - (1 - top))[..., None] + np.array([120.0, 112.0, 100.0])[None, None] * (1 - top)[..., None]
+    grain = smooth(n, 1.0, rng)
+    col += 7.0 * grain[..., None]
+    col *= (1.0 + 0.06 * smooth(n, n / 6, rng))[..., None]   # broad weathering / 広い汚れ
+    h = h + 0.25 * grain + 0.3 * smooth(n, 2.5, rng) * top
+    r = 0.78 + 0.03 * grain - 0.2 * (1 - top) + 0.04 * (1 - t)
+    r = np.where(top < 0.5, 0.95, r)
+    return col, h, r
+
+
+def tactile(n, rng, kind, c=(240, 200, 30)):
+    """JIS T 9251 tactile paving block (0.3 m tile): "guide" = 4 bars along x (the
+    strip direction), "warn" = 5 x 5 dots; 5 mm high with sloped sides.
+    点字ブロック（線状・点状）。"""
+    mm = 300.0 / n
+    yy, xx = (np.mgrid[0:n, 0:n].astype(np.float64) + 0.5) * mm
+    if kind == "guide":
+        cy = np.array([37.5, 112.5, 187.5, 262.5])
+        dy = np.min(np.abs(yy[..., None] - cy[None, None]), axis=2)
+        dx = np.clip(np.maximum(15.0 - xx, xx - 285.0), 0.0, None)
+        d = np.sqrt(dy * dy + dx * dx)
+        prof = np.clip((14.0 - d) / 5.5, 0.0, 1.0)         # 17 mm top, 28 mm foot / 上面 17 mm 底 28 mm
+    else:
+        cs = np.array([30.0, 90.0, 150.0, 210.0, 270.0])
+        dx = np.min(np.abs(xx[..., None] - cs[None, None]), axis=2)
+        dy = np.min(np.abs(yy[..., None] - cs[None, None]), axis=2)
+        d = np.sqrt(dx * dx + dy * dy)
+        prof = np.clip((11.0 - d) / 5.0, 0.0, 1.0)         # 12 mm top, 22 mm foot / 上面 12 mm 底 22 mm
+    h = 5.0 * prof
+    edge = np.minimum(np.minimum(xx, 300 - xx), np.minimum(yy, 300 - yy))
+    joint = np.clip(1.0 - edge / 2.0, 0.0, 1.0)            # 2 mm joint at the block edge / 目地
+    h -= 3.0 * joint
+    cc = np.array(c, np.float64)
+    col = cc[None, None] * (0.96 + 0.08 * smooth(n, 3.0, rng))[..., None]
+    col *= (1.0 - 0.05 * smooth(n, n / 5, rng) ** 2)[..., None]
+    col *= (0.86 + 0.18 * prof)[..., None]                  # bar tops brighter than the base / 突起の上面
+    col = col * (1 - joint[..., None]) + np.array([90.0, 85.0, 70.0])[None, None] * joint[..., None]
+    r = 0.6 + 0.04 * smooth(n, 2.0, rng) - 0.1 * prof + 0.3 * joint
+    return col, h, r
+
+
 def save(d, name, col, h, r, strength, mat=None):
     Image.fromarray(np.clip(col, 0, 255).astype(np.uint8)).save(os.path.join(d, name + ".png"))
     h = h - h.mean()
@@ -203,8 +285,9 @@ def write(d):
     col, h, r = asphalt(n, rng, (52, 52, 53), (92, 90, 87), density=0.30, size=0.7, tone=0.12,
                         rough=(0.88, 0.05))
     save(d, "pavement_asphalt", col, h, r, 1.5)
-    # kerb top / 縁石天端
-    col, h, r = concrete(512, rng, (160, 158, 150), (190, 188, 180))
+    # kerb top: a shade darker and warmer than the block paving beside it, so the
+    # kerb line reads / 縁石天端（歩道のブロックより少し暗く）
+    col, h, r = concrete(512, rng, (146, 143, 136), (176, 173, 165))
     save(d, "kerb_jp", col, h, r, 1.6)
     # kerb face: 0.6 m blocks on a 1.2 m tile, grime at road level (image
     # bottom = v 0 = the road; the 0.15 m face uses the lowest 1/8)
@@ -222,6 +305,17 @@ def write(d):
     save(d, "line_white", col, h, r, 1.4)
     col, h, r = paint(512, rng, (232, 168, 34), wear=0.06)
     save(d, "line_yellow", col, h, r, 1.4)
+    # pavements (pavements.py, ch. 31): block paving 2 m tile, tactile blocks 0.3 m
+    # 歩道: インターロッキング（2 m）、点字ブロック（0.3 m）
+    col, h, r = blocks(1024, rng)
+    save(d, "pave_block", col, h, r, 2.2)
+    col, h, r = tactile(256, rng, "guide")
+    save(d, "pave_guide", col, h, r, 2.0)
+    col, h, r = tactile(256, rng, "warn")
+    save(d, "pave_warn", col, h, r, 2.0)
+    # 路側帯: the cracked-edge asphalt under its own material name / 路側帯の材質
+    for suf in ("_r.png", "_m.png"):
+        Image.open(os.path.join(d, "asphalt_crack" + suf)).save(os.path.join(d, "asphalt_rosoku" + suf))
     # the general buildings' textures (General Painter, own random streams) / 一般建物のテクスチャ
     import textures_jp_bld
     textures_jp_bld.write(d)

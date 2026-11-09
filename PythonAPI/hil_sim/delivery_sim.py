@@ -40,6 +40,7 @@ import signal
 import collections
 import time
 import types
+import copy
 import sys
 
 try:
@@ -65,15 +66,22 @@ from delivery.backends import (DroneUnit, Hazards, OBSTACLE_HIT, DRONE_RADIUS,  
 from delivery.hotkeys import Hotkeys  # noqa: E402
 from delivery.battery import Battery, BatteryModel, PodEnergyModel  # noqa: E402
 from delivery.wind import Wind  # noqa: E402
-from delivery.station import ChargeStation, DroneFleet, EvChargers  # noqa: E402
+from delivery.station import ChargeStation, DeckStation, DroneFleet, EvChargers  # noqa: E402
+from delivery.battery import charge_rate  # noqa: E402
 from delivery import live  # noqa: E402
 from delivery import pod as podlib  # noqa: E402
 from delivery import lmp_pod, lmp_rig  # noqa: E402
 from delivery import backends  # noqa: E402  (OVERLAYS: the tooltip switch)
 from delivery import boxes  # noqa: E402
+from delivery import charge_sites  # noqa: E402  (LastMile charging stations)
 from delivery.lmp_van import LmpVanMixin, LMP_DRONE, LMP_DIRECT  # noqa: E402
 from delivery import yard as yardlib  # noqa: E402
 from delivery import rules as van_rules  # noqa: E402  (Japan profile: 止まれ etc.)
+from delivery import zones as zonelib  # noqa: E402  (pod zones, no-fly zones)
+from delivery import drone_sensors  # noqa: E402  (the Drones page's sensor suite)
+from delivery import lmh_hub  # noqa: E402  (LastMile Hub + Mini Pods)
+from delivery.lmh_hub import LmhVanMixin, LMH_STOP, LMH_WORK  # noqa: E402
+import recovery  # noqa: E402  (reverse out of a wedge)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VAN_BLUEPRINTS = ("vehicle.mercedes.sprinter", "vehicle.volkswagen.t2_2021",
@@ -97,6 +105,7 @@ HATCH_CLOSE, JACKS_UP = "hatch_close", "jacks_up"
 # the pod's EV battery / ポッドの EV バッテリー
 EV_CHARGING, WAIT_CHARGER, STRANDED = "ev_charging", "waiting_charger", "stranded"
 YARD_IN, YARD_OUT = "yard_in", "yard_out"     # scripted moves in an off-road yard
+QUEUED = "queued"        # in a charging station's waiting bay, off the lane / 待機ベイで待機
 # face-to-face handover through the PodV2 side port / サイドポートでの対面受け渡し
 SIDE_OPEN, ARM_OUT, PARCEL_DROP = "side_open", "arm_out", "parcel_drop"
 ARM_IN, SIDE_CLOSE = "arm_in", "side_close"
@@ -157,6 +166,45 @@ def map_buildings(world):
     return objs
 
 
+NOT_PAVEMENT = ("Roads", "RoadLines", "Buildings", "Vehicles", "Car", "Truck", "Bus", "Motorcycle",
+                "Bicycle", "Pedestrians", "Rider", "Dynamic", "Vegetation", "Poles")
+
+
+def pavement_drop(world, drive, center, inset=0.4, reach=3.0, step=0.25):
+    """The pavement point in front of a building on a map whose pavements
+    are only in the model (no sidewalk lanes in the road logic): step out
+    from the lane edge towards the building until the ground rises onto the
+    kerb (a ray every ``step`` m), then ``inset`` m further in. None if no
+    pavement within ``reach`` m of the lane edge.
+    道路情報に歩道が無いマップ用：車線端から建物側へ進み、縁石を越えた歩道上の点。"""
+    t = drive.transform
+    L, r = t.location, t.get_right_vector()
+    lat = (center.x - L.x) * r.x + (center.y - L.y) * r.y
+    s = 1.0 if lat >= 0 else -1.0
+    nx, ny = r.x * s, r.y * s
+
+    def ground(x, y, top):
+        for h in world.cast_ray(carla.Location(x, y, top + 2.0), carla.Location(x, y, top - 1.5)):
+            return h
+        return None
+
+    road = ground(L.x, L.y, L.z)
+    if road is None:
+        return None
+    rz = road.location.z
+    d = drive.lane_width / 2.0 - 0.3
+    while d < drive.lane_width / 2.0 + reach and d + inset < abs(lat):
+        h = ground(L.x + nx * d, L.y + ny * d, rz)
+        if h is not None and str(h.label) not in NOT_PAVEMENT and rz + 0.06 < h.location.z < rz + 0.45:
+            px, py = L.x + nx * (d + inset), L.y + ny * (d + inset)
+            p = ground(px, py, h.location.z)
+            if p is None or str(p.label) in NOT_PAVEMENT or abs(p.location.z - h.location.z) > 0.1:
+                return None                              # not clear pavement / 歩道でない
+            return (px, py, p.location.z)
+        d += step
+    return None
+
+
 def find_buildings(world, wmap, max_sidewalk_gap=15.0, max_curb_gap=12.0, grid=12.0):
     """Buildings that have a sidewalk in front and a drivable lane beside it.
 
@@ -166,6 +214,7 @@ def find_buildings(world, wmap, max_sidewalk_gap=15.0, max_curb_gap=12.0, grid=1
     """
     objs = map_buildings(world)
     buildings, seen, roof = [], set(), -1e9
+    model_pavements = bool(objs) and not boxes._any_sidewalk(wmap)
     for o in objs:
         bb = o.bounding_box
         roof = max(roof, bb.location.z + bb.extent.z)
@@ -173,6 +222,24 @@ def find_buildings(world, wmap, max_sidewalk_gap=15.0, max_curb_gap=12.0, grid=1
                 any(k in o.name.lower() for k in NOT_DELIVERABLE):
             continue
         center = bb.location
+        if model_pavements:
+            # pavements only in the model (OitaKosen): the kerb lane nearest
+            # the building, the pavement point in front of it / 模型だけの歩道
+            drive = wmap.get_waypoint(center, project_to_road=True, lane_type=carla.LaneType.Driving)
+            if drive is None or drive.is_junction:
+                continue
+            dl = drive.transform.location
+            if math.hypot(dl.x - center.x, dl.y - center.y) > max(bb.extent.x, bb.extent.y) + max_sidewalk_gap:
+                continue
+            drop = pavement_drop(world, drive, center)
+            if drop is None:
+                continue
+            key = (round(drop[0] / grid), round(drop[1] / grid))
+            if key in seen:
+                continue
+            seen.add(key)
+            buildings.append(Building(len(buildings) + 1, o.name, drop, tup(dl)))
+            continue
         side = wmap.get_waypoint(center, project_to_road=True,
                                  lane_type=carla.LaneType.Sidewalk)
         if side is None:
@@ -380,6 +447,19 @@ class SkyCheck(object):
         return z
 
     def flight_z(self, a, b):
+        """A safe cruise height for the flight a -> b: the highest of its legs
+        when it has to go round no-fly zones. / 迂回する場合は各区間の最高値。"""
+        pts = zonelib.air_path(a, b)
+        if len(pts) <= 1:
+            return self._line_z(a, b)
+        here, z = a, -1e9
+        for p in pts:
+            nxt = (p[0], p[1], b[2])
+            z = max(z, self._line_z(here, nxt))
+            here = nxt
+        return z
+
+    def _line_z(self, a, b):
         """A safe cruise height for the straight flight a -> b.
 
         The footprint rule (planning.leg_altitude) first, then raised until a
@@ -537,9 +617,10 @@ def map_lanes(wmap, step=2.0):
     return lanes, marks, centres
 
 
-def export_map(world, wmap, station, chargers=None, boxmgr=None):
+def export_map(world, wmap, station, chargers=None, boxmgr=None, hubs=None):
     """Lanes and lane markings (as CARLA draws its map), building footprints,
-    the station, chargers and box stations, for the dashboard's 2D map.
+    the station, chargers and box stations, for the dashboard's 2D map;
+    ``stops`` = the kerb points a pod may stop at (meeting points snap to them).
     ダッシュボードの 2D 地図用の車線・区画線・建物・充電所。"""
     lanes, marks, roads = map_lanes(wmap)
     blds = []
@@ -552,7 +633,8 @@ def export_map(world, wmap, station, chargers=None, boxmgr=None):
             "chargers": [[round(x, 2), round(y, 2)] for x, y, _ in
                          (chargers.spots if chargers else [])],
             "boxes": [[round(b.site.loc[0], 2), round(b.site.loc[1], 2)]
-                      for b in (boxmgr.boxes.values() if boxmgr else [])]}
+                      for b in (boxmgr.boxes.values() if boxmgr else [])],
+            "stops": [[round(h[0], 1), round(h[1], 1)] for h in (hubs or [])]}
 
 
 class EventLog(object):
@@ -665,6 +747,14 @@ class Van(LmpVanMixin):
         self._last_pos = None
         self._strand_t = self._wait_t = 0.0
         self.yard_bay = None     # bay index in the charging yard / ヤードのベイ番号
+        self._unplug_t = None    # charging-station plug: when it started to pull out / プラグ抜き開始
+        self.charge_asap = False # sent to charge from the dashboard: next time it is free / 充電指示
+        self._ref_z = None       # ground-ray reference height for scripted moves / 地面探索の基準高さ
+        self._next_bay = None    # the bay claimed while waiting in a waiting bay / 待機中に確保したベイ
+        self._queue_t = None     # when it started waiting / 待機開始
+        self._yield_t = 0.0      # waiting for a gap in the traffic / 交通の切れ目待ち
+        self.charge_kw, self.charge_kwh = 0.0, 0.0   # charger power now, energy this visit / 充電電力と量
+        self.pack_kwh = (args.hub_kwh if self.CHARGE_KIND == "lmh" else (args.lmp_kwh or args.pod_kwh))
         self.handover_queue = []  # orders still to hand out at this stop / 未受け渡し
         self.dropped = []        # (parcel actor, time it goes) / 置いた荷物と消える時刻
         self._fall = None        # parcel falling from the tray / 落下中の荷物
@@ -680,6 +770,7 @@ class Van(LmpVanMixin):
         self._plans = {}         # order id -> (hover point, cruise z, moved m)
         self._said = set()       # one-off log lines already printed at this stop
         self._offroad_t = self._stuck_t = 0.0
+        self._reverse = None          # recovery.ReverseOut while backing out / 後退中
         self._last_recover_t = -1e9
         self._stop_recoveries = 0
         self.max_offset = 0.0
@@ -729,7 +820,28 @@ class Van(LmpVanMixin):
 
     def assign(self, batch, t):
         """Take ``batch`` if the battery can do it; False means charge first."""
-        stops = planning.plan_batch(batch, self.car_pos(), self.hubs,
+        hubs = self.hubs
+        zs = self.fleet.zones if self.fleet is not None else None
+        air = zs.air if zs is not None else None
+        mine = zs.meet_of(self.vid) if zs is not None else []
+        if mine:
+            # the user's meeting points: drones launch and land only there
+            # (each snapped to the nearest kerb point the pod can stop at)
+            # ユーザーが選んだ合流地点だけで発進・回収（最寄りの停車可能点へ）
+            hubs = [min(self.hubs, key=lambda h, p=p: planning.dist2d(h, p)) for p in mine]
+        elif air:
+            # nothing flies over a no-fly zone: drone orders inside one go face
+            # to face, and the drone stop is never inside one
+            # 飛行禁止区域：中のドローン注文は対面に、ハブは区域外に
+            hubs = [h for h in self.hubs if not air.blocked(h)]
+        if air:
+            for o in batch:
+                if o.kind == DRONE and (air.blocked(o.drop) or not hubs):
+                    o.kind = FACE_TO_FACE
+                    self.log(t, "nofly_f2f", o, batch=o.batch, pos=o.drop,
+                             detail="#%d is in a no-fly zone: delivered face to face" % o.id)
+            hubs = hubs or self.hubs
+        stops = planning.plan_batch(batch, self.car_pos(), hubs,
                                     self.road_dist, self.args.hub_radius)
         need = self.batch_need(stops)
         if self.energy.level < need:
@@ -751,25 +863,40 @@ class Van(LmpVanMixin):
         self.drive_to_next(t)
         return True
 
+    CHARGE_KIND = "lmp"          # charging-station bay 03 (LastMile Hubs: bay 04) / ベイ 03
+
+    def _yard_of(self, idx):
+        """The scripted-move area of charger ``idx``: the map's yard, a
+        charging-station bay, or None (a road-side charger). / 経路の場所。"""
+        if self.sky.yard:
+            return self.sky.yard
+        if idx is None:
+            return None
+        return (getattr(self.sky, "station_bays", None) or {}).get(idx)
+
     def go_charge(self, t, why):
         """Drive to a free EV charger (or wait for one). / EV 充電器へ向かう。
 
-        With a charging yard on this map the pod drives to the yard's entry
-        and the bay is reached by a scripted move (yard_move).
+        With a charging yard on this map, or at a charging station, the pod
+        drives to the entry and the bay is reached by a scripted move
+        (yard_move).
         """
         yard = self.sky.yard
-        idx = self.sky.chargers.claim(self, near=None if yard else self.car_pos())
+        idx = self.sky.chargers.claim(self, near=None if yard else self.car_pos(), kind=self.CHARGE_KIND)
+        if idx is None and self._go_queue(t, why):
+            return
         if idx is None:
             if self.state != WAIT_CHARGER:
                 self.log(t, "waiting_for_charger", pos=self.car_pos(),
                          detail="pod at %.0f%%: every charger is taken" % self.energy.level)
             self.state, self._wait_t = WAIT_CHARGER, 0.0
             return
+        yard = self._yard_of(idx)
+        self.yard_bay = idx
         if yard:
-            self.yard_bay = idx
             ex, ey = yard["entry"]
             spot = (ex, ey, 0.0)
-            where = "bay %d in the %s" % (idx + 1, yard["name"])
+            where = yard["name"] if yard.get("kind") == "station" else "bay %d in the %s" % (idx + 1, yard["name"])
         else:
             spot = self.sky.chargers.spots[idx]
             where = "charger %d" % (idx + 1)
@@ -777,6 +904,82 @@ class Van(LmpVanMixin):
         self.log(t, "to_charger", pos=spot,
                  detail="pod at %.0f%% (%s), %s" % (self.energy.level, why, where))
         self.drive_to_next(t)
+
+    def _go_queue(self, t, why):
+        """Every bay of this vehicle's kind is taken: wait in the nearest free
+        waiting bay of a charging station (off the lane) instead of where it
+        is. False when there is none. / 空きベイが無い：最寄りの待機ベイへ。"""
+        slots = getattr(self.sky, "queue_slot", None)
+        if not slots:
+            return False
+        here = self.car_pos()
+        free = [sid for sid, v in slots.items() if v is None]
+        if not free:
+            return False
+        sid = min(free, key=lambda k: planning.dist2d(here, tuple(self.sky.station_bays[("q", k)]["entry"]) + (0.0,)))
+        slots[sid] = self.vid
+        q = self.sky.station_bays[("q", sid)]
+        self.yard_bay, self._next_bay, self._queue_t = ("q", sid), None, t
+        ex, ey = q["entry"]
+        self.stops = [Stop(CHARGE, (ex, ey, 0.0), [])]
+        self.log(t, "to_waiting_bay", pos=(ex, ey, 0.0),
+                 detail="pod at %.0f%% (%s): every %s bay taken, waiting at %s"
+                 % (self.energy.level, why, "hub" if self.CHARGE_KIND == "lmh" else "LMP-4", q["name"]))
+        self.drive_to_next(t)
+        return True
+
+    def charger_kw(self):
+        """Power of the charger it is plugged into: a charging-station bay
+        (DC) or a road-side / yard charger (AC). / 充電器の電力。"""
+        b = self._yard_of(self.yard_bay)
+        return self.args.station_kw if b is not None and b.get("kind") == "station" else self.args.roadside_kw
+
+    def _plugged(self):
+        """At a charging-station bay: only once the plug unit is in. / プラグ接続済みか。"""
+        b = self._yard_of(self.yard_bay)
+        st = getattr(self.sky, "stations", None)
+        if b is None or b.get("kind") != "station" or st is None:
+            return True
+        return st.sites[b["station"] - 1]["plug_u"].get(b["bay_kind"], 0.0) >= 0.999
+
+    def _lane_clear(self, t, yard):
+        """No vehicle or walker in the way of a scripted move at a station:
+        nothing within the turning circle of the entry or along the path to
+        the bay, and no vehicle closing in along the lane within 30 m.
+        ステーションでの移動前に、周囲と車線の接近車両を確認。"""
+        sky = self.sky
+        cache = sky.__dict__.setdefault("_traffic", {"t": -1e9, "ids": []})
+        if t - cache["t"] > 2.0:
+            acts = self.world.get_actors()
+            cache["ids"] = [a.id for a in acts.filter("vehicle.*")] + [a.id for a in acts.filter("walker.pedestrian.*")]
+            cache["t"] = t
+        snap = self.world.get_snapshot()
+        (ex, ey), (bx, by) = yard["entry"], yard["bay"]
+        r = math.radians(yard.get("entry_yaw", 0.0))
+        fx, fy = math.cos(r), math.sin(r)
+        turn_r = getattr(sky.stations, "turn_r", 2.8) if getattr(sky, "stations", None) else 2.8
+        for aid in cache["ids"]:
+            if aid == self.car.id:
+                continue
+            a = snap.find(aid)
+            if a is None:
+                continue
+            L = a.get_transform().location
+            dx, dy = L.x - ex, L.y - ey
+            if math.hypot(dx, dy) < turn_r + 1.5:
+                return False
+            # along the path to the bay (walkers on the pavement) / ベイへの経路上
+            px, py = bx - ex, by - ey
+            n = px * px + py * py or 1.0
+            u = max(0.0, min(1.0, (dx * px + dy * py) / n))
+            if math.hypot(L.x - (ex + px * u), L.y - (ey + py * u)) < 1.8:
+                return False
+            v = a.get_velocity()
+            along, lat = dx * fx + dy * fy, abs(-dx * fy + dy * fx)
+            closing = (along < 0 and v.x * fx + v.y * fy > 0.5) or (along > 0 and v.x * fx + v.y * fy < -0.5)
+            if lat < 6.0 and abs(along) < 30.0 and closing:
+                return False
+        return True
 
     def give_back(self, t, why):
         """Hand the orders not yet delivered back to the dispatcher. / 注文を返却。"""
@@ -879,7 +1082,10 @@ class Van(LmpVanMixin):
             work = [HATCH_OPEN] + work + [HATCH_CLOSE]
         if self.pod is not None:
             work = [JACKS_DOWN] + work + [JACKS_UP]
-        if s.kind == CHARGE and self.sky.yard:
+        q = self._yard_of(self.yard_bay) if s.kind == CHARGE else None
+        if q is not None and q.get("kind") == "queue":
+            work = [YARD_IN, QUEUED, YARD_OUT]     # wait off the lane / 車線外で待つ
+        elif s.kind == CHARGE and q:
             work = [YARD_IN] + work + [YARD_OUT]
         self.stages = [STOPPING] + work
         self._begin(t, STOPPING)
@@ -914,6 +1120,11 @@ class Van(LmpVanMixin):
         elif stage == PARCEL_DROP:
             self.drop_parcel(t)
         elif stage == EV_CHARGING:
+            self.charge_kwh = 0.0
+            b = self._yard_of(self.yard_bay)
+            if b is not None and b.get("kind") == "station" and b.get("bay_kind") == "lmh" \
+                    and hasattr(self, "station_pods_begin"):
+                self.station_pods_begin(t, self.sky.stations, b["station"])    # Mini Pods to the pads / パッドへ
             self.log(t, "ev_charging", pos=self.car_pos(),
                      detail="pod at %.0f%%, charging to %.0f%%"
                      % (self.energy.level, self.pem.target))
@@ -1099,6 +1310,19 @@ class Van(LmpVanMixin):
 
     def leave_stop(self, t):
         done = self.stops.pop(0)
+        if done.kind == CHARGE and isinstance(self.yard_bay, tuple):
+            # out of the waiting bay: on to the bay it claimed / 待機ベイから確保したベイへ
+            slots = getattr(self.sky, "queue_slot", {})
+            if slots.get(self.yard_bay[1]) == self.vid:
+                slots[self.yard_bay[1]] = None
+            self.yard_bay, self._queue_t = self._next_bay, None
+            b = self._yard_of(self.yard_bay)
+            ex, ey = b["entry"] if b else self.sky.chargers.spots[self.yard_bay][:2]
+            self.stops = [Stop(CHARGE, (ex, ey, 0.0), [])]
+            self.log(t, "to_charger", pos=(ex, ey, 0.0), detail="from the waiting bay to %s"
+                     % (b["name"] if b else "charger %d" % (self.yard_bay + 1)))
+            self.drive_to_next(t)
+            return
         if done.kind == CHARGE:
             self.sky.chargers.release(self)
             self.ev_charges += 1
@@ -1124,8 +1348,21 @@ class Van(LmpVanMixin):
                 self.energy.level = max(self.energy.level - self.pem.per_km * d / 1000.0, 0.0)
         self._last_pos = p
         if self.state == EV_CHARGING:
-            self.energy.charge(dt, self.pem.charge)
+            if self.args.pod_charge_rate > 0:            # the old fixed rate / 従来の固定速度
+                rate = self.pem.charge
+            else:                                         # from charger power and pack size / 電力と容量から
+                rate = charge_rate(self.energy.level, self.charger_kw(), self.pack_kwh) if self._plugged() else 0.0
+            before = self.energy.level
+            self.energy.charge(dt, rate)
+            got = (self.energy.level - before) / 100.0 * self.pack_kwh
+            self.charge_kw = got / dt * 3600.0 if dt > 0 else 0.0
+            self.charge_kwh += got
+            b = self._yard_of(self.yard_bay)
+            if b is not None and b.get("kind") == "station":
+                tot = self.sky.__dict__.setdefault("station_kwh", {})
+                tot[b["station"]] = tot.get(b["station"], 0.0) + got
         else:
+            self.charge_kw = 0.0
             self.energy.drain(dt, self.pem.idle)
         if self.lmp:
             self.pack_step(dt)
@@ -1136,9 +1373,10 @@ class Van(LmpVanMixin):
         """A flat pod is towed to a charger (into a yard bay, if there is a
         yard) and charged there. / 電池切れのポッドを充電器まで牽引。"""
         yard = self.sky.yard
-        idx = self.sky.chargers.claim(self, near=None if yard else self.car_pos())
+        idx = self.sky.chargers.claim(self, near=None if yard else self.car_pos(), kind=self.CHARGE_KIND)
         if idx is None:
             return                              # every charger busy: try again later
+        yard = self._yard_of(idx)
         if self.lmp:
             self.lmp_reset()                    # roof shut, lift down / 全て格納
         elif self.pod is not None:
@@ -1146,13 +1384,15 @@ class Van(LmpVanMixin):
             self.pod.release_parcel()
         spot = self.sky.chargers.spots[idx]
         self._last_pos = None
+        self.yard_bay = idx
         if yard:
-            self.yard_bay = idx
+            bx, by = yard["bay"] if yard.get("kind") == "station" else spot[:2]
+            self._ref_z = yard.get("z")
             self.car.set_simulate_physics(False)
             self.kinematic = True
             self.car.set_transform(carla.Transform(
-                carla.Location(spot[0], spot[1], self._ground(spot[0], spot[1]) + 0.04),
-                carla.Rotation(yaw=0.0)))
+                carla.Location(bx, by, self._ground(bx, by) + 0.04),
+                carla.Rotation(yaw=yard.get("bay_yaw", 0.0))))
         else:
             self._teleport(self.wmap.get_waypoint(carla.Location(*spot)).transform)
         self.log(t, "pod_towed", pos=spot, detail="to charger %d" % (idx + 1))
@@ -1214,11 +1454,15 @@ class Van(LmpVanMixin):
             self.pod.apply(m)
 
     def _ground(self, x, y):
-        """Road / sidewalk height at (x, y), cached on a 0.5 m grid."""
+        """Road / sidewalk height at (x, y), cached on a 0.5 m grid. The ray
+        runs from 2 m over the car's own height to 3 m under it (hilly maps:
+        the ground is not near z 0; 2 m keeps a charging-station canopy out).
+        路面の高さ（車の高さ基準。丘陵地図では地面が z 0 付近に無い）。"""
         key = (round(x * 2.0), round(y * 2.0))
         if key not in self._ground_z:
-            z = 0.0
-            for h in self.world.cast_ray(carla.Location(x, y, 3.0), carla.Location(x, y, -2.0)):
+            ref = self._ref_z if self._ref_z is not None else self.car_pos()[2]
+            z = ref
+            for h in self.world.cast_ray(carla.Location(x, y, ref + 2.0), carla.Location(x, y, ref - 3.0)):
                 if str(h.label) in GROUND_LABELS:
                     z = h.location.z
                     break
@@ -1232,13 +1476,32 @@ class Van(LmpVanMixin):
         wait. Physics is off while the car follows the path and comes back on
         at the road. / ヤードの決まった経路を移動（同時に 1 台、移動中は物理なし）。
         """
-        yard = self.sky.yard
+        yard = self._yard_of(self.yard_bay)
+        lanes = self.sky.__dict__.setdefault("yard_lanes", {})
+        key = yard.get("station", "yard")              # one vehicle moving per yard / station
         if self._mover is None:
-            if self.sky.yard_lane not in (None, self.vid):
+            if lanes.get(key) not in (None, self.vid):
                 self.hold()
                 return                          # someone else is moving in the yard
-            self.sky.yard_lane = self.vid
-            if self.state == YARD_IN:
+            if yard.get("kind") in ("station", "queue") and not self._lane_clear(t, yard):
+                self.hold()
+                self._yield_t += dt
+                if self._yield_t < 40.0:
+                    return                      # wait for a gap in the traffic / 交通の切れ目を待つ
+                self.log(t, "yield_timeout", pos=self.car_pos(), detail="no gap for 40 s: going anyway")
+            self._yield_t = 0.0
+            lanes[key] = self.vid
+            self._ref_z = yard.get("z")
+            self._ground_z = {}
+            if yard.get("kind") == "station":
+                tf = self.car.get_transform()
+                pts = (charge_sites.path_in(yard, (tf.location.x, tf.location.y, tf.rotation.yaw))
+                       if self.state == YARD_IN else charge_sites.path_out(yard))
+            elif yard.get("kind") == "queue":
+                tf = self.car.get_transform()
+                pts = (charge_sites.queue_path_in(yard, (tf.location.x, tf.location.y, tf.rotation.yaw))
+                       if self.state == YARD_IN else charge_sites.queue_path_out(yard))
+            elif self.state == YARD_IN:
                 pts = yardlib.path_in(yard, self.yard_bay, self.car_pos()[:2])
             else:
                 pts = yardlib.path_out(yard, self.yard_bay)
@@ -1246,12 +1509,14 @@ class Van(LmpVanMixin):
             self.car.set_simulate_physics(False)
             self.kinematic = True
             self.log(t, self.state, pos=self.car_pos(),
-                     detail="bay %d, %.0f m" % (self.yard_bay + 1, len(pts) / 10.0))
+                     detail="%s, %.0f m" % (yard["name"] if yard.get("kind") in ("station", "queue")
+                                            else "bay %d" % (self.yard_bay + 1), len(pts) / 10.0))
         (x, y, yaw), done = self._mover.step(dt)
         self.car.set_transform(carla.Transform(carla.Location(x, y, self._ground(x, y) + 0.04),
                                                carla.Rotation(yaw=yaw)))
         if done:
-            self._mover, self.sky.yard_lane = None, None
+            self._mover = None
+            lanes[key] = None
             if self.state == YARD_OUT:
                 self.car.set_simulate_physics(True)
                 self.kinematic = False
@@ -1282,13 +1547,26 @@ class Van(LmpVanMixin):
             self.collect_parcels(t)
         if self.state == IDLE:
             self.hold()
-            if self.energy.level < self.pem.low:
-                self.go_charge(t, "low")
+            if self.energy.level < self.pem.low or self.charge_asap:
+                why = "sent to charge" if self.charge_asap else "low"
+                self.charge_asap = False
+                self.go_charge(t, why)
         elif self.state == WAIT_CHARGER:
             self.hold()
             self._wait_t += dt
             if self._wait_t > 1.0:
                 self.go_charge(t, "low")
+        elif self.state == QUEUED:
+            self.hold()
+            self.timer += dt
+            if self.timer > 1.0:                          # a bay free (here or elsewhere)? / 空きベイは？
+                self.timer = 0.0
+                idx = self.sky.chargers.claim(self, near=self.car_pos(), kind=self.CHARGE_KIND)
+                if idx is not None:
+                    self._next_bay = idx
+                    self.log(t, "bay_free", pos=self.car_pos(), detail="leaving the waiting bay for %s"
+                             % (self._yard_of(idx) or {}).get("name", "charger %d" % (idx + 1)))
+                    self._next_stage(t)
         elif self.state == STRANDED:
             self.hold()
             self._strand_t += dt
@@ -1296,7 +1574,28 @@ class Van(LmpVanMixin):
                 self.tow(t)
         elif self.state == EV_CHARGING:
             self.hold()
-            if self.energy.level >= self.pem.target:
+            bay = self._yard_of(self.yard_bay)
+            if bay is not None and bay.get("kind") == "station" and getattr(self.sky, "stations", None):
+                # the bay's plug unit pushes into the front inlet, pulls back
+                # out once charged (charge.js) / プラグの接続と切断
+                self.timer += dt
+                pods = hasattr(self, "station_pods_step") and bay["bay_kind"] == "lmh"
+                if pods:
+                    self.station_pods_step(t, dt)
+                if self._unplug_t is None:
+                    self.sky.stations.plug(bay["station"], bay["bay_kind"], self.timer / charge_sites.PLUG_S)
+                    if self.energy.level >= self.pem.target and self.timer >= charge_sites.PLUG_S:
+                        if pods:
+                            self.station_pods_recall(t)
+                        if not pods or self.station_pods_done(t):
+                            self._unplug_t = self.timer
+                else:
+                    u = 1.0 - (self.timer - self._unplug_t) / charge_sites.PLUG_S
+                    self.sky.stations.plug(bay["station"], bay["bay_kind"], u)
+                    if u <= 0.0:
+                        self._unplug_t = None
+                        self._next_stage(t)
+            elif self.energy.level >= self.pem.target:
                 self._next_stage(t)
         elif self.state in (YARD_IN, YARD_OUT):
             self.yard_move(t, dt)
@@ -1351,6 +1650,18 @@ class Van(LmpVanMixin):
                                                    start_location=self.car.get_location())
             elif near or self.agent.done():
                 self.arrive(t)
+            elif getattr(self, "_reverse", None) is not None:
+                # backing out of a wedge, then the route is re-planned / 後退して再計画
+                tf = self.car.get_transform()
+                yaw, lat, _ = recovery._lane_frame(self.wmap, tf.location, carla)
+                out = self._reverse.step(dt, tf.location.x, tf.location.y, tf.rotation.yaw, yaw, lat)
+                if out is None:
+                    self._reverse = None
+                    self.agent.set_destination(carla.Location(*self.stops[0].location),
+                                               start_location=self.car.get_location())
+                else:
+                    thr, brk, st, rev = out
+                    self.car.apply_control(carla.VehicleControl(throttle=thr, brake=brk, steer=st, reverse=rev))
             else:
                 control = self.agent.run_step()
                 if self.rules is not None:
@@ -1430,6 +1741,14 @@ class Van(LmpVanMixin):
                      detail="%s, %d recoveries failed" % (why, MAX_RECOVERIES))
             self.arrive(t)
             return
+        if why == "stuck" and t - self._last_recover_t >= RETRY_WINDOW_S:
+            # first strike when wedged: reverse out, like a driver would
+            # 最初は後退して抜け出す
+            self._reverse = recovery.ReverseOut(here.x, here.y)
+            self.reroutes += 1
+            self.log(t, "reverse_out", batch=batch, pos=tup(here), detail=why)
+            self._last_recover_t = t
+            return
         if t - self._last_recover_t < RETRY_WINDOW_S:
             # second strike. Off road: back onto the nearest lane. Stuck: a few
             # metres ahead along the route -- putting a stalled van back on the
@@ -1498,9 +1817,67 @@ class Van(LmpVanMixin):
         return {"van": self.vid, "delivered": len(self.delivered),
                 "failed": len(self.failed), "pod_battery": round(self.energy.level, 1),
                 "pod_km": round(self.pod_km, 2), "ev_charges": self.ev_charges,
+                "charge_asap": bool(self.charge_asap), "charge_kw": round(self.charge_kw, 1),
                 "batches_completed": self.batches,
                 "max_lane_offset_m": round(self.max_offset, 2),
                 "reroutes": self.reroutes, "lane_resets": self.lane_resets}
+
+
+class LmhVan(LmhVanMixin, Van):
+    CHARGE_KIND = "lmh"          # charging-station bay 04 / ベイ 04
+    """A LastMile Hub (LMH-3): drives like a van, delivers with three Mini
+    Pods from distribution points (delivery/lmh_hub.py, lmh_rig.py).
+    Its own speed cap: the hub runs on the Prius drivetrain, so it is held
+    to --lmh-speed (25 km/h) or less.
+    LastMile ハブ。配布地点からミニポッド 3 台で配達する。"""
+
+    def __init__(self, vid, args, world, car, hubs, grp, log, obstacles, gen, sky,
+                 client, pod_base, shared, real_hub):
+        a = copy.copy(args)
+        a.speed = min(args.speed, args.lmh_speed)
+        Van.__init__(self, vid, a, world, car, hubs, grp, log, obstacles, gen, sky, pod=None)
+        self.lmh_init(client, pod_base, shared, real_hub)
+
+    def assign(self, batch, t):
+        # every order is a ground delivery by a pod / 全てポッドの地上配達
+        for o in batch:
+            if o.kind == DRONE and self.fleet is not None and self.fleet.nofly(o.drop):
+                self.log(t, "nofly_minipod", o, batch=o.batch, pos=o.drop,
+                         detail="#%d is in a no-fly zone: sent with hub %d's mini pods" % (o.id, self.vid))
+            o.kind = FACE_TO_FACE
+        return self.lmh_assign(batch, t)
+
+    def arrive(self, t):
+        if self.stops and self.stops[0].kind == LMH_STOP:
+            return self.lmh_arrive(t)
+        return Van.arrive(self, t)
+
+    def _begin(self, t, stage):
+        if stage == LMH_WORK:
+            return self.lmh_begin(t)
+        return Van._begin(self, t, stage)
+
+    def give_back(self, t, why):
+        self.lmh_give_back(t, why)
+
+    def step(self, t, dt):
+        self.lmh_tick(t, dt)
+        Van.step(self, t, dt)
+        if self.state == LMH_WORK:
+            self.lmh_work(t, dt)
+
+    def draw(self, dbg, life):
+        Van.draw(self, dbg, life)
+        self.lmh_draw(dbg, life)
+
+    def cleanup(self):
+        Van.cleanup(self)
+        self.lmh_cleanup()
+
+    def summary(self):
+        out = Van.summary(self)
+        out.update(self.lmh_summary())
+        return out
 
 
 # --- the fleet / 車隊 ---------------------------------------------------------
@@ -1521,12 +1898,16 @@ class Fleet(object):
                     "rain_hold", "rain_over",
                     "battery_swap", "drone_switch", "box_station", "pod_showcase",
                     "drone_ready", "loading", "drone_home", "landing", "drone_waiting",
-                    "drone_divert",
+                    "drone_divert", "zones", "nofly_f2f", "orders_cancelled", "reverse_out",
                     "to_charger", "ev_charging", "ev_charged", "pod_stranded", "pod_towed",
                     "yard_in", "yard_out", "side_open",
                     "orders_returned", "batch_declined", "waiting_for_charger",
                     "drone_arrived", "drone_charging", "drone_repaired", "wind",
-                    "delivered", "drone_charging_in_van", "batch_arrived")
+                    "delivered", "drone_charging_in_van", "batch_arrived",
+                    # LastMile hubs and their Mini Pods / LastMile ハブとミニポッド
+                    "pod_out", "pod_door", "pod_handover", "pod_back", "pod_docked", "pod_fault",
+                    "hub_dist", "hub_meet", "pod_stuck", "pod_recovered", "pod_rescue", "pod_range",
+                    "nofly_minipod", "hub_load")
 
     def __init__(self, args, world, vans, gen, log, sky, livew=None):
         self.args, self.world, self.vans, self.gen, self.log = args, world, vans, gen, log
@@ -1551,6 +1932,54 @@ class Fleet(object):
         self._draw_t = self._pub_t = self._weather_t = -1e9
         self._weather_wind = None
         self.rules = None        # delivery/rules.VanRules on Japan profile maps
+        # pod delivery zones and no-fly zones (the dashboard's City Map)
+        # ポッドの配送ゾーンと飛行禁止区域（ダッシュボードの地図で設定）
+        self.zones = zonelib.Zones()
+        self.cancelled = 0
+        self._zones_mtime, self._zones_t, self._hungry = None, -1e9, False
+        self.zones_poll(0.0, force=True)
+        # the Drones page: each drone's sensor readings, from the map's geo
+        # reference and budgeted raycasts / ドローンページ用のセンサー値
+        self.geo = self._georef()
+        self.suites = {}
+        self.probe = backends.SensorProbe(world)
+        self.probe.start(getattr(args, "host", "127.0.0.1"), getattr(args, "port", 2000),
+                         lambda: self.sky.drones.units)
+        self.sensor_ms = 0.0
+        self.minipod_ms = 0.0
+        self.lmh_shared = None   # LastMile hubs: router, obstacles, probe / ハブ共用
+
+    def _georef(self):
+        """The map's geo reference (CARLA's own transform_to_geolocation)."""
+        try:
+            m = self.world.get_map()
+            g = [m.transform_to_geolocation(carla.Location(x, y, 0.0))
+                 for x, y in ((0.0, 0.0), (1000.0, 0.0), (0.0, 1000.0))]
+            return drone_sensors.GeoRef(*[(a.latitude, a.longitude, a.altitude) for a in g])
+        except RuntimeError:
+            return drone_sensors.GeoRef()
+
+    def sensor_readings(self, t):
+        """Sensor readings of every drone (the live state's drones[].sensors),
+        budgeted: rays <= 1 ms, the maths ~0.1 ms per drone.
+        全機のセンサー値（レイは 1 ms 以内）。"""
+        t0 = time.perf_counter()
+        units = self.sky.drones.units
+        if not self.probe.threaded:
+            self.probe.run(units)
+        wind = self.sky.wind.vector(t)
+        st = self.sky.drones.station.location
+        rain = self.sky.drones.rain
+        out = {}
+        for u in units:
+            suite = self.suites.get(u.id)
+            if suite is None:
+                suite = self.suites[u.id] = drone_sensors.SensorSuite(u.id, self.geo)
+            snap = backends.sensor_snapshot(u, wind, self.probe, st)
+            snap["rain"] = rain
+            out[u.id] = suite.update(t, snap)
+        self.sensor_ms = (time.perf_counter() - t0) * 1000.0
+        return out
 
     def set_rules(self, rules):
         """Japanese rules for the vans (None = off, every other map).
@@ -1559,7 +1988,7 @@ class Fleet(object):
         for v in self.vans:
             v.rules = rules
             if rules is None and was is not None:
-                v.agent.set_target_speed(self.args.speed)    # undo a speed cap / 上限を解除
+                v.agent.set_target_speed(v.args.speed)       # undo a speed cap / 上限を解除
 
     def rules_step(self):
         if self.rules is None:
@@ -1578,29 +2007,202 @@ class Fleet(object):
     def batches(self):
         return sum(v.batches for v in self.vans)
 
+    # -- delivery zones / 配送ゾーン
+    def zones_poll(self, t, force=False):
+        """Pick up zones saved on the dashboard (data/delivery_zones.json),
+        checked once a second. / ダッシュボードで保存したゾーンを毎秒確認。"""
+        now = time.time()
+        if not force and now - self._zones_t < 1.0:
+            return
+        self._zones_t = now
+        try:
+            mtime = os.path.getmtime(zonelib.ZONES_PATH)
+        except OSError:
+            mtime = None
+        if not force and mtime == self._zones_mtime:
+            return
+        self._zones_mtime = mtime
+        new = zonelib.Zones(zonelib.load(self.world.get_map().name))
+        if not force and new.summary() == self.zones.summary():
+            return
+        self.zones = new
+        zonelib.set_active(new.air)
+        for v in self.vans:
+            v._plans = {}                  # re-plan altitudes round the zones / 高度を再計画
+        if force and not new.pods and not new.nofly and not new.meet and not new.dist:
+            return
+        self.log(t, "zones", detail="pod zones: %s; %d no-fly zone(s); meeting points: %s; "
+                 "distribution points: %s" % (
+                     ", ".join("pod %d" % k for k in sorted(new.pods)) or "none", len(new.nofly),
+                     ", ".join("pod %d x%d" % (k, len(p)) for k, p in sorted(new.meet.items())) or "auto",
+                     ", ".join("hub %d x%d" % (k, len(p)) for k, p in sorted(new.dist.items())) or "auto"))
+        self._cancel_orphans(t)
+
+    def _vids(self):
+        return [v.vid for v in self.vans]
+
+    # -- who may take what (pod zones, no-fly zones, LastMile hubs) / 担当の判定
+    # An LMH hub without a pod zone of its own has the no-fly zones as its
+    # area by default (its Mini Pods drive; nothing flies), while any are
+    # drawn; a hub with a user zone uses that zone like an LMP pod. No-fly
+    # orders no hub covers stay face to face by the drone pod (old way).
+    # ゾーンの無い LastMile ハブは既定で飛行禁止区域が担当（ポッドは地上走行）。
+    def _lmh_vids(self):
+        return {v.vid for v in self.vans if getattr(v, "lmh", False)}
+
+    def nofly(self, p):
+        """Is p inside a no-fly zone (no margin)? / 飛行禁止区域の中か。"""
+        air = self.zones.air
+        return bool(air) and air.blocked(p, 0.0)
+
+    def _default_hubs(self):
+        """LMH hubs whose area is the no-fly zones (no user zone, zones drawn)."""
+        if not self.zones.nofly:
+            return set()
+        return {v for v in self._lmh_vids() if self.zones.zone_of(v) is None}
+
+    def area_of(self, vid):
+        """'zone' (user's pod zone), 'nofly' (an LMH hub's default) or 'any'."""
+        if self.zones.zone_of(vid) is not None:
+            return "zone"
+        return "nofly" if vid in self._default_hubs() else "any"
+
+    def _nofly_batch(self, batch):
+        return bool(batch) and all(self.nofly(o.drop) for o in batch)
+
+    def _home(self, batch):
+        """The pod whose zone holds most of ``batch`` (None: outside them all)."""
+        vids = self._vids()
+        owners = collections.Counter(self.zones.owner(o.drop, vids) for o in batch)
+        return owners.most_common(1)[0][0] if owners else None
+
+    def _region(self, batch):
+        """The area a batch belongs to: a vid (user zone), "nofly" (the default
+        hubs) or None (outside every zone). / バッチの区域。"""
+        home = self._home(batch)
+        if self._nofly_batch(batch) and self._default_hubs():
+            return home if home in self._lmh_vids() else "nofly"
+        return home
+
+    def _servable(self, batch):
+        return any(self._can(batch, v) for v in self._vids())
+
+    def _can(self, batch, vid):
+        """May pod ``vid`` take ``batch``? Only its own zone's orders, and the
+        pods without a zone take the rest; no-fly orders go to an LMH hub
+        (one whose zone holds them first, else a default hub).
+        自分のゾーンの注文だけ担当。飛行禁止区域の注文は LastMile ハブへ。"""
+        vids = self._vids()
+        hubs, default = self._lmh_vids(), self._default_hubs()
+        if self._nofly_batch(batch) and hubs:
+            home = self._home(batch)
+            if home in hubs:
+                return vid == home
+            if default:
+                return vid in default
+        if vid in default:
+            return False                 # default hubs only serve the no-fly zones
+        if not any(self.zones.zone_of(v) for v in vids) and not default:
+            return True
+        home = self._home(batch)
+        if home is not None:
+            return vid == home
+        return self.zones.zone_of(vid) is None
+
+    def _split_nofly(self, batch):
+        """[batch] or [no-fly part, rest] when an LMH hub can take the no-fly
+        orders. / 飛行禁止区域の注文を分けてハブへ。"""
+        if not self._lmh_vids() or not self.zones.nofly:
+            return [batch]
+        nf = [o for o in batch if self.nofly(o.drop)]
+        if not nf or len(nf) == len(batch):
+            return [batch]
+        if not any(self._can(nf, v) for v in self._lmh_vids()):
+            return [batch]
+        return [nf, [o for o in batch if not self.nofly(o.drop)]]
+
+    def _cancel_orphans(self, t):
+        """Queued orders no pod may take any more (every pod has a zone and
+        they are outside all of them): cancelled. / 担当できない注文を取消。"""
+        keep = []
+        for b in self.dispatcher.queue:
+            if self._servable(b):
+                keep.append(b)
+                continue
+            for o in b:
+                self.gen.release(o)
+            self.cancelled += len(b)
+            self.log(t, "orders_cancelled", batch=b[0].batch,
+                     detail="#%s: outside every pod zone" % ",".join(str(o.id) for o in b))
+        self.dispatcher.queue = keep
+
+    def _set_area(self, t, ready):
+        """Where the next batch is made: the zone of a pod that is free and has
+        nothing queued first, else any zone (pods without a zone count as one
+        area, outside every zone; default LMH hubs as the no-fly area).
+        次のバッチを作る区域（空いたポッドを優先）。"""
+        g, z = self.gen, self.zones
+        nofly = (lambda p: z.air.blocked(p, 0.0)) if z.air else None
+        g.no_drone = (lambda p: z.air.blocked(p)) if z.air else None
+        vids = self._vids()
+        default = self._default_hubs()
+        zoned = [v for v in vids if z.zone_of(v)]
+        self._hungry = False
+        if not zoned and not default:
+            g.area = g.area_key = None
+            return
+        unzoned = [v for v in vids if v not in zoned and v not in default]
+        regions = zoned + (["nofly"] if default else []) + ([None] if unzoned else [])
+        queued = collections.Counter(self._region(b) for b in self.dispatcher.queue)
+        idle = {v.vid for v in ready}
+        members = lambda r: (default if r == "nofly" else unzoned if r is None else [r])
+        hungry = [r for r in regions if not queued[r] and any(u in idle for u in members(r))]
+        self._hungry = bool(hungry)
+        pool = hungry or regions
+        r = self.rng.choices(pool, [len(unzoned) if r is None else 1 for r in pool])[0]
+        g.area_key = r
+        if r == "nofly":
+            # ground orders for the hubs: drone kinds allowed (pods deliver them)
+            # ハブ向けの地上注文（ドローン種別でもポッドが配達）
+            g.no_drone = None
+            g.area = nofly
+        elif r is None and default:
+            g.area = (lambda p: z.owner(p, vids) is None and not nofly(p))
+        else:
+            g.area = (lambda p, r=r: z.owner(p, vids) == r)
+
     def step(self, t, dt):
         self.commands(t)
+        self.zones_poll(t)
         if getattr(self, "boxes", None) is not None:
             self.boxes.step(t, dt)                 # customers collecting parcels / 受取客
+        if getattr(self.sky, "walker_guard", None) is not None:
+            self.sky.walker_guard.step(t)           # walkers round the charging stations / 歩行者の迂回
         self.sky.wind.step(t, dt)
         wind = self.sky.wind.vector(t)
+        lmh = getattr(self, "lmh_shared", None)
+        if lmh is not None:                       # walkers / cars near the pods / ポッド周辺
+            lmh["obstacles"].refresh(t, [p.pos for v in self.vans if getattr(v, "lmh", False)
+                                         for p in v.crew.pods if p.out()])
         ready = [v for v in self.vans
-                 if v.state == IDLE and v.energy.level >= v.pem.low]
-        if ready and not self.dispatcher.queue:
+                 if v.state == IDLE and v.energy.level >= v.pem.low and not v.charge_asap]
+        self._set_area(t, ready)
+        if ready and not any(self._can(b, v.vid) for b in self.dispatcher.queue for v in ready):
             # a van with nothing to do: the next batch comes within seconds
             # 仕事の無い車がいれば、次のバッチを数秒以内に
             self.gen.prompt(t, self.rng.uniform(2.0, 6.0))
-        if len(self.dispatcher.queue) < self.backlog:
+        if len(self.dispatcher.queue) < self.backlog or self._hungry:
             batch = self.gen.poll(t)
             if batch:
                 self.log(t, "batch_arrived", batch=batch[0].batch,
                          detail="%d orders" % len(batch))
                 for o in batch:
                     self.log(t, "order", o, pos=o.drop, detail=o.building.name)
-                self.dispatcher.add(batch)
+                for part in self._split_nofly(batch):
+                    self.dispatcher.add(part)
         free = [(v.vid, v.car_pos()) for v in ready]
         by_id = {v.vid: v for v in self.vans}
-        for vid, b in self.dispatcher.assign(free):
+        for vid, b in self.dispatcher.assign(free, can=self._can):
             self.log(t, "dispatch", batch=b[0].batch, van=vid,
                      detail="orders %s" % [o.id for o in b])
             if not by_id[vid].assign(b, t):
@@ -1646,6 +2248,13 @@ class Fleet(object):
                 self.log(t, "wind", detail="random gusts: %.1f per minute" % w.gust_rate)
             elif cmd in ("shell", "pod_takeover", "pod_release", "pod_time", "pod_play"):
                 self.pod_command(t, c)
+            elif cmd == "charge":
+                # send a vehicle to charge (when it is free) / 充電へ向かわせる
+                v = next((v for v in self.vans if v.vid == int(c.get("van", -1))), None)
+                if v is not None:
+                    v.charge_asap = True
+                    self.log(t, "charge_request", pos=v.car_pos(),
+                             detail="van %d sent to charge from the dashboard (at %.0f%%)" % (v.vid, v.energy.level))
             elif cmd == "tooltips":
                 backends.OVERLAYS["on"] = bool(c.get("on"))
                 self.log(t, "view", detail="tooltips %s" % ("on" if backends.OVERLAYS["on"] else "off"))
@@ -1738,6 +2347,8 @@ class Fleet(object):
         dbg.draw_string(carla.Location(c[0], c[1], c[2] + 3.0), "CHARGE STATION",
                         color=COLOR["station"], life_time=life)
         for i, p in enumerate(self.sky.chargers.spots):
+            if i in getattr(self.sky, "station_bays", {}):
+                continue                        # a charging station: its model is there / モデルあり
             who = self.sky.chargers.taken.get(i)
             dbg.draw_box(carla.BoundingBox(loc(p), carla.Vector3D(2.6, 1.3, 0.03)),
                          carla.Rotation(yaw=self.sky.charger_yaw[i]), thickness=0.03,
@@ -1763,6 +2374,11 @@ class Fleet(object):
         self._pub_t = t
         r1 = lambda v: round(v, 1)
         drones = []
+        try:
+            sensors = self.sensor_readings(t)
+        except Exception as e:      # never stop the sim for the dashboard / 表示用で止めない
+            print("[delivery] drone sensors: %s" % e, file=sys.stderr)
+            sensors = {}
         for u in self.sky.drones.units:
             p = u.world_pos()
             drones.append({"id": u.id, "status": u.status, "note": u.note,
@@ -1775,7 +2391,9 @@ class Fleet(object):
                            # for drone_viewer.py: the body to hang a camera on
                            # drone_viewer.py 用：カメラを付ける機体
                            "actor": u.body.id if u.body is not None else None,
-                           "phase": getattr(u.flight, "state", None) if u.flight else None})
+                           "phase": getattr(u.flight, "state", None) if u.flight else None,
+                           "km": round(u.km, 2), "air_s": round(getattr(u, "air_s", 0.0)),
+                           "sensors": sensors.get(u.id)})
         vans, hubs, orders = [], [], []
         for v in self.vans:
             tf = v.car.get_transform()
@@ -1787,7 +2405,10 @@ class Fleet(object):
                          "drone": v.drone.id if v.drone else None,
                          "incoming": v.incoming.id if v.incoming else None,
                          "pending": len(v.pending), "delivered": len(v.delivered),
-                         "failed": len(v.failed)})
+                         "failed": len(v.failed), "zone": self.zones.zone_of(v.vid) is not None,
+                         "kind": "lmh" if getattr(v, "lmh", False) else "lmp"})
+            if getattr(v, "lmh", False):
+                vans[-1].update(v.lmh_van_state(), area=self.area_of(v.vid))
             for s in v.stops:
                 if s.kind == DRONE:
                     hubs.append({"van": v.vid, "x": r1(s.location[0]), "y": r1(s.location[1])})
@@ -1795,16 +2416,25 @@ class Fleet(object):
                 status = ("in_flight" if o is v.current or o in getattr(v, "in_air", {}).values()
                           else "assigned")
                 orders.append({"id": o.id, "kind": o.kind, "x": r1(o.drop[0]),
-                               "y": r1(o.drop[1]), "status": status, "van": v.vid})
+                               "y": r1(o.drop[1]), "status": status, "van": v.vid, "zone": o.zone})
         for o in self.dispatcher.orders:
             orders.append({"id": o.id, "kind": o.kind, "x": r1(o.drop[0]), "y": r1(o.drop[1]),
-                           "status": "queued", "van": None})
+                           "status": "queued", "van": None, "zone": o.zone})
         done = sorted([o for v in self.vans for o in v.delivered + v.failed],
                       key=lambda o: o.failed_t or o.delivered_t or 0.0)[-40:]
         for o in done:
             orders.append({"id": o.id, "kind": o.kind, "x": r1(o.drop[0]), "y": r1(o.drop[1]),
                            "status": "failed" if o.fail_reason else "delivered",
                            "van": o.van, "reason": o.fail_reason})
+        t1 = time.perf_counter()
+        minipods = []
+        for v in self.vans:
+            if getattr(v, "lmh", False):
+                try:
+                    minipods += v.lmh_pod_states(t)
+                except Exception as e:      # never stop the sim for the dashboard / 表示用で止めない
+                    print("[delivery] minipod state: %s" % e, file=sys.stderr)
+        self.minipod_ms = (time.perf_counter() - t1) * 1000.0
         mine = {v.car.id for v in self.vans}
         cars = [[r1(a.get_transform().location.x), r1(a.get_transform().location.y),
                  r1(a.get_transform().rotation.yaw)]
@@ -1819,14 +2449,17 @@ class Fleet(object):
                          hold=self.sky.drones.wind_hold, drone_max=self.args.drone_max_wind,
                          rain=r1(self.sky.drones.rain), raining=self.sky.drones.raining,
                          rain_ground=self.sky.drones.rain_ground),
-            "drones": drones, "vans": vans, "hubs": hubs,
+            "drones": drones, "vans": vans, "hubs": hubs, "minipods": minipods,
+            "minipod_ms": round(self.minipod_ms, 2),
             "orders": orders, "cars": cars, "events": events,
             "station": {"pads": [[r1(p[0]), r1(p[1])] for p in st.pads],
                         "x": r1(st.location[0]), "y": r1(st.location[1])},
             "chargers": [{"x": r1(p[0]), "y": r1(p[1]), "van": self.sky.chargers.taken.get(i)}
                          for i, p in enumerate(self.sky.chargers.spots)],
-            "stats": self.stats(t), "pod": self.pod_state(),
-            "tooltips": backends.OVERLAYS["on"]})
+            "stations": self.station_state(t), "station_errors": list(getattr(self.sky, "station_errors", [])),
+            "stats": self.stats(t), "pod": self.pod_state(), "zones": self.zones.summary(),
+            "tooltips": backends.OVERLAYS["on"],
+            "geo": self.geo.to_dict(), "sensor_ms": round(self.sensor_ms, 2)})
 
     def pod_state(self):
         """The dashboard's pod panels: shell mode, LastMile pods, the showcase and its steps."""
@@ -1850,6 +2483,78 @@ class Fleet(object):
         return {"shell": self.shell_mode, "vans": lmp_vans, "showcase": show,
                 "total": lmp_rig.COMBINED_TOTAL, "steps": steps, "msg": self.pod_msg}
 
+    def station_state(self, t):
+        """The charging stations for the dashboard: footprint, bays, who is in
+        each bay and doing what. / ダッシュボード用の充電ステーション状態。"""
+        st = getattr(self.sky, "stations", None)
+        if st is None or not st.sites:
+            return []
+        r1 = lambda v: round(v, 1)
+        by_vid = {v.vid: v for v in self.vans}
+        phase_of = {YARD_IN: "in", YARD_OUT: "out", JACKS_DOWN: "in", JACKS_UP: "unplugging"}
+        out, idx = [], {}
+        for i, b in self.sky.station_bays.items():
+            if b.get("kind") == "station":                # not the waiting bays / 待機ベイは除く
+                idx[(b["station"], b["bay_kind"])] = i
+        for s in st.sites:
+            bays = []
+            for kind, b in sorted(s["bays"].items()):
+                i = idx.get((s["id"], kind))
+                vid = self.sky.chargers.taken.get(i) if i is not None else None
+                v = by_vid.get(vid)
+                phase = "free"
+                if v is not None:
+                    if v.state == EV_CHARGING:
+                        u = s["plug_u"].get(kind, 0.0)
+                        phase = "unplugging" if v._unplug_t is not None else ("charging" if u >= 1.0 else "plugging")
+                    else:
+                        phase = phase_of.get(v.state, "in")
+                inbay = v is not None and phase != "free"
+                bays.append({"kind": kind, "x": r1(b["bay"][0]), "y": r1(b["bay"][1]), "yaw": r1(b["bay_yaw"]),
+                             "van": vid, "phase": phase,
+                             "level": r1(v.energy.level) if inbay else None,
+                             "kw": r1(v.charge_kw) if inbay and v.state == EV_CHARGING else None,
+                             "energy_kwh": round(v.charge_kwh, 2) if inbay and v.state == EV_CHARGING else None})
+            # who waits for this station, and its waiting bay / 待機中の車両と待機ベイ
+            queue, qv = [], (getattr(self.sky, "queue_slot", {}) or {}).get(s["id"])
+            for v in self.vans:
+                if isinstance(v.yard_bay, tuple) and v.yard_bay[1] == s["id"] and v._queue_t is not None:
+                    queue.append({"van": v.vid, "kind": v.CHARGE_KIND, "wait_s": r1(t - v._queue_t)})
+            q = s.get("queue")
+            pads = []
+            for v in self.vans:
+                vs = v.lmh_van_state() if hasattr(v, "lmh_van_state") else {}
+                if vs.get("station") == s["id"] and vs.get("pads"):
+                    pads = vs["pads"]
+            out.append({"id": s["id"], "x": r1(s["centre"][0]), "y": r1(s["centre"][1]), "yaw": r1(s["frame"].yaw),
+                        "source": s.get("source", "random"),
+                        "corners": [[r1(x), r1(y)] for x, y in s["corners"]], "bays": bays,
+                        "energy_kwh": round((getattr(self.sky, "station_kwh", {}) or {}).get(s["id"], 0.0), 2),
+                        "queue": queue,
+                        "queue_spot": ({"x": r1(q["bay"][0]), "y": r1(q["bay"][1]), "yaw": r1(q["bay_yaw"]), "van": qv}
+                                       if q else None),
+                        "pads": pads or [{"pod": None, "level": None, "phase": "free"} for _ in range(3)],
+                        "deck": self._deck_state(s["id"]),
+                        "ring": [[r1(x), r1(y)] for x, y in s.get("ring", [])]})
+        return out
+
+    def _deck_state(self, sid):
+        """The station's 3 drone-deck pads: which drone, its battery, plug phase."""
+        st, ds = self.sky.drones.station, []
+        if not hasattr(st, "pad_owner"):
+            return [{"drone": None, "level": None, "phase": "free"} for _ in range(3)]
+        units = {u.id: u for u in self.sky.drones.units}
+        for i in range(len(st.pads)):
+            own = st.pad_owner(i)
+            if own is None or own[0] != sid:
+                continue
+            uid = st.taken.get(i)
+            u = units.get(uid)
+            plug = self.sky.stations.sites[sid - 1].get("deck_u", {}).get(own[1], 0.0)
+            phase = "free" if u is None else ("charging" if plug >= 0.999 else ("plugging" if plug > 0 else "in"))
+            ds.append({"drone": uid, "level": round(u.battery.level, 1) if u is not None else None, "phase": phase})
+        return ds
+
     def stats(self, t):
         delivered = [o for v in self.vans for o in v.delivered]
         failed = [o for v in self.vans for o in v.failed]
@@ -1862,6 +2567,7 @@ class Fleet(object):
                 "delivered_drone": sum(o.kind == DRONE for o in delivered),
                 "delivered_face_to_face": sum(o.kind == FACE_TO_FACE for o in delivered),
                 "queued": len(self.dispatcher.orders),
+                "cancelled_outside_zones": self.cancelled,
                 "busy_vans": sum(v.state != IDLE for v in self.vans),
                 "ev_charges": sum(v.ev_charges for v in self.vans),
                 "pod_km": round(sum(v.pod_km for v in self.vans), 2),
@@ -2090,6 +2796,48 @@ def find_addresses(wmap, spacing=40.0, grid=25.0):
     return out
 
 
+def setup_stations(world, client, wmap, buildings, reachable, args, rng, cars=()):
+    """The LastMile charging stations: the spots picked on the dashboard map
+    (manual) or ``--charge-stations`` placed by the sim (random), each checked
+    for free ground (charge_sites.Finder), spawned. Returns (Stations or None,
+    [{"x", "y", "why"}] for the picked spots that could not be used).
+    充電ステーションの配置（手動の地点、またはランダム）と生成。"""
+    if not world.get_blueprint_library().filter(charge_sites.STATION_BP):
+        print("  charging stations: %s is not installed (delivery/assets/build_lastmilehub.sh "
+              "--install); road-side chargers instead / 充電ステーション未導入" % charge_sites.STATION_BP,
+              flush=True)
+        return None, []
+    # every LastMile vehicle in the sim must be able to drive in, turn and fit
+    # 全ての LastMile 車両が入れること（車幅・旋回・屋根の高さ）
+    vehicles = []
+    for kind, car in cars:
+        bb = car.bounding_box
+        vehicles.append({"kind": kind, "half_w": bb.extent.y, "half_l": bb.extent.x,
+                         "height": bb.location.z + bb.extent.z})
+    finder = charge_sites.Finder(world, wmap, buildings, reachable=reachable, keep_left=keep_left_map(wmap),
+                                 vehicles=vehicles)
+    if finder.unfit:
+        print("  charging stations: %s / 充電ステーションに入れない車両" % finder.unfit, flush=True)
+    sites, sources, errors = [], [], []
+    if args.charge_mode == "manual":
+        for p in zonelib.load(zonelib.map_key(wmap.name)).get("charge", []):
+            site, why = finder.at(p["x"], p["y"], p.get("yaw"), taken=[q["centre"] for q in sites])
+            if site is not None:
+                sites.append(site)
+                sources.append("manual")
+            else:
+                errors.append({"x": p["x"], "y": p["y"], "why": why})
+                print("  charging station at (%.0f, %.0f) left out: %s / 設置不可" % (p["x"], p["y"], why),
+                      flush=True)
+    else:
+        sites = finder.random(max(args.charge_stations, 0), rng)
+        sources = ["random"] * len(sites)
+        if len(sites) < args.charge_stations:
+            print("  charging stations: only %d of %d fit on free ground beside the roads / 空き地不足"
+                  % (len(sites), args.charge_stations), flush=True)
+    return charge_sites.Stations(world, client, sites, sources), errors
+
+
 def spawn_vans(world, wmap, rng, n, min_sep=40.0, pod=False, lmp=False):
     """n delivery vans at spawn points at least ``min_sep`` apart (if possible).
 
@@ -2254,8 +3002,9 @@ def parse_args(argv=None):
                    help="pod battery used per km driven, %% / 走行 1 km あたりの消費 [%%]")
     p.add_argument("--pod-idle-drain", type=float, default=0.02,
                    help="pod systems (computer, sensors, climate), %%/s / 車載システムの消費 [%%/s]")
-    p.add_argument("--pod-charge-rate", type=float, default=1.0,
-                   help="charging at an EV charger, %%/s / EV 充電器での充電 [%%/s]")
+    p.add_argument("--pod-charge-rate", type=float, default=0.0,
+                   help="fixed charging rate at an EV charger, %%/s (0 = from the charger power and the "
+                        "pack size: --station-kw / --roadside-kw, --lmp-kwh / --hub-kwh) / 固定充電速度 [%%/s]")
     p.add_argument("--pod-low", type=float, default=30.0,
                    help="an idle pod below this goes to charge, %% / これ未満で充電へ [%%]")
     p.add_argument("--pod-critical", type=float, default=8.0,
@@ -2271,6 +3020,21 @@ def parse_args(argv=None):
     p.add_argument("--no-ev-yard", action="store_true",
                    help="charge pods at road-side chargers even where the map has an "
                         "off-road charging yard (Town05's courtyard) / 路側充電器を使う")
+    p.add_argument("--charge-stations", type=int, default=0,
+                   help="LastMile charging stations (the web viewer's charge dock) on free ground "
+                        "beside the roads; they replace the road-side chargers (random mode) / "
+                        "充電ステーションの数")
+    p.add_argument("--station-kw", type=float, default=50.0,
+                   help="charging-station bay power (DC, the web viewer's 50 kW cabinet) / ステーションの電力")
+    p.add_argument("--roadside-kw", type=float, default=22.0,
+                   help="road-side / yard charger power (AC) / 路側充電器の電力")
+    p.add_argument("--lmp-kwh", type=float, default=0.0,
+                   help="LMP-4 traction battery (0 = --pod-kwh) / LMP-4 の電池容量")
+    p.add_argument("--hub-kwh", type=float, default=10.0, help="LastMile Hub traction battery / ハブの電池容量")
+    p.add_argument("--pad-kw", type=float, default=3.0, help="Mini Pod pad charger at a station / パッドの電力")
+    p.add_argument("--charge-mode", choices=("random", "manual"), default="random",
+                   help="random: the sim places --charge-stations itself; manual: the spots "
+                        "picked on the dashboard map (delivery_zones.json charge) / 配置方法")
     p.add_argument("--pod-recover-s", type=float, default=120.0,
                    help="a pod that ran flat is towed to a charger after this / "
                         "電池切れのポッドが牽引されるまで [s]")
@@ -2355,11 +3119,30 @@ def parse_args(argv=None):
                    help="start with the camera locked on this van; 0 = don't / "
                         "起動時にカメラを固定する車（0 = 固定しない）")
     p.add_argument("--no-log", action="store_true")
+    # LastMile hubs with Mini Pods / LastMile ハブとミニポッド
+    p.add_argument("--lmh", type=int, default=0,
+                   help="LastMile hubs (LMH-3) that deliver with 3 Mini Pods each, ids after the "
+                        "drone pods' / ミニポッドで配達する LastMile ハブの台数")
+    p.add_argument("--lmh-speed", type=float, default=25.0,
+                   help="hub speed cap, km/h (it runs on the Prius drivetrain) / ハブの速度上限")
+    p.add_argument("--minipod-speed", type=float, default=1.6, help="m/s (Japan: <= 6 km/h)")
+    p.add_argument("--minipod-range", type=float, default=1500.0,
+                   help="metres per pod trip, out and back / 1 往復の距離上限")
+    p.add_argument("--minipod-kwh", type=float, default=1.0, help="pod pack / ポッドの電池")
+    p.add_argument("--minipod-drain-km", type=float, default=5.0, help="%% of the pack per km")
+    p.add_argument("--minipod-inset", type=float, default=0.4,
+                   help="pod path: metres inside the kerb-side lane edge / 車線端からの距離")
+    p.add_argument("--minipod-fail-rate", type=float, default=0.3,
+                   help="random pod faults (motor, lidar, collision) per hour of driving")
+    p.add_argument("--minipod-recover-s", type=float, default=90.0,
+                   help="a crashed pod is brought back to its bay after this")
+    p.add_argument("--minipod-fail-timeout", type=float, default=120.0,
+                   help="a crashed pod's order fails if no pod takes it over within this")
     a = p.parse_args(argv)
     if not 1 <= a.min_orders <= a.max_orders:
         p.error("need 1 <= --min-orders <= --max-orders")
-    if a.vans < 1:
-        p.error("need --vans >= 1")
+    if a.vans < 0 or a.lmh < 0 or a.vans + a.lmh < 1:
+        p.error("need --vans >= 1 or --lmh >= 1")
     if a.drone == "airsim":
         p.error("the airsim backend has no battery / charge-station model yet; "
                 "use the default kinematic drone / airsim は未対応")
@@ -2373,7 +3156,7 @@ def parse_args(argv=None):
     # BasicAgent の PID は 20 Hz 前提。非同期ではフレーム落ちで操舵が過大になり
     # 道路を外れるため同期を既定とする。passive では他者が 20 Hz で進める。
     a.sync = a.drone == "kinematic" and not a.async_ and not a.passive
-    a.follow_van = min(max(a.follow_van, 0), a.vans)
+    a.follow_van = min(max(a.follow_van, 0), a.vans + a.lmh)
     return a
 
 
@@ -2445,7 +3228,9 @@ def main(argv=None):
         stale = [a for a in world.get_actors().filter("vehicle.*")
                  if a.attributes.get("role_name") == "delivery"]
         props = [a for a in world.get_actors().filter("static.prop.*")
-                 if a.type_id in podlib.ALL_PROPS + lmp_pod.ALL_PROPS]
+                 if a.type_id in podlib.ALL_PROPS + lmp_pod.ALL_PROPS
+                 or a.type_id.startswith("static.prop.lmh")
+                 or a.attributes.get("role_name") in (lmh_hub.ROLE_POD, lmh_hub.ROLE_PARCEL)]
         for a in props + stale:
             a.destroy()
         if stale:
@@ -2506,22 +3291,35 @@ def main(argv=None):
     # 経路がマップ原点から引かれ、車が建物に突っ込む
     wait_tick(world, args.sync)
     pods = [None] * len(cars)
-    if use_pod:
+    # LastMile hubs: spawned once the vans have a real position (one tick)
+    # LastMile ハブ（配送車の位置が確定してから）
+    lmh_cars, lmh_bp, lmh_real = [], None, False
+    if args.lmh:
+        lmh_cars, lmh_bp, lmh_real = lmh_hub.spawn_hub_cars(
+            world, wmap, rng, args.lmh, avoid=[c.get_location() for c in cars])
+        actors += lmh_cars
+        wait_tick(world, args.sync)
+        print("  LastMile hubs: %d x %s%s / LastMile ハブ" % (
+            len(lmh_cars), lmh_bp, "" if lmh_real else
+            " (LMH-3 not imported yet: the LMP-4 vehicle stands in, Mini Pods are %s boxes)"
+            % lmh_hub.FALLBACK_POD_BP), flush=True)
+    if (use_pod and cars) or lmh_cars:
         # let the cars land first: they spawn in the air, and a carrier car is
         # measured from its wheels / 着地を待つ（車は空中にスポーンする）
         for _ in range(30):
             wait_tick(world, args.sync)
-        if use_lmp:
+        if use_lmp and cars:
             pods = [lmp_pod.LastMilePod(world, client, car) for car in cars]
             print("  vans: the LastMile pod %s: %d moving parts each, 4 drones on deck, "
                   "box-station side port; animations from LastMile_Pod_3D.html at x%.1f "
                   "/ LastMile ポッド" % (lmp_pod.VEHICLE, len(pods[0].parts), args.lmp_speed),
                   flush=True)
-        else:
+        elif use_pod and cars:
             pods = [podlib.Pod(world, client, car) for car in cars]
         for p in pods:
-            actors[:0] = p.actors       # destroyed before its car / 車より先に削除
-        if not use_lmp:
+            if p is not None:
+                actors[:0] = p.actors   # destroyed before its car / 車より先に削除
+        if use_pod and cars and not use_lmp:
             print("  vans: %s (jacks, roof hatch%s) / 配送ポッド" % (
                 "the delivery pod vehicle, %s" % podlib.POD_VEHICLE if pods[0].standalone else
                 "delivery pod on a hidden %s" % podlib.CARRIER,
@@ -2547,7 +3345,8 @@ def main(argv=None):
               % len(obstacles), flush=True)
         sky = types.SimpleNamespace()
         sky.check = SkyCheck(world, obstacles, make_surface_fn(world), args)
-        open_hubs = [h for h in hubs if sky.check.open_sky(h)]
+        lmh_hubs = list(hubs)           # the hubs drive in: no open sky needed / ハブは空不要
+        open_hubs = [h for h in hubs if sky.check.open_sky(h)] if cars else list(hubs)
         print("  %d of %d hub candidates have open sky for the drone / "
               "上空が開けた停車候補" % (len(open_hubs), len(hubs)), flush=True)
         hubs = open_hubs or hubs
@@ -2570,7 +3369,40 @@ def main(argv=None):
             raise SystemExit("no clear sidewalk for the charge station / 充電所の場所が無い")
         sky.yard = None if args.no_ev_yard else yardlib.yard_for(wmap.name)
         sky.yard_lane = None            # the pod moving in the yard right now
-        if sky.yard:
+        sky.yard_lanes = {}             # yard / station -> the vehicle moving there
+        sky.stations, sky.station_bays, sky.station_errors = None, {}, []
+        if args.charge_stations > 0 or args.charge_mode == "manual":
+            sky.stations, sky.station_errors = setup_stations(world, client, wmap, map_buildings(world), can_reach,
+                                                              args, random.Random(args.seed + 31),
+                                                              [("lmp", c) for c in cars] + [("lmh", c) for c in lmh_cars])
+        if sky.stations is not None and sky.stations.sites:
+            # each station: bay 03 for an LMP-4 pod, bay 04 for a hub / ベイ 03・04
+            spots, kinds = [], []
+            for st in sky.stations.sites:
+                for kind, b in sorted(st["bays"].items()):
+                    sky.station_bays[len(spots)] = dict(
+                        b, kind="station", bay_kind=kind, station=st["id"], z=st["frame"].z,
+                        name="charging station %d bay %s" % (st["id"], "03" if kind == "lmp" else "04"))
+                    spots.append((b["bay"][0], b["bay"][1], st["frame"].z))
+                    kinds.append(kind)
+            sky.chargers = EvChargers(spots, kinds)
+            sky.charger_yaw = [sky.station_bays[i]["bay_yaw"] for i in range(len(spots))]
+            sky.yard = None
+            sky.queue_slot = {}
+            for st in sky.stations.sites:          # waiting bays off the lane / 車線外の待機ベイ
+                if st.get("queue"):
+                    sky.station_bays[("q", st["id"])] = dict(st["queue"], kind="queue", station=st["id"],
+                                                             z=st["frame"].z,
+                                                             name="charging station %d waiting bay" % st["id"])
+                    sky.queue_slot[st["id"]] = None
+            sky.stations.turn_r = 2.8
+            # drones charge on the stations' decks (sidewalk pads as overflow) / ドローンはデッキで充電
+            station = DeckStation(sky.stations, extra=station.pads)
+            sky.walker_guard = charge_sites.WalkerGuard(world, sky.stations)   # round, not through / 迂回
+            print("  %d LastMile charging stations (%s): bay 03 for the LMP-4 pods, bay 04 for the hubs "
+                  "/ 充電ステーション %d 基" % (len(sky.stations.sites), args.charge_mode,
+                                            len(sky.stations.sites)), flush=True)
+        elif sky.yard:
             bays = [(x, y, 0.15) for x, y in sky.yard["bays"]]
             sky.chargers = EvChargers(bays)
             sky.charger_yaw = [0.0] * len(bays)
@@ -2596,7 +3428,7 @@ def main(argv=None):
                                 pod_draw=sky.pem.drone_ratio, rain_ground=args.rain_ground)
         print("  %d drones (%d in vans + %d standby): %s"
               % (n_units, per_van * len(cars), n_units - per_van * len(cars),
-                 units[0].blueprint_id))
+                 units[0].blueprint_id if units else "-"))
         print("  charge station: %d pads at (%.0f, %.0f) / 充電ステーション"
               % ((len(station.pads),) + station.location[:2]), flush=True)
         print("  wind: %.1f m/s towards %.0f deg, %.1f random gusts/min up to %.0f m/s; "
@@ -2613,10 +3445,18 @@ def main(argv=None):
         # LastMile box stations in the world (keep-left maps: the side port is
         # on the pod's left, facing the kerb) / 世界の箱型ステーション（左側通行）
         box_targets = []
-        if use_lmp and keep_left_map(wmap) and not args.no_box_stations:
+        if (use_lmp or lmh_cars) and keep_left_map(wmap) and not args.no_box_stations:
+            # parcel lockers (LastMile Hub props installed): Mini Pods use the low
+            # robot port, LMP-4 pods the upper one / 宅配ロッカー（下段ミニポッド・上段 LMP-4）
+            use_lockers = bool(world.get_blueprint_library().filter(boxes.LOCKER_BP))
             sites = boxes.find_box_sites(world, wmap, random.Random(args.seed), spacing=args.box_spacing,
-                                         planner=grp)
-            boxmgr = boxes.BoxStations(world, client, sites, random.Random(args.seed))
+                                         planner=grp, lockers=use_lockers)
+            if sky.stations is not None and sky.stations.sites:
+                # the props carry no collision, so the box search cannot see the stations
+                # ステーションには衝突が無いため距離で除外
+                sites = [b for b in sites if all(math.hypot(b.loc[0] - st["centre"][0], b.loc[1] - st["centre"][1])
+                                                 > 14.0 for st in sky.stations.sites)]
+            boxmgr = boxes.BoxStations(world, client, sites, random.Random(args.seed), lockers=use_lockers)
             box_targets = [Building(100000 + s.id, "box station %d" % s.id, s.loc, s.park, box=s.id)
                            for s in sites if s.id in boxmgr.boxes]
             print("  %d LastMile box stations on the pavements; face-to-face orders go to them "
@@ -2625,18 +3465,43 @@ def main(argv=None):
             buildings, random.Random(args.seed), min_gap=args.min_gap,
             max_gap=args.max_gap, min_batch=args.min_orders, max_batch=args.max_orders,
             drone_prob=args.drone_prob, drone_radius=args.drone_radius,
-            fleet_size=len(cars), boxes=box_targets)
+            fleet_size=len(cars) + len(lmh_cars), boxes=box_targets)
         vans = [Van(i + 1, args, world, car, hubs, grp, log, obstacles, gen, sky,
                     pod=pod) for i, (car, pod) in enumerate(zip(cars, pods))]
+        sky.drones.start(vans)          # drones only for the drone pods / ドローンはポッドのみ
+        lmh_shared = None
+        if lmh_cars:
+            left = keep_left_map(wmap)
+            lmh_shared = {"keep_left": left,
+                          "router": lmh_hub.KerbRouter(wmap, left, inset=args.minipod_inset),
+                          "obstacles": lmh_hub.ObstacleCache(world, exclude=[c.id for c in cars + lmh_cars]),
+                          "probe": lmh_hub.MiniPodProbe()}
+            lmh_vans = [LmhVan(len(cars) + k + 1, args, world, car, lmh_hubs, grp, log, obstacles, gen, sky,
+                               client, 100 + 3 * k, lmh_shared, lmh_real)
+                        for k, car in enumerate(lmh_cars)]
+            vans += lmh_vans
+            lmh_shared["probe"].start(args.host, args.port,
+                                      lambda: [p for v in lmh_vans for p in v.crew.pods])
+            print("  LastMile hubs %s: 3 Mini Pods each (P%d..P%d), kerb-side paths %s, %.1f m/s, "
+                  "%.0f m per trip / ミニポッド" % (
+                      ", ".join("V%d" % v.vid for v in lmh_vans), 101, 100 + 3 * len(lmh_vans),
+                      "on the left" if left else "on the right", args.minipod_speed, args.minipod_range),
+                  flush=True)
         for v in vans:
             v.boxes = boxmgr
-        sky.drones.start(vans)
         if not args.no_live:
             livew = live.LiveWriter(args.live_dir)
-            livew.write_map(export_map(world, wmap, station, sky.chargers, boxmgr))
+            livew.write_map(export_map(world, wmap, station, sky.chargers, boxmgr, hubs))
             print("  live state for the dashboard: %s / ダッシュボード用" % livew.dir, flush=True)
         fleet = Fleet(args, world, vans, gen, log, sky, livew)
         fleet.boxes = boxmgr
+        fleet.lmh_shared = lmh_shared
+        if lmh_shared is not None:
+            geo = fleet.geo
+            for v in vans:
+                if getattr(v, "lmh", False):
+                    for su in v.suites.values():
+                        su.geo = geo
         # Japan profile maps only; any other map: None, no extra call
         # 日本のプロファイルのマップのみ。他のマップでは何もしない
         fleet.set_rules(van_rules.make(world, wmap, args.traffic_profile,
@@ -2703,6 +3568,8 @@ def main(argv=None):
             v.cleanup()
         if boxmgr is not None:
             boxmgr.destroy()
+        if getattr(sky, "stations", None) is not None:
+            sky.stations.destroy()
         if livew is not None:
             livew.close()
         for a in actors:

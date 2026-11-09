@@ -73,6 +73,10 @@ STOP_TOL = 3.05            # every Stencil_STOP 206 within this many m before it
 SAME_LINE = 15.0           # plates this far sideways of a stepped-on plate's road are other traffic / 別の交通
 VERIFIED = "verified_plates.json"   # Street View verified plates in the build folder / 現地確認済みの標識
 VERIFIED_MATCH = 10.0      # a verified plate's road end within this many m of its "xy" / 道路端の照合距離
+CORE_CLEAR = 0.3           # embedded model: post this far off its asphalt (and the plate's half width + 5 cm) / モデルの車道から
+CORE_REACH = 3.0           # ... a post on it moves at most this far (nearest free spot, same side) / 移動上限
+CORE_STEP = 0.1            # ... candidate spacing / 候補の間隔
+POST_GAP = 0.6             # a moved post keeps this far from every other post / 他の支柱との間隔
 FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 # shape, width, height (m) / 形・幅・高さ
 # 道路標識令 standard sizes (NPA "Traffic Lights and Road Signs" designs): round 60 cm,
@@ -427,6 +431,15 @@ class Placer(object):
                 if not cap.is_empty:
                     polys.append(cap)
         self.lane_area = unary_union(polys)
+        # embedded model (maps.json "core"): its asphalt is wider than the road logic's
+        # lanes (shoulders, junction corner aprons); posts keep off it too, and the kerb
+        # the 0.3-2.0 m check measures from is its edge / 埋め込みモデルの車道アスファルト
+        import core_merge
+        self.core_road = core_merge.core_asphalt(out, self.meta)
+        if self.core_road is not None and self.core_road.is_empty:
+            self.core_road = None
+        self.kerb_edge = self.cw if self.core_road is None else unary_union([self.cw, self.core_road])
+        self.core_moved, self.core_dropped = [], []
         self.stop_posts = {}       # road -> post xy of its 止まれ / 止まれ支柱の位置
         self.merged = []
         self.left = self.meta.get("lefthand", False)
@@ -630,6 +643,11 @@ class Placer(object):
             post = self.add("tomare", spot, -f, "stop road %d junction %d%s" % (road, j, side))
             # the landmark goes where the post is (moved behind a guardrail) / 支柱の実位置
             self.stop_posts[road] = np.array([post["x"], post["y"]]) if post is not None else spot
+            if post is not None:
+                # the stop line (lane centre there, travel direction): a post moved off the
+                # model's asphalt stays within STOP_TOL of it / 停止線: 移動しても STOP_TOL 以内
+                pl, fl, _, _, _ = self.at_s(lane, -back)
+                post.setdefault("stops", []).append((road, pl, fl))
 
     def no_turns(self):
         for r in self.rows:
@@ -644,6 +662,9 @@ class Placer(object):
             code = "".join(c for c, t in (("s", "straight"), ("l", "left"), ("r", "right")) if t in turns)
             lanes = [self.lane_by.get((k[0], a["lane"])) for a in self.appr[k]]
             lane = self.kerb_lane(k[0], [l for l in lanes if l is not None])
+            if lane is None:
+                self.dropped.append(("noturn", P, "no kerb lane on the approach"))   # 路肩側の車線なし
+                continue
             stop = {(rr, jj): b for rr, jj, b in self.extra.get("stop", [])}.get(k, 2.0)
             spot, f = self.kerb_spot(lane, -(stop + 1.0), kind="noturn_" + code, face=lambda f, kn: -f)
             if spot is None:
@@ -990,7 +1011,98 @@ class Placer(object):
         self.verified()
         self.along(jartic.NO_PARKING, "noparking", every=150.0, space=120.0)
         self.along(jartic.BICYCLE_PAVEMENT, "bicycle", first=10.0, min_len=30.0, space=120.0)
+        self.settle_core()
         return self
+
+    def core_clear(self, post):
+        """How far a post must stand off the embedded model's asphalt: CORE_CLEAR,
+        or its widest plate's half width + 5 cm (plate edge off the road).
+        / モデルの車道からの必要距離"""
+        return max([CORE_CLEAR] + [size_of(k)[1] / 2 + 0.05 for k, _, _ in post["plates"]])
+
+    def core_spots(self, x, y, reach=CORE_REACH, step=CORE_STEP):
+        """Candidate spots round (x, y) up to ``reach`` m, nearest first (rings
+        every ``step`` m, points ``step`` m apart on each). / 近い順の候補点"""
+        out = []
+        for r in np.arange(step, reach + 1e-9, step):
+            n = max(8, int(math.ceil(2 * math.pi * r / step)))
+            a = np.arange(n) * 2 * math.pi / n
+            out.append(np.stack([x + r * np.cos(a), y + r * np.sin(a)], 1))
+        return np.concatenate(out)
+
+    def settle_core(self):
+        """Embedded model only: a post (not one on a signal pole) on its asphalt
+        or nearer it than core_clear() moves to the nearest spot within
+        CORE_REACH m that is off that asphalt and the layout carriageway by
+        core_clear(), within 2.0 m of the kerb (their edge), clear of every
+        driving lane, building and modelled structure, POST_GAP m from other
+        posts, on the same side of the road (the move crosses no driving lane),
+        and for a 止まれ 0-2.95 m before its stop line; the plates keep their
+        facing. No such spot: the post is left out (self.core_dropped).
+        Off asphalt this does nothing, so maps without a core are unchanged.
+        モデルのアスファルト上の支柱を最寄りの歩道・縁石上へ（無理なら外す）。"""
+        import shapely
+        from shapely.geometry import LineString
+        if self.core_road is None:
+            return 0, 0
+        shapely.prepare(self.core_road)
+        shapely.prepare(self.cw)
+        shapely.prepare(self.lane_area)
+        shapely.prepare(self.kerb_edge)
+        bld = self.L.building_area.buffer(0.3)
+        shapely.prepare(bld)
+        keep = []
+        for p in self.posts:
+            if p.get("signal"):
+                keep.append(p)                       # on a CARLA signal pole: it stays there / 信号柱付きはそのまま
+                continue
+            clear = self.core_clear(p)
+            if self.core_road.distance(Point(p["x"], p["y"])) >= clear:
+                keep.append(p)
+                continue
+            Q = self.core_spots(p["x"], p["y"])
+            ok = shapely.distance(self.core_road, shapely.points(Q)) >= clear
+            ok &= ~shapely.contains_xy(self.cw, Q[:, 0], Q[:, 1])
+            ok[ok] = shapely.distance(self.cw, shapely.points(Q[ok])) >= clear
+            ok[ok] = shapely.distance(self.kerb_edge, shapely.points(Q[ok])) <= 2.0
+            ok[ok] = shapely.distance(self.lane_area, shapely.points(Q[ok])) >= LANE_CLEAR + POLE_R
+            ok[ok] = ~shapely.contains_xy(bld, Q[ok, 0], Q[ok, 1])
+            others = np.array([[o["x"], o["y"]] for o in self.posts if o is not p] or [[1e9, 1e9]])
+            for i in np.flatnonzero(ok):
+                q = Q[i]
+                for road, pl, fl in p.get("stops", []):
+                    if not 0.0 <= float((pl - q) @ fl) <= STOP_TOL - 0.1:
+                        break
+                else:
+                    if np.hypot(*(others - q).T).min() < POST_GAP:
+                        continue
+                    if shapely.intersects(self.lane_area, LineString([(p["x"], p["y"]), tuple(q)])):
+                        continue                     # across a lane: the other side of a road / 車線の向こう側
+                    top = self.ground_z(*q) + BOTTOM + sum(size_of(k)[2] for k, _, _ in p["plates"]) + 0.05
+                    if any(self.clashes(q, p["face"], k, z_top=top) for k, _, _ in p["plates"]):
+                        continue
+                    break
+            else:
+                self.core_dropped.append({"x": round(p["x"], 2), "y": round(p["y"], 2), "kinds": [k for k, _, _ in p[
+                    "plates"]], "src": [s for _, _, s in p["plates"]], "why": "on the embedded model's asphalt, "
+                    "no free kerb spot within %.1f m" % CORE_REACH})
+                for k, _, s in p["plates"]:
+                    self.dropped.append((k, s, "on the embedded model's asphalt, no free kerb spot within %.1f m"
+                                         % CORE_REACH))
+                continue
+            self.core_moved.append({"from": [round(p["x"], 2), round(p["y"], 2)],
+                                    "to": [round(float(q[0]), 2), round(float(q[1]), 2)],
+                                    "dist": round(float(np.hypot(q[0] - p["x"], q[1] - p["y"])), 2),
+                                    "kinds": [k for k, _, _ in p["plates"]]})
+            for road, _, _ in p.get("stops", []):
+                if road in self.stop_posts and np.allclose(self.stop_posts[road], (p["x"], p["y"])):
+                    self.stop_posts[road] = np.array(q, float)    # the 206 follows its post / 206 も移す
+            p["x"], p["y"] = float(q[0]), float(q[1])
+            keep.append(p)
+        # a dropped 止まれ post: its Stencil_STOP 206 (no mesh) keeps that spot by the line
+        # 外した止まれの 206（描画なし）は停止線脇の元の位置のまま
+        self.posts = keep
+        return len(self.core_moved), len(self.core_dropped)
 
     # -- meshes / メッシュ
     def ground_z(self, x, y):
@@ -1066,6 +1178,8 @@ class Placer(object):
                    "jartic_log": self.extra.get("jartic_log", []),
                    # Street View verified plates (verified_plates.json) / 現地確認済みの標識
                    "verified_log": getattr(self, "verified_log", []),
+                   # embedded model: posts moved off / left out for its asphalt / モデルの車道から移動・除外
+                   "core_moved": getattr(self, "core_moved", []), "core_dropped": getattr(self, "core_dropped", []),
                    # signal poles as computed here (check_signal_poles.py compares carla.Map) / 信号柱位置
                    "signal_poles": [[i, round(x, 3), round(y, 3)] for i, x, y in self.signal_poles()]},
                   open(os.path.join(self.out, "jp_plates.json"), "w"), ensure_ascii=False, indent=0, default=str)
@@ -1165,9 +1279,14 @@ def check(placer, rec):
         dl = placer.lane_area.distance(pt)
         if dl < LANE_CLEAR:
             bad.append(("post %.2f m from an xodr driving lane (< %.1f)" % (dl, LANE_CLEAR), r))
-        d = placer.cw.distance(pt)
-        if placer.cw.contains(pt) or not 0.3 <= d <= 2.0:
+        # the kerb: the carriageway's edge, in an embedded model its asphalt's / 縁石 = 車道（モデルのアスファルト）の端
+        kerb = getattr(placer, "kerb_edge", placer.cw)
+        d = kerb.distance(pt)
+        if kerb.contains(pt) or not 0.3 <= d <= 2.0:
             bad.append(("distance %.2f m" % d, r))
+        core = getattr(placer, "core_road", None)
+        if core is not None and not r.get("signal") and core.distance(pt) < max(CORE_CLEAR, r["w"] / 2 + 0.05) - 0.01:
+            bad.append(("post %.2f m from the embedded model's asphalt" % core.distance(pt), r))
         half = r["w"] / 2
         if r["z"] - r["h"] / 2 - r["ground"] < 1.8 - 1e-6:
             bad.append(("low plate", r))
@@ -1216,6 +1335,10 @@ def main():
     print("jp_signs: %d Stencil_STOP landmarks moved to their 止まれ posts" % n_moved)
     if P.guard is not None:
         print("jp_signs: %d posts moved behind the ring guardrail" % P.guard_moved)
+    if P.core_road is not None:
+        print("jp_signs: %d posts moved off the embedded model's asphalt (median %.2f m, max %.2f m), %d left out"
+              % (len(P.core_moved), float(np.median([m["dist"] for m in P.core_moved] or [0])),
+                 max([m["dist"] for m in P.core_moved] or [0]), len(P.core_dropped)))
     for d in P.dropped:
         print("  dropped: %s" % (d,))
     for m in P.merged:

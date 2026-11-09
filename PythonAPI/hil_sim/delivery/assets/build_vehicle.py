@@ -44,6 +44,18 @@ IMPORT_TEXTURES = os.environ.get("VEH_TEXTURES", "0") == "1"
 # optional real drivetrain (cars/drivetrain.py --emit); unset = the Prius's
 # 実車のドライブトレイン（任意。未指定ならプリウスのまま）
 DRIVETRAIN = os.environ.get("VEH_DRIVETRAIN", "")
+# heavy / NPC vehicles (cars/build_cars.sh, car_guide ch. 16); unset = as before:
+# VehicleFactory base_type, per-wheel brake / handbrake torque (Nm; the Prius
+# blueprints have 800 / 1600), an own physics asset whose chassis body is a box
+# "cx,cy,cz,hx,hy,hz" (cm, vehicle frame: centre and half sizes) instead of
+# the Prius's body, and the centre-of-mass height (cm above the ground)
+# 大型・NPC 車両用（未指定ならこれまで通り）：base_type、車輪ごとのブレーキ
+# トルク、車体と同じ大きさの箱を持つ専用物理アセット、重心の高さ
+BASE_TYPE = os.environ.get("VEH_BASE_TYPE") or "car"
+BRAKE_NM = os.environ.get("VEH_BRAKE_NM", "")
+HANDBRAKE_NM = os.environ.get("VEH_HANDBRAKE_NM", "")
+BODY = [float(v) for v in os.environ.get("VEH_BODY", "").split(",") if v.strip()]
+COM_Z_CM = os.environ.get("VEH_COM_Z_CM", "")
 
 EAL = unreal.EditorAssetLibrary
 LOG = open(os.path.join(HERE, os.environ.get("VEH_LOG", "build_vehicle.log")), "w")
@@ -112,7 +124,7 @@ def duplicate(src, name):
 
 
 def make_wheels():
-    out = {}
+    out, brakes = {}, []
     for tag in ("FLW", "FRW", "RLW", "RRW"):
         path = duplicate("/Game/Carla/Blueprints/Vehicles/ToyotaPrius/BP_ToyotaPrius_" + tag,
                          "BP_%s_%s" % (NAME, tag))
@@ -120,9 +132,18 @@ def make_wheels():
         cdo = unreal.get_default_object(cls)
         cdo.set_editor_property("shape_radius", WHEEL_RADIUS_CM)
         cdo.set_editor_property("shape_width", WHEEL_WIDTH_CM)
+        if BRAKE_NM:
+            cdo.set_editor_property("max_brake_torque", float(BRAKE_NM))
+        # handbrake only where the Prius has one (rear) / サイドブレーキは後輪のみ
+        if HANDBRAKE_NM and cdo.get_editor_property("affected_by_handbrake"):
+            cdo.set_editor_property("max_hand_brake_torque", float(HANDBRAKE_NM))
         EAL.save_asset(path, only_if_is_dirty=False)
         out[tag] = cls
         log("wheel", path, "r", cdo.get_editor_property("shape_radius"))
+        brakes.append("%s %.0f/%.0f" % (tag, cdo.get_editor_property("max_brake_torque"),
+                                        cdo.get_editor_property("max_hand_brake_torque")))
+    if BRAKE_NM or HANDBRAKE_NM:
+        log("brakes (brake/handbrake Nm)", ", ".join(brakes))
     return out
 
 
@@ -172,6 +193,82 @@ def apply_drivetrain(vm, d):
         "max_rpm", eng.get_editor_property("max_rpm"), "moi", eng.get_editor_property("moi"),
         "diff", vm.get_editor_property("differential_setup").get_editor_property("differential_type"),
         "drag", round(vm.get_editor_property("drag_coefficient"), 3))
+
+
+def body_setups(pa):
+    """The physics asset's body setups. SkeletalBodySetups is not an editor
+    property in UE 4.26 for every build, so fall back to the sub-objects by
+    name (SkeletalBodySetup_<n> inside the asset's package).
+    物理アセットのボディ一覧（プロパティで読めなければ名前で探す）。"""
+    try:
+        found = list(pa.get_editor_property("skeletal_body_setups"))
+        if found:
+            return found
+    except Exception as e:
+        log("skeletal_body_setups not readable:", e)
+    path = pa.get_path_name()
+    found = []
+    for cls in ("SkeletalBodySetup", "BodySetup"):
+        for i in range(64):
+            o = unreal.find_object(None, "%s:%s_%d" % (path, cls, i))
+            if o is not None:
+                found.append(o)
+    if not found:
+        # the _<n> counter runs across the editor session: every body whose outer is the asset
+        # 番号はセッション全体で増える: 外側がこのアセットのボディを全部探す
+        found = [o for o in unreal.ObjectIterator(unreal.SkeletalBodySetup) if o.get_outer() == pa]
+    return found
+
+
+def make_physics_body(mesh):
+    """An own physics asset (a copy of the Prius's) whose chassis body
+    (bone Vehicle_Base) is one box the size of the vehicle's body, so a long
+    vehicle (the 10.4 m bus) collides at its own ends and PhysX takes its
+    inertia from that box at the blueprint mass. Optional centre-of-mass
+    height via the body's COM nudge. The wheels stay raycasts as before.
+    専用の物理アセット：車体ボディを車体寸法の箱にする（慣性もこの箱から）。"""
+    prius_pa = EAL.load_asset(PRIUS_MESH).get_editor_property("physics_asset")
+    dst = duplicate(prius_pa.get_path_name().split(".")[0], "PA_" + NAME)
+    pa = EAL.load_asset(dst)
+    setups = body_setups(pa)
+    log("physics asset", dst, "bodies", [str(b.get_editor_property("bone_name")) for b in setups])
+    base = [b for b in setups if str(b.get_editor_property("bone_name")) == "Vehicle_Base"]
+    if len(base) != 1:
+        raise RuntimeError("physics asset: expected one Vehicle_Base body, got %d" % len(base))
+    bs = base[0]
+    agg = bs.get_editor_property("agg_geom")
+    old = {k: len(agg.get_editor_property(k)) for k in
+           ("box_elems", "convex_elems", "sphyl_elems", "sphere_elems", "tapered_capsule_elems")}
+    for e in agg.get_editor_property("box_elems"):          # what the Prius had / 元の形
+        log("prius box", e.get_editor_property("center"), e.get_editor_property("x"),
+            e.get_editor_property("y"), e.get_editor_property("z"))
+    box = unreal.KBoxElem()
+    box.set_editor_property("center", unreal.Vector(BODY[0], BODY[1], BODY[2]))
+    box.set_editor_property("x", 2.0 * BODY[3])             # full sizes / 全長
+    box.set_editor_property("y", 2.0 * BODY[4])
+    box.set_editor_property("z", 2.0 * BODY[5])
+    agg.set_editor_property("box_elems", [box])
+    for k in ("convex_elems", "sphyl_elems", "sphere_elems", "tapered_capsule_elems"):
+        agg.set_editor_property(k, [])
+    bs.set_editor_property("agg_geom", agg)
+    agg = bs.get_editor_property("agg_geom")
+    got = agg.get_editor_property("box_elems")
+    if len(got) != 1 or agg.get_editor_property("convex_elems"):
+        raise RuntimeError("physics body box not kept: %d boxes, %d convex" % (
+            len(got), len(agg.get_editor_property("convex_elems"))))
+    if COM_Z_CM:
+        inst = bs.get_editor_property("default_instance")
+        nudge = unreal.Vector(0.0, 0.0, float(COM_Z_CM) - BODY[2])
+        inst.set_editor_property("com_nudge", nudge)
+        bs.set_editor_property("default_instance", inst)
+        log("centre of mass nudge", bs.get_editor_property("default_instance").get_editor_property("com_nudge"))
+    EAL.save_asset(dst, only_if_is_dirty=False)
+    mesh.set_editor_property("physics_asset", pa)
+    EAL.save_loaded_asset(mesh)
+    c = got[0].get_editor_property("center")
+    log("physics body box centre (%.1f, %.1f, %.1f) size (%.1f, %.1f, %.1f) cm, replaced %s"
+        % (c.x, c.y, c.z, got[0].get_editor_property("x"), got[0].get_editor_property("y"),
+           got[0].get_editor_property("z"), old))
 
 
 def make_vehicle(mesh, wheels):
@@ -228,16 +325,20 @@ def register(cls):
     entry.set_editor_property("class_", cls)
     entry.set_editor_property("number_of_wheels", 4)
     entry.set_editor_property("generation", 2)
-    entry.set_editor_property("base_type", "car")
+    entry.set_editor_property("base_type", BASE_TYPE)
     entry.set_editor_property("recommended_colors", [unreal.Color(r=COLOR[0], g=COLOR[1], b=COLOR[2], a=255)])
     vehicles.append(entry)
     fcdo.set_editor_property("vehicles", vehicles)
     EAL.save_asset(FACTORY, only_if_is_dirty=False)
-    log("factory now has", len(fcdo.get_editor_property("vehicles")), "vehicles")
+    log("factory now has", len(fcdo.get_editor_property("vehicles")), "vehicles; base_type", BASE_TYPE)
 
 
 try:
     mesh = import_mesh()
+    if BODY:
+        if len(BODY) != 6:
+            raise RuntimeError("VEH_BODY needs cx,cy,cz,hx,hy,hz: %s" % BODY)
+        make_physics_body(mesh)
     wheels = make_wheels()
     cls = make_vehicle(mesh, wheels)
     register(cls)

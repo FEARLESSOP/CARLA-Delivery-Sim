@@ -17,6 +17,8 @@ should wait and charge a little, or must be swapped.
 
 import math
 
+from delivery.zones import air_dist
+
 
 class BatteryModel(object):
     """Rates shared by every drone. / 全機共通のレート。"""
@@ -51,7 +53,7 @@ class BatteryModel(object):
         for (the current wind plus a margin).
         往路は荷物あり、復路はなし。``wind`` は計画用の風速（現在＋余裕）。
         """
-        d = math.hypot(drop[0] - home[0], drop[1] - home[1])
+        d = air_dist(home, drop)
         hover_z = drop[2] + drop_height
         out = self._leg(d, cruise_z - home[2], cruise_z - hover_z, h_speed, v_speed,
                         True, wind)
@@ -65,17 +67,17 @@ class BatteryModel(object):
         """% for a pod Mission: start -> drop (loaded), then empty to the
         meeting point, ``hold_s`` circling there, and down onto the pad.
         ポッドからの配達（合流地点へ戻る）に必要な %。"""
-        d1 = math.hypot(drop[0] - start[0], drop[1] - start[1])
+        d1 = air_dist(start, drop)
         hover_z = drop[2] + drop_height
         out = self._leg(d1, cruise_z - start[2], cruise_z - hover_z, h_speed, v_speed, True, wind)
         out += hover_s * self.rate(True, False, wind)
-        d2 = math.hypot(meet[0] - drop[0], meet[1] - drop[1])
+        d2 = air_dist(drop, meet)
         back = self._leg(d2, meet_z - hover_z, meet_z - meet[2], h_speed, v_speed, False, wind)
         return out + back + hold_s * self.rate(False, False, wind)
 
     def transfer_cost(self, a, b, cruise_z, h_speed=12.0, v_speed=4.0, wind=0.0):
         """% used flying empty from ``a`` up to ``cruise_z``, across, down to ``b``."""
-        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        d = air_dist(a, b)
         return self._leg(d, cruise_z - a[2], cruise_z - b[2], h_speed, v_speed, False, wind)
 
     def wait_to_reach(self, level, need, rate):
@@ -96,6 +98,18 @@ class Battery(object):
 
     def charge(self, dt, rate):
         self.level = min(self.level + rate * dt, 100.0)
+
+
+def charge_rate(level, kw, kwh, eff=0.92, taper_from=80.0, taper_end=0.25):
+    """%/s into a ``kwh`` pack at ``level`` % from a ``kw`` charger: full
+    power (times the charger efficiency) up to ``taper_from`` %, then falling
+    linearly to ``taper_end`` of it at 100 % (constant current, then constant
+    voltage). 50 kW into 10 kWh: 75 -> 98 % in about 4 minutes.
+    充電速度 [%/s]：80 % まで定電力、その先は 100 % で 25 % まで低下（CC-CV）。"""
+    if kw <= 0.0 or kwh <= 0.0:
+        return 0.0
+    f = 1.0 if level < taper_from else max(taper_end, 1.0 - (1.0 - taper_end) * (level - taper_from) / (100.0 - taper_from))
+    return kw * eff * f / kwh * 100.0 / 3600.0
 
 
 class PodEnergyModel(object):

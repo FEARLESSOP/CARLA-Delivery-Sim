@@ -34,6 +34,10 @@ import carla
 from lane_spawns import lane_spawn_points
 import traffic_profile
 import hokousha
+import parked_cars
+import own_cars
+import bus_schedule
+import recovery
 import weather_cycle
 
 from carla import VehicleLightState as vls
@@ -565,11 +569,34 @@ def main():
              'other map the default traffic), none, or a profile name '
              '/ 国別の運転プロファイル。auto（既定：maps.json で日本のマップなら '
              'japan、他は従来どおり）、none、またはプロファイル名')
+    argparser.add_argument(
+        '--parked-cars', default='auto', choices=('auto', 'none'),
+        help='park CARLA / imported cars on the map\'s parking spots (maps/build/<Map>/'
+             'parked_cars.json; auto: when the map has them) / 駐車車両（auto: 駐車位置のあるマップ）')
+    argparser.add_argument(
+        '--parked-max', default=0, type=int,
+        help='at most this many parked cars, spots picked at random (0: every spot) / 駐車車両の上限（0: 全部）')
+    argparser.add_argument(
+        '--bus-schedule', default='auto',
+        help='timetabled buses (bus_schedule.py): auto (maps whose maps.json entry has '
+             '"bus_schedule"), none, or a timetable folder / 時刻表バス（auto: maps.json に '
+             'bus_schedule があるマップ）')
+    argparser.add_argument(
+        '--bus-time', default=None, metavar='HH:MM',
+        help='run the timetable from this time (default: the sim\'s time of day, then real time) '
+             '/ 時刻表の開始時刻（既定: シムの表示時刻から実時間）')
+    argparser.add_argument(
+        '--bus-day', default='auto', choices=('auto', 'weekday', 'saturday', 'sunday_holiday'),
+        help='day type (auto: from the date; national holidays = sunday_holiday) / ダイヤ種別')
+    argparser.add_argument(
+        '--bus-max', default=None, type=int,
+        help='at most this many buses at once (default 25) / 同時に走るバスの上限')
     args = argparser.parse_args()
 
     logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
 
     vehicles_list = []
+    parked_list = []
     walkers_list = []
     all_id = []
     client = carla.Client(args.host, args.port)
@@ -577,6 +604,7 @@ def main():
     synchronous_master = False
     rule_keeper = None
     ped_signals = None
+    bus_sched = None
     random.seed(args.seed if args.seed is not None else int(time.time()))
 
     try:
@@ -648,6 +676,11 @@ def main():
         # the delivery pods are driven by delivery_sim.py, never random traffic
         # 配送ポッドは delivery_sim.py が動かす（一般交通には出さない）
         blueprints = [x for x in blueprints if not x.id.startswith('vehicle.delivery.')]
+        # npc_only vehicles (the Oita bus) run only on their own timetable
+        # npc_only の車両（大分バス）は専用の時刻表でのみ走る
+        # (unless --filterv names one exactly) / --filterv で指定した場合を除く
+        npc_only = own_cars.npc_only_ids() - {args.filterv}
+        blueprints = [x for x in blueprints if x.id not in npc_only]
         if args.safe:
             blueprints = [x for x in blueprints if x.get_attribute('base_type') == 'car']
         bikes = [x for x in blueprints if x.has_attribute('base_type')
@@ -716,12 +749,35 @@ def main():
         if n_cyclists:
             print('[traffic] %d cyclists among the vehicles / 自転車 %d 台' % (n_bikes, n_bikes))
 
+        # parked cars on the map's parking spots (parked_cars.py; maps with
+        # parked_cars.json only), physics off, never driven / 駐車車両（物理なし）
+        if args.parked_cars == 'auto':
+            spots = parked_cars.load(world.get_map().name)
+            if spots:
+                parked_list = parked_cars.spawn(
+                    client, world, spots, random.Random(args.seed if args.seed is not None else 7), carla,
+                    lambda b, label: list(apply_batch_chunked(client, b, synchronous_master,
+                                                              args.spawn_chunk, args.spawn_pause, label)),
+                    world.tick if synchronous_master else world.wait_for_tick, limit=args.parked_max)
+
         # Country driving profile (Japanese maps only; any other map: no call)
         # 国別の運転プロファイル（日本のマップのみ。他のマップでは何もしない）
         driver_profile_on = bool(args.driver_profile and args.error_scale > 0.0)
         rule_keeper = setup_traffic_profile(
             world, traffic_manager, vehicles_list, args.traffic_profile,
             run_helper=not driver_profile_on)
+
+        # timetabled buses (OitaStation; maps.json "bus_schedule"), driven by
+        # the TM under the same rules / 時刻表バス（maps.json bus_schedule のマップ）
+        try:
+            bus_sched = bus_schedule.setup(
+                world, client, traffic_manager, carla, mode=args.bus_schedule,
+                rule_keeper=rule_keeper, bus_time=args.bus_time, bus_day=args.bus_day,
+                max_buses=args.bus_max, traffic_profile_force=args.traffic_profile,
+                own_rules=not driver_profile_on)
+        except Exception as exc:     # never stop the traffic / 交通を止めない
+            print('[bus] timetabled buses off: %s / 時刻表バスを停止' % exc)
+            bus_sched = None
 
         if args.driver_profile and args.error_scale > 0.0 and vehicles_list:
             prof_key, tm_params = load_driver_profile(
@@ -748,6 +804,25 @@ def main():
         # -------------
         # Spawn Walkers / 歩行者を生成
         # -------------
+        # Walkers left by an earlier traffic run that did not finish its clean-up:
+        # a walker's navigation runs in the client that started its controller, so
+        # once that process is gone they stand still for good (live 2026-11-07: 5
+        # stood on roads). This script is the only owner of walkers on the rig.
+        # 前回の交通スクリプトが残した歩行者（制御するクライアントが無く永久に静止）を消す
+        try:
+            left = list(world.get_actors().filter('controller.ai.walker'))
+            for con in left:
+                try:
+                    con.stop()
+                except RuntimeError:
+                    pass
+            left_ids = [a.id for a in left] + [a.id for a in world.get_actors().filter('walker.pedestrian.*')]
+            if left_ids:
+                client.apply_batch_sync([carla.command.DestroyActor(i) for i in left_ids], False)
+                print('[traffic] removed %d walker(s)/controller(s) left by an earlier run '
+                      '/ 前回の残りの歩行者を削除' % len(left_ids))
+        except RuntimeError as exc:
+            print('[traffic] could not clear leftover walkers: %s' % exc)
         # some settings / 各種設定
         percentagePedestriansRunning = max(0.0, min(1.0, args.runners))  # jogging / 走る歩行者の割合
         percentagePedestriansCrossing = 0.0     # how many pedestrians will walk through the road
@@ -894,6 +969,17 @@ def main():
         # --sim-fps 0 で従来の無制限動作に戻る。
         step = (world.get_settings().fixed_delta_seconds or 0.05
                 if args.sim_fps > 0 else 0.0)
+        # stuck NPC cars reverse out (then get moved); still walkers get a
+        # new route / 動けない車は後退して復帰、歩行者は経路を引き直す
+        try:
+            wmap_r = world.get_map()
+            unsticker = recovery.Unsticker(world, wmap_r, traffic_manager.get_port())
+            walker_refresh = recovery.WalkerRefresh(world)
+        except Exception as exc:
+            print('[recovery] off: %s' % exc)
+            unsticker = walker_refresh = None
+        next_recovery = 0.0
+        walker_pairs = [(all_actors[i + 1], all_actors[i]) for i in range(0, len(all_id), 2)]
         next_tick = time.time()
         next_beat = 0.0
         tick_failures = 0
@@ -963,6 +1049,43 @@ def main():
                         print('[traffic] could not release held cars: %s / 解放失敗' % exc2)
                     rule_keeper = None
 
+            if bus_sched is not None:
+                try:
+                    bus_sched.update(world.get_snapshot())
+                except Exception as exc:   # never stop the tick / ティックを止めない
+                    print('[bus] timetabled buses off: %s / 時刻表バスを停止' % exc)
+                    try:
+                        bus_sched.destroy_all()
+                    except Exception:
+                        pass
+                    bus_sched = None
+
+            if unsticker is not None:
+                snap_r = world.get_snapshot()
+                now_r = snap_r.timestamp.elapsed_seconds
+                if now_r >= next_recovery:
+                    dt_r = 0.25 if next_recovery else 0.0
+                    next_recovery = now_r + 0.25
+                    try:
+                        # positions from the snapshot (as RuleKeeper does): an actor
+                        # object's get_transform() read (0, 0, 0) in this tick-master
+                        # process, so every car looked frozen at the origin
+                        # スナップショットから位置を読む（actor の get_transform は原点を返した）
+                        cars_r = []
+                        for vid in vehicles_list:
+                            a = snap_r.find(vid)
+                            if a is not None:
+                                cars_r.append((vid, a.get_transform(), a.get_velocity()))
+                        held_r = set()
+                        if rule_keeper is not None:
+                            held_r = set(rule_keeper.held) | set(rule_keeper.stop_state)
+                        unsticker.update(now_r, dt_r, cars_r, lambda aid: aid in held_r)
+                        held_w = set(ped_signals.held) if ped_signals is not None else set()
+                        walker_refresh.update(now_r, walker_pairs, held_w, snap_r)
+                    except Exception as exc:   # never stop the tick / ティックを止めない
+                        print('[recovery] off: %s' % exc)
+                        unsticker = None
+
             if ped_signals is not None:
                 try:
                     ped_signals.update(world.get_snapshot())
@@ -1004,9 +1127,18 @@ def main():
         except OSError:
             pass
 
+        if bus_sched is not None:
+            try:
+                bus_sched.destroy_all()
+            except Exception as exc:
+                print('[bus] could not remove the buses: %s / バスを削除できない' % exc)
+
         print('\ndestroying %d vehicles' % len(vehicles_list))
         destroy_chunked(client, vehicles_list,
                         args.spawn_chunk, args.spawn_pause)
+        if parked_list:
+            print('destroying %d parked cars' % len(parked_list))
+            destroy_chunked(client, parked_list, args.spawn_chunk, args.spawn_pause)
 
         if ped_signals is not None:
             ped_signals.release_all()

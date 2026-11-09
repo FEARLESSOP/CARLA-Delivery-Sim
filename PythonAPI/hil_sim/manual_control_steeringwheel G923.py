@@ -42,6 +42,7 @@ the bindings in use, with the wheel buttons by name (Cross, Triangle, R paddle..
     F5           : cycle map
     F11          : fullscreen
     R            : toggle camera recording
+    O            : road logic overlay (what the AI drives on, road_overlay.py)
     F1           : toggle HUD info
     H / ?        : this help
     ESC / Ctrl+Q : quit
@@ -75,6 +76,7 @@ CARLA 手動運転（Logitech G923/G29 ステアリングホイール対応）�
     F5           : マップ切替
     F11          : フルスクリーン
     R            : カメラ録画切替
+    O            : 道路ロジック表示（AI が使う道路情報、road_overlay.py）
     F1           : HUD 情報表示切替
     H / ?        : このヘルプ
     ESC / Ctrl+Q : 終了
@@ -135,7 +137,11 @@ import keybinds  # noqa: E402
 # F5 map cycle + the map-switch request to run_pipeline.py (map_switch.py)
 # F5 のマップ巡回とパイプラインへのマップ切替依頼
 import map_switch  # noqa: E402
+import own_cars  # noqa: E402  (npc_only vehicles are never the hero / npc_only 車両は自車にしない)
 from lane_limits import LaneLimits  # noqa: E402
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'carla'))
+import hero_autopilot  # noqa: E402  (P: smooth autopilot / なめらかな自動運転)
+import triple_screen  # noqa: E402  (--screens triple / 3 画面表示)
 
 if sys.version_info >= (3, 0):
 
@@ -407,6 +413,10 @@ class World(object):
         現在の車種から ``step`` 番目の車種（末尾の次は先頭）。"""
         models = sorted(self.world.get_blueprint_library().filter(self._actor_filter),
                         key=lambda bp: bp.id)
+        # npc_only vehicles (the Oita bus: no interior) only when asked for by
+        # their exact id / npc_only 車両（内装の無いバス）は ID 指定時のみ
+        npc_only = own_cars.npc_only_ids() - {self._actor_filter}
+        models = [bp for bp in models if bp.id not in npc_only] or models
         ids = [bp.id for bp in models]
         current = self._model_id or (self.player.type_id if self.player is not None else None)
         if current not in ids:
@@ -451,6 +461,9 @@ class World(object):
 
     def render(self, display):
         self.camera_manager.render(display)
+        if TRIPLE is not None:
+            # the HUD lives on the middle screen / HUD は中央の画面に
+            display = display.subsurface(pygame.Rect(TRIPLE["w"], 0, TRIPLE["w"], TRIPLE["h"]))
         self.hud.render(display)
 
     def destroy(self):
@@ -460,6 +473,7 @@ class World(object):
             self.lane_invasion_sensor.sensor,
             self.gnss_sensor.sensor]
         sensors += list(self.camera_manager.mirror_sensors())
+        sensors += list(self.camera_manager.side_sensors())
         for sensor in sensors:
             if sensor is not None:
                 sensor.stop()
@@ -476,12 +490,20 @@ class World(object):
 
 
 class DualControl(object):
-    def __init__(self, world, start_in_autopilot, keyboard=False, tm_port=8000):
+    def __init__(self, world, start_in_autopilot, keyboard=False, tm_port=8000, tm_autopilot=False):
         self._autopilot_enabled = start_in_autopilot
         self._tm_port = tm_port
+        # P drives with hero_autopilot.Pilot (lane limits, smooth pedals);
+        # --tm-autopilot keeps CARLA's Traffic Manager as before
+        # P はなめらかな自動運転（--tm-autopilot で従来の Traffic Manager）
+        self._tm_autopilot = tm_autopilot
+        self._pilot = None
+        self._pilot_t = None
+        self._lane_kmh = LaneLimits()
         if isinstance(world.player, carla.Vehicle):
             self._control = carla.VehicleControl()
-            world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
+            if self._tm_autopilot:
+                world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
         elif isinstance(world.player, carla.Walker):
             self._control = carla.WalkerControl()
             self._autopilot_enabled = False
@@ -823,6 +845,8 @@ class DualControl(object):
             cam.set_sensor(int(aid[7:]) - 1)
         elif aid == 'recording':
             cam.toggle_recording()
+        elif aid == 'road_overlay':
+            self._toggle_road_overlay(world)
         elif aid == 'map_next':
             # True under run_pipeline.py: close for the switch / 切替のため終了
             return world.change_map(1) is True
@@ -856,9 +880,32 @@ class DualControl(object):
             self._shift(world, -1)
         elif aid == 'autopilot':
             self._autopilot_enabled = not self._autopilot_enabled
-            world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
+            if self._tm_autopilot:
+                world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
+            else:
+                self._pilot = None
+                if not self._autopilot_enabled:
+                    world.player.apply_control(carla.VehicleControl())   # hand back / 運転を返す
+                    self._autopilot_flag(False)
             world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
         return False
+
+    @staticmethod
+    def _toggle_road_overlay(world):
+        """O: the road logic overlay on / off (road_overlay.py draws it,
+        data/road_overlay.json). / 道路ロジック表示の入切。"""
+        try:
+            import road_overlay
+            on = road_overlay.toggle()
+            alive = road_overlay.helper_alive()
+        except Exception as exc:                       # noqa: BLE001
+            world.hud.notification('Road logic overlay: %s' % exc)
+            return
+        msg = 'Road logic overlay %s / 道路ロジック表示 %s' % (
+            'on' if on else 'off', 'オン' if on else 'オフ')
+        if on and not alive:
+            msg += ' (road_overlay.py not running / 未起動)'
+        world.hud.notification(msg, seconds=3.0)
 
     def _toggle_transmission(self, world):
         """Automatic <-> manual. Manual starts in the gear the car is in, or
@@ -942,6 +989,9 @@ class DualControl(object):
                 'Turn signal: %s' % ('OFF' if new == 'off' else new.upper()))
 
     def _toggle_fullscreen(self, hud):
+        if TRIPLE is not None:
+            hud.notification('Three screens: always fullscreen')
+            return
         self._fullscreen = not self._fullscreen
         flags = pygame.RESIZABLE | pygame.SCALED | pygame.DOUBLEBUF
         if self._fullscreen:
@@ -1010,6 +1060,61 @@ class DualControl(object):
             elif isinstance(self._control, carla.WalkerControl):
                 self._parse_walker_keys(keys, clock.get_time())
             world.player.apply_control(self._control)
+        elif not self._tm_autopilot and isinstance(world.player, carla.Vehicle):
+            self._autopilot_step(world)
+
+    def _autopilot_step(self, world):
+        """One step of the smooth autopilot, once per simulation tick; the
+        steering wheel prop follows its steering. / 自動運転を 1 tick 進める。"""
+        player = world.player
+        try:
+            snap = world.world.get_snapshot()
+        except RuntimeError:
+            return
+        now = snap.timestamp.elapsed_seconds
+        if self._pilot is None or self._pilot.vehicle.id != player.id:
+            wmap = world.world.get_map()
+            dt = world.world.get_settings().fixed_delta_seconds or 0.05
+
+            def lane_kmh(wp, wmap=wmap, player=player):
+                kmh = self._lane_kmh.limit_wp(wmap, wp)
+                return float(kmh) if kmh else (float(player.get_speed_limit()) or 30.0)
+            self._pilot = hero_autopilot.Pilot(player, wmap, lane_kmh, dt)
+            self._pilot_t = now
+            return
+        dt = now - self._pilot_t
+        if dt <= 0.0:
+            return                       # no new tick yet / 新しい tick なし
+        self._pilot_t = now
+        ctrl = self._pilot.step(min(dt, 0.2))
+        player.apply_control(ctrl)
+        # the wheel angle that gives this steer (the car's own wheel turns
+        # 1:1 with it; carla_ffb.py turns the G923 there)
+        # この steer に対応するハンドル角（車内のハンドルと G923 を同じ角度に）
+        x = hero_autopilot.wheel_for_steer(ctrl.steer, self._steer_gain, self._steer_curve,
+                                           self._steer_clamp)
+        self._wheel_deg = x * self._wheel_half_deg
+        world.wheel_deg = self._wheel_deg
+        self._autopilot_flag(True, x)
+
+    AUTOPILOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                  'autopilot_state.json')
+
+    def _autopilot_flag(self, on, wheel=0.0):
+        """Tell carla_ffb.py the autopilot is driving and where the wheel
+        should be (data/autopilot_state.json, ~10 Hz; stale = off).
+        自動運転中であることとハンドル位置を carla_ffb.py に伝える。"""
+        now = time.time()
+        if on and now - getattr(self, '_flag_t', 0.0) < 0.1:
+            return
+        self._flag_t = now
+        try:
+            tmp = self.AUTOPILOT_PATH + '.tmp'
+            with open(tmp, 'w') as fh:
+                json.dump({'on': bool(on), 'wheel': round(wheel, 4), 't': now}, fh)
+            os.replace(tmp, self.AUTOPILOT_PATH)
+        except OSError:
+            pass
 
     def _parse_vehicle_keys(self, keys, milliseconds, world=None):
         """Drive with the keyboard when no wheel is attached.
@@ -2102,13 +2207,23 @@ class CameraManager(object):
             ['sensor.lidar.ray_cast', None, 'Lidar (Ray-Cast)']]
         world = self._parent.get_world()
         bp_library = world.get_blueprint_library()
+        # three screens: the main camera is the middle one (angled) or the one
+        # wide camera (flat); the side cameras come with the RGB view
+        # 3 画面：主カメラは中央（angled）または横長 1 台（flat）
+        self._sides = []            # [(yaw offset, screen x, sensor)]
+        self._side_surfaces = {}
+        main = None
+        if TRIPLE is not None:
+            cams = TRIPLE["cams"]
+            main = cams[len(cams) // 2]
+        self._main_x = main[4] if main is not None else 0
         for item in self.sensors:
             bp = bp_library.find(item[0])
             if item[0].startswith('sensor.camera'):
-                bp.set_attribute('image_size_x', str(hud.dim[0]))
-                bp.set_attribute('image_size_y', str(hud.dim[1]))
+                bp.set_attribute('image_size_x', str(main[0] if main else hud.dim[0]))
+                bp.set_attribute('image_size_y', str(main[1] if main else hud.dim[1]))
                 if bp.has_attribute('fov'):
-                    bp.set_attribute('fov', str(self._fov))
+                    bp.set_attribute('fov', str(main[2] if main else self._fov))
             elif item[0].startswith('sensor.lidar'):
                 bp.set_attribute('range', '50')
             item.append(bp)
@@ -2118,7 +2233,7 @@ class CameraManager(object):
         self.transform_index = (self.transform_index + 1) % len(self._camera_transforms)
         self._head_yaw = 0.0
         self._head_pitch = 0.0
-        self.sensor.set_transform(self._camera_transforms[self.transform_index])
+        self._place(self._camera_transforms[self.transform_index])
         self._sync_mirrors()
         self.hud.notification(
             'Camera: %s' % self._transform_names[self.transform_index])
@@ -2144,6 +2259,7 @@ class CameraManager(object):
             self.hud.notification(self.sensors[index][2])
         self.index = index
         self._sync_mirrors()
+        self._sync_sides()
 
     def next_sensor(self):
         self.set_sensor(self.index + 1)
@@ -2156,7 +2272,7 @@ class CameraManager(object):
             self._driver_eye,
             carla.Rotation(pitch=self._driver_eye_pitch, yaw=self._driver_eye_yaw))
         if self.transform_index == 0 and self.sensor is not None:
-            self.sensor.set_transform(self._camera_transforms[0])
+            self._place(self._camera_transforms[0])
         saved = car_views.save_eye(self._parent.type_id, self._driver_eye)
         self.hud.notification('Eye x %.2f  y %.2f  z %.2f%s' % (
             self._driver_eye.x, self._driver_eye.y, self._driver_eye.z,
@@ -2197,7 +2313,7 @@ class CameraManager(object):
         target_pitch = max(-3.5, min(3.5, -0.35 * lon_accel))
         self._head_yaw += k_yaw * (target_yaw - self._head_yaw)
         self._head_pitch += 0.10 * (target_pitch - self._head_pitch)
-        self.sensor.set_transform(carla.Transform(
+        self._place(carla.Transform(
             self._driver_eye,
             carla.Rotation(pitch=self._driver_eye_pitch + self._head_pitch,
                            yaw=self._driver_eye_yaw + self._head_yaw)))
@@ -2205,6 +2321,55 @@ class CameraManager(object):
     # ------------------------------------------------------------------
     # Mirrors
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Three screens (--screens triple)
+    # ------------------------------------------------------------------
+
+    def _place(self, tf):
+        """Move the main camera (and the side cameras with it). / 主カメラを移動。"""
+        self.sensor.set_transform(tf)
+        for yaw, _, s in self._sides:
+            s.set_transform(carla.Transform(tf.location, carla.Rotation(
+                pitch=tf.rotation.pitch, yaw=tf.rotation.yaw + yaw, roll=tf.rotation.roll)))
+
+    def side_sensors(self):
+        return [s for _, _, s in self._sides]
+
+    def _sync_sides(self):
+        """Side cameras for the angled three-screen layout, RGB view only.
+        3 画面（angled）の左右カメラ（RGB 表示のときだけ）。"""
+        want = (TRIPLE is not None and len(TRIPLE["cams"]) == 3 and self.index is not None
+                and self.sensors[self.index][0] == 'sensor.camera.rgb')
+        if not want or self._sides:
+            if not want:
+                for s in self.side_sensors():
+                    try:
+                        s.stop()
+                        s.destroy()
+                    except Exception:
+                        pass
+                self._sides, self._side_surfaces = [], {}
+            return
+        world = self._parent.get_world()
+        tf = self._camera_transforms[self.transform_index]
+        weak_self = weakref.ref(self)
+        for w, h, fov, yaw, x in (TRIPLE["cams"][0], TRIPLE["cams"][2]):
+            bp = world.get_blueprint_library().find('sensor.camera.rgb')
+            bp.set_attribute('image_size_x', str(w))
+            bp.set_attribute('image_size_y', str(h))
+            bp.set_attribute('fov', str(fov))
+            s = world.spawn_actor(bp, carla.Transform(tf.location, carla.Rotation(
+                pitch=tf.rotation.pitch, yaw=tf.rotation.yaw + yaw)), attach_to=self._parent)
+            s.listen((lambda key: lambda image:
+                      CameraManager._parse_side(weak_self, key, image))(x))
+            self._sides.append((yaw, x, s))
+
+    @staticmethod
+    def _parse_side(weak_self, key, image):
+        self = weak_self()
+        if self:
+            self._side_surfaces[key] = bgra_surface(image)
 
     def mirror_sensors(self):
         return [s for _, s in self._mirrors]
@@ -2233,6 +2398,15 @@ class CameraManager(object):
         rh = max(1, int(rw / 3.2))
         sw = int(W * 0.17)
         sh = max(1, int(sw / 1.55))
+        if TRIPLE is not None:
+            # rear-view mirror on the middle screen, the door mirrors on the
+            # side screens near their inner edges (where the real ones are)
+            # ルームミラーは中央、サイドミラーは左右の画面の内側寄り
+            return {
+                'rear':  (rw, rh, W + (W - rw) // 2, 10),
+                'left':  (sw, sh, W - sw - 60, int(H * 0.45)),
+                'right': (sw, sh, 2 * W + 60, int(H * 0.45)),
+            }
         return {
             'rear':  (rw, rh, (W - rw) // 2, 10),
             'left':  (sw, sh, 10, int(H * 0.42)),
@@ -2323,7 +2497,11 @@ class CameraManager(object):
 
     def render(self, display):
         if self.surface is not None:
-            display.blit(self.surface, (0, 0))
+            display.blit(self.surface, (self._main_x, 0))
+        for _, x, _ in self._sides:
+            surf = self._side_surfaces.get(x)
+            if surf is not None:
+                display.blit(surf, (x, 0))
         if self._mirrors and self.transform_index == 0:
             # Watchdog: if CARLA killed a mirror sensor (map/layer change,
             # respawn glitch), rebuild all mirrors so they come back instead
@@ -2419,6 +2597,9 @@ def bgra_surface(image):
 # ミラーカメラのフレーム間隔（秒）。0 で毎シミュレーションフレーム。
 # game_loop() が --mirror-fps から上書きする。
 MIRROR_SENSOR_TICK = 1.0 / 30.0
+# --screens triple: {"layout", "cams": triple_screen.plan(...), "w", "h"}, else None
+# 3 画面表示の設定（単画面なら None）
+TRIPLE = None
 
 
 # ==============================================================================
@@ -2444,7 +2625,7 @@ def parse_res(text):
 
 
 def game_loop(args):
-    global MIRROR_SENSOR_TICK
+    global MIRROR_SENSOR_TICK, TRIPLE
     # Mirrors are throttled server-side rather than per-frame client-side:
     # a capped sensor_tick skips the render pass entirely, so the saving is
     # on both the GPU (no draw) and the CPU (no readback, no conversion).
@@ -2461,18 +2642,47 @@ def game_loop(args):
         client = carla.Client(args.host, args.port)
         client.set_timeout(20.0)
 
-        display = pygame.display.set_mode(
-            (args.width, args.height),
-            pygame.RESIZABLE | pygame.SCALED | pygame.DOUBLEBUF)
+        three = triple_screen.pick_three(triple_screen.monitors()) if args.screens == 'triple' else None
+        if args.screens == 'triple' and three is None:
+            print('[control] --screens triple: no three same-size monitors side by side; '
+                  'using one screen / 横並びの 3 画面が見つからないため単画面で表示')
+        if three is not None:
+            sw, sh = three[0][3], three[0][4]
+            TRIPLE = {"layout": args.screen_layout, "w": sw, "h": sh,
+                      "cams": triple_screen.plan(args.screen_layout, args.triple_fov, sw, sh)}
+            os.environ['SDL_VIDEO_WINDOW_POS'] = '%d,%d' % (three[0][1], three[0][2])
+            display = pygame.display.set_mode((3 * sw, sh), pygame.NOFRAME | pygame.DOUBLEBUF)
+            span = (three[0][0], three[2][0])
+            print('[control] three screens: %dx%d, %s, %.0f deg across / 3 画面表示'
+                  % (3 * sw, sh, args.screen_layout, args.triple_fov))
+        else:
+            display = pygame.display.set_mode(
+                (args.width, args.height),
+                pygame.RESIZABLE | pygame.SCALED | pygame.DOUBLEBUF)
+            span = None
         pygame.display.set_caption('CARLA Manual Control (G923)')
 
-        hud = HUD(args.width, args.height)
+        def fullscreen_across():
+            try:
+                wid = pygame.display.get_wm_info().get('window')
+                if wid and span:
+                    triple_screen.span_fullscreen(wid, span[0], span[1])
+            except Exception as exc:
+                print('[control] could not span the screens: %s' % exc)
+        fullscreen_across()
+
+        hud = HUD(TRIPLE["w"], TRIPLE["h"]) if TRIPLE is not None else HUD(args.width, args.height)
         world = World(client, client.get_world(), hud, args.filter, args.fov,
                       start_vehicle=args.start_vehicle, map_request=args.map_request)
-        controller = DualControl(world, args.autopilot, args.keyboard, args.tm_port)
+        controller = DualControl(world, args.autopilot, args.keyboard, args.tm_port,
+                                 tm_autopilot=args.tm_autopilot)
 
         clock = pygame.time.Clock()
+        frames = 0
         while True:
+            frames += 1
+            if span and frames in (30, 120):
+                fullscreen_across()      # again once the WM has mapped the window / WM の準備後に再送
             # tick() sleeps until the next frame; tick_busy_loop() spins on
             # the CPU and pins a whole core for the same 60 FPS.
             # tick() は次フレームまでスリープする。tick_busy_loop() は
@@ -2540,6 +2750,12 @@ def main():
         'happens before generate_traffic.py starts, the traffic cars join a '
         'TM nobody steps and never move. / hero の自動運転用 TM ポート')
     argparser.add_argument(
+        '--tm-autopilot',
+        action='store_true',
+        help='P / --autopilot use CARLA\'s Traffic Manager (capped at the sign limit, '
+             'on/off pedals) instead of the smooth autopilot (hero_autopilot.py) '
+             '/ 従来の Traffic Manager で自動運転')
+    argparser.add_argument(
         '--keyboard',
         action='store_true',
         help='drive with W/A/S/D instead of the wheel (this is also the '
@@ -2574,6 +2790,25 @@ def main():
         type=float,
         help='camera horizontal field of view in degrees (default: 100, '
              'close to natural human central vision on a monitor)')
+    argparser.add_argument(
+        '--screens',
+        choices=('single', 'triple'),
+        default='single',
+        help='triple: one view across three side-by-side monitors of the same size '
+             '(5760x1080 on three 1080p screens), fullscreen across them '
+             '/ triple で横並び 3 画面にまたがって表示')
+    argparser.add_argument(
+        '--screen-layout',
+        choices=triple_screen.LAYOUTS,
+        default='angled',
+        help='angled: side monitors turned towards you, one camera per screen; '
+             'flat: monitors in one line, one wide camera (default angled)')
+    argparser.add_argument(
+        '--triple-fov',
+        metavar='DEG',
+        default=150.0,
+        type=float,
+        help='horizontal field of view across the three screens (default 150)')
     argparser.add_argument(
         '--fps',
         metavar='N',

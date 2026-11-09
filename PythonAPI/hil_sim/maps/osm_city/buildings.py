@@ -627,7 +627,10 @@ class Builder(object):
             self.flat_roof(m, poly, z_top, wall, 1.0, mat=roof or "roof_concrete")
 
     # -- place of worship / 宗教施設
-    def b_worship(self, m, poly, t, levels, rng):
+    def b_worship(self, m, poly, t, levels, rng, roof_ok=None):
+        """roof_ok (Japanese maps: buildings_jp free): False for the pitched
+        roof's outline (its rectangle + overhang) -> a flat roof instead.
+        / 勾配屋根が道路・歩道に掛かるなら陸屋根"""
         temple = t.get("building") == "temple" or t.get("religion") in ("buddhist", "taoist", "hindu")
         wall = "paint_red" if temple else "paint_white"
         o = self.sites.colours(poly, "worship", 80.0) if self.sites else None
@@ -642,7 +645,8 @@ class Builder(object):
                 f.window(*o, wall, glass="glass_dark", mullions=1)
         m.flat("concrete", poly, z_top - 0.01)
         r = poly.minimum_rotated_rectangle
-        if poly.area / max(r.area, 1.0) < 0.75:
+        pitched_clear = roof_ok is None or roof_ok(r.buffer((0.9 if temple else 0.5) + 0.2, join_style=2))
+        if poly.area / max(r.area, 1.0) < 0.75 or t.get("roof:shape") == "flat" or not pitched_clear:
             self.flat_roof(m, poly, z_top, wall, 0.8)
         elif temple:
             self.hip_roof(m, poly, z_top, 3.0, "roof_orange", overhang=0.9)

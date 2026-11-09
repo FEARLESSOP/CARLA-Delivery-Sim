@@ -33,6 +33,11 @@ PAINT_Z = 0.008
 LOT_PAINT_Z = RAISED_Z + 0.006
 TILE = 250.0
 DENSE = 2.5            # hilly maps: ground faces cut on this grid to follow the terrain / 地形に沿わせる格子
+# hilly maps: the carriageway on half that grid (the same global lines, so neighbours still
+# meet): 2.5 m triangles bridged the line where a street's grade meets a level junction and
+# stood 0.07-0.18 m off the lanes at junction mouths (check_drive.py, guide ch. 30)
+# 車道は半分の格子（2.5 m では交差点口の勾配の折れを跨いで 0.07-0.18 m ずれた）
+ROAD_DENSE = 1.25
 APRON_GRID = 50.0      # hilly maps: the apron beyond the map's edge, cut on this grid / 地図外の地面の格子
 
 
@@ -166,6 +171,9 @@ class Ground(object):
         for cr in crossings:
             for g in cr["segs"]:
                 bands.append(g.buffer(cr["width"] / 2 + 0.3, cap_style="flat"))
+        # Japan (pavements.py): the dropped-kerb aprons across estate junction
+        # mouths and NARROW drive mouths drop the kerb too / 交差点口・乗入れ部の切り下げ
+        bands += [b.buffer(0.3) for b in getattr(L, "mouth_bands", [])]
         self.ramps = unary_union([L.kerb.intersection(self.driveways.buffer(0.35)),
                                   L.kerb.intersection(unary_union(bands))]).buffer(0)
         self.ramps = unary_union([p for p in polys(self.ramps) if p.area > 0.05])
@@ -225,6 +233,48 @@ class Ground(object):
         # grass base below to fill what the strips miss at corners); the paint
         # lies 5 mm above it / 起伏あり: 塗装帯の下にも縁石天端を残し、塗装は 5 mm 上
         self.paint_lift = 0.005 if drape is not None else 0.0
+        if self.jp:
+            self.jp_pavement_pieces()
+
+    def jp_pavement_pieces(self):
+        """Japanese pavements (pavements.py) cut into their materials once, from
+        noded linework so neighbours share every vertex (an overlay cracks when
+        draped, ch. 4): interlocking block paving on the road pavements, asphalt on
+        the other footways, the 誘導ブロック guide strip, 点状ブロック warning
+        blocks at crossing kerbs, soil tree pits. / 歩道を材質ごとに分割（辺を共有）。"""
+        from surfaces_jp import coverage
+        from pavements import GUIDE_OFF, GUIDE_W
+        L = self.L
+        fp = L.footpaths
+        self.pv = {}
+        if fp.is_empty:
+            return
+        band = getattr(L, "pave_band", Polygon())
+        guide = getattr(L, "pave_guide", Polygon())
+        warn = getattr(L, "pave_warn", Polygon())
+        pits = getattr(L, "tree_pits", Polygon())
+        pieces = {"pave_warn": warn, "pave_guide": guide, "soil": pits, "pave_block": band}
+        self.pv = coverage(fp, pieces, order=("pave_warn", "pave_guide", "soil", "pave_block"), rest="pavement_asphalt")
+        self.pv = {k: shapely.multipolygons(v) if len(v) else Polygon() for k, v in self.pv.items()}
+        # the guide strip's texture runs along it: u along the carriageway edge it
+        # follows, v across the strip / 誘導ブロックの UV は縁石に沿う
+        rings = []
+        for p in polys(L.carriageway):
+            rings.append(LineString(p.exterior.coords))
+            rings += [LineString(r.coords) for r in p.interiors]
+        self.edge_lines = np.array(rings, dtype=object)
+        self.edge_tree = shapely.STRtree(rings)
+        self.guide_off, self.guide_w = GUIDE_OFF, GUIDE_W
+
+    def guide_uv(self, V):
+        pts = shapely.points(V[:, 0], V[:, 1])
+        near = self.edge_tree.query_nearest(pts, all_matches=False)
+        lines = np.empty(len(V), dtype=object)
+        lines[:] = self.edge_lines[0]
+        lines[near[0]] = self.edge_lines[near[1]]
+        u = shapely.line_locate_point(lines, pts) / self.guide_w
+        v = (shapely.distance(lines, pts) - (self.guide_off - self.guide_w / 2)) / self.guide_w
+        return np.column_stack([u, v])
 
     def fitted_faces(self, kerb, mat, uv, a, b, tile, top, low):
         """Kerb faces of one tile (draped): each face piece inside the tile, split at the
@@ -312,6 +362,8 @@ class Ground(object):
         T = lambda g: g.intersection(tile) if not g.is_empty else g
         out = {}
         road = Mesh()
+        if self.drape is not None:
+            road.dense = ROAD_DENSE
         if self.surf:
             # faces sharing edges (surfaces_jp.coverage), clipped one by one / 面ごとに切り取る
             for mat, faces in self.surf.items():
@@ -384,10 +436,25 @@ class Ground(object):
 
         side = Mesh()
         if self.jp:
-            # Akeno footways are asphalt behind concrete kerbs (Street View) / 明野の歩道はアスファルト
-            side.flat("pavement_asphalt", T(L.footpaths), RAISED_Z, uv_scale=3.0)
+            # Japanese pavements (pavements.py, ch. 31): interlocking blocks on the
+            # road pavements, tactile strips, asphalt on the estate footways
+            # 日本の歩道: インターロッキング・点字ブロック・生活道路の歩道はアスファルト
+            pv = getattr(self, "pv", {})
+            side.flat("pave_block", T(pv.get("pave_block", Polygon())), RAISED_Z, uv_scale=2.0)
+            side.flat("pavement_asphalt", T(pv.get("pavement_asphalt", Polygon())), RAISED_Z, uv_scale=3.0)
+            side.flat("pave_warn", T(pv.get("pave_warn", Polygon())), RAISED_Z, uv_scale=0.3)
+            side.flat("pave_guide", T(pv.get("pave_guide", Polygon())), RAISED_Z, uvfun=self.guide_uv)
             side.flat("concrete_path", T(L.aprons), RAISED_Z, uv_scale=2.0)
             side.flat("pavement_asphalt", T(L.cycleways), RAISED_Z, uv_scale=3.0)
+            # tree pits: soil a little below the blocks, in the lots object (no
+            # navmesh there, walkers step round them) / 植樹桝は少し低い土
+            lots.flat("soil", T(pv.get("soil", Polygon())), RAISED_Z - 0.04, uv_scale=2.0)
+            # 路側帯: the carriageway pieces cut for it (surfaces_jp), already built
+            # in the road mesh (paint and kerb faces were fitted to them), move to the
+            # Road_Sidewalk object so CARLA tags them Sidewalk and the navmesh walks
+            # them / 路側帯の面を歩道オブジェクトへ（CARLA のタグ・ナビメッシュ用）
+            if "asphalt_rosoku" in road.parts:
+                side.parts["asphalt_rosoku"] = road.parts.pop("asphalt_rosoku")
         else:
             side.flat("pavers", T(L.footpaths), RAISED_Z, uv_scale=2.0)
             side.flat("concrete_path", T(L.aprons), RAISED_Z, uv_scale=2.0)

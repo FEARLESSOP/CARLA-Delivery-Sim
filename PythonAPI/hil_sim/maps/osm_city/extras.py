@@ -26,6 +26,8 @@ import math
 import os
 
 import numpy as np
+import shapely
+import shapely.errors
 from shapely.affinity import rotate
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
@@ -129,8 +131,16 @@ class Extras(object):
     # -- school fences / 学校の柵
     def collect_fences(self):
         L = self.L
-        gaps = unary_union([L.driveways, L.parking, L.footpaths.buffer(0.2), L.cycleways]).buffer(0.3)
-        keepout = unary_union([L.road_all.buffer(0.6), L.building_area.buffer(0.4), self.court_area()])
+
+        def union(gs):
+            # GEOS "side location conflict" on near-coincident valid edges (OitaStation j104,
+            # 2026-11-09): the same union on a 1 mm grid / 1 mm グリッドで再試行
+            try:
+                return unary_union(gs)
+            except shapely.errors.GEOSException:
+                return shapely.union_all([shapely.make_valid(g) for g in gs], grid_size=0.001)
+        gaps = union([L.driveways, L.parking, L.footpaths.buffer(0.2), L.cycleways]).buffer(0.3)
+        keepout = union([L.road_all.buffer(0.6), L.building_area.buffer(0.4), self.court_area()])
         for p, t in L.osm.areas(lambda t: t.get("amenity") in ("school", "kindergarten")):
             ring = p.buffer(-0.6, join_style="mitre")
             for q in polys(ring):

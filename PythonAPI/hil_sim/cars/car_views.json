@@ -38,17 +38,6 @@
       0.6078
     ],
     "mass_kg": 1280,
-    "steering_wheel": {
-      "prop": "static.prop.mazdarx7steer",
-      "hub": [
-        0.0602,
-        0.3952,
-        0.7238
-      ],
-      "pitch": -15.44,
-      "yaw": 0.13,
-      "diameter_m": 0.341
-    },
     "driver_eye": [
       -0.5598,
       0.3952,
@@ -67,7 +56,18 @@
     "mirror": [
       "MazdaRX7_MirrorGlass"
     ],
-    "light_pieces": 10
+    "light_pieces": 10,
+    "steering_wheel": {
+      "prop": "static.prop.mazdarx7steer",
+      "hub": [
+        0.0602,
+        0.3952,
+        0.7238
+      ],
+      "pitch": -15.44,
+      "yaw": 0.13,
+      "diameter_m": 0.341
+    }
   },
   "vehicle.toyota.supra_a70": {
     "name": "ToyotaSupraA70",
@@ -108,17 +108,6 @@
       0.615
     ],
     "mass_kg": 1510,
-    "steering_wheel": {
-      "prop": "static.prop.toyotasupraa70steer",
-      "hub": [
-        0.1609,
-        0.3519,
-        0.7007
-      ],
-      "pitch": -15.11,
-      "yaw": 0.02,
-      "diameter_m": 0.377
-    },
     "driver_eye": [
       -0.4591,
       0.3519,
@@ -137,7 +126,18 @@
     "mirror": [
       "ToyotaSupraA70_MirrorGlass"
     ],
-    "light_pieces": 94
+    "light_pieces": 94,
+    "steering_wheel": {
+      "prop": "static.prop.toyotasupraa70steer",
+      "hub": [
+        0.1609,
+        0.3519,
+        0.7007
+      ],
+      "pitch": -15.11,
+      "yaw": 0.02,
+      "diameter_m": 0.377
+    }
   },
   "vehicle.mitsubishi.i_miev": {
     "name": "MitsubishiIMiev",
@@ -178,17 +178,6 @@
       0.8045
     ],
     "mass_kg": 1100,
-    "steering_wheel": {
-      "prop": "static.prop.mitsubishiimievsteer",
-      "hub": [
-        0.4727,
-        0.3514,
-        0.9564
-      ],
-      "pitch": -26.84,
-      "yaw": 0.05,
-      "diameter_m": 0.312
-    },
     "driver_eye": [
       -0.1473,
       0.3514,
@@ -209,7 +198,18 @@
     "mirror": [
       "MitsubishiIMiev_MirrorGlass"
     ],
-    "light_pieces": 500
+    "light_pieces": 500,
+    "steering_wheel": {
+      "prop": "static.prop.mitsubishiimievsteer",
+      "hub": [
+        0.4727,
+        0.3514,
+        0.9564
+      ],
+      "pitch": -26.84,
+      "yaw": 0.05,
+      "diameter_m": 0.312
+    }
   },
   "vehicle.bmw.csl_e9": {
     "name": "BMW30CSL",
@@ -250,21 +250,10 @@
       0.6782
     ],
     "mass_kg": 1270,
-    "steering_wheel": {
-      "prop": "static.prop.bmw30cslsteer",
-      "hub": [
-        0.2512,
-        -0.3641,
-        0.836
-      ],
-      "pitch": -28.27,
-      "yaw": -0.83,
-      "diameter_m": 0.431
-    },
     "driver_eye": [
-      -0.3688,
-      -0.3641,
-      1.096
+      -0.349,
+      -0.364,
+      1.056
     ],
     "materials": 21,
     "glass": [
@@ -279,7 +268,19 @@
     "mirror": [
       "BMW30CSL_MirrorGlass"
     ],
-    "light_pieces": 8
+    "light_pieces": 8,
+    "steering_wheel": {
+      "prop": "static.prop.bmw30cslsteer",
+      "hub": [
+        0.2512,
+        -0.3641,
+        0.836
+      ],
+      "pitch": -28.27,
+      "yaw": -0.83,
+      "diameter_m": 0.431
+    },
+    "eye_tuned": true
   },
   "vehicle.honda.nsx_r": {
     "name": "HondaNSXR",
@@ -320,17 +321,6 @@
       0.5989
     ],
     "mass_kg": 1270,
-    "steering_wheel": {
-      "prop": "static.prop.hondansxrsteer",
-      "hub": [
-        0.3959,
-        0.4268,
-        0.6721
-      ],
-      "pitch": -17.53,
-      "yaw": 1.57,
-      "diameter_m": 0.344
-    },
     "driver_eye": [
       -0.2241,
       0.4268,
@@ -349,7 +339,18 @@
     "mirror": [
       "HondaNSXR_MirrorGlass"
     ],
-    "light_pieces": 14
+    "light_pieces": 14,
+    "steering_wheel": {
+      "prop": "static.prop.hondansxrsteer",
+      "hub": [
+        0.3959,
+        0.4268,
+        0.6721
+      ],
+      "pitch": -17.53,
+      "yaw": 1.57,
+      "diameter_m": 0.344
+    }
   },
   "vehicle.toyota.soarer": {
     "name": "ToyotaSoarer",
@@ -390,17 +391,6 @@
       0.6614
     ],
     "mass_kg": 1580,
-    "steering_wheel": {
-      "prop": "static.prop.toyotasoarersteer",
-      "hub": [
-        0.3237,
-        0.4221,
-        0.7354
-      ],
-      "pitch": -20.84,
-      "yaw": -1.98,
-      "diameter_m": 0.397
-    },
     "driver_eye": [
       -0.2963,
       0.4221,
@@ -420,7 +410,18 @@
     "mirror": [
       "ToyotaSoarer_MirrorGlass"
     ],
-    "light_pieces": 3108
+    "light_pieces": 3108,
+    "steering_wheel": {
+      "prop": "static.prop.toyotasoarersteer",
+      "hub": [
+        0.3237,
+        0.4221,
+        0.7354
+      ],
+      "pitch": -20.84,
+      "yaw": -1.98,
+      "diameter_m": 0.397
+    }
   },
   "vehicle.nissan.sileighty": {
     "name": "NissanSileighty",
@@ -461,17 +462,6 @@
       0.6292
     ],
     "mass_kg": 1200,
-    "steering_wheel": {
-      "prop": "static.prop.nissansileightysteer",
-      "hub": [
-        0.3755,
-        0.3939,
-        0.6557
-      ],
-      "pitch": -10.01,
-      "yaw": -0.0,
-      "diameter_m": 0.397
-    },
     "driver_eye": [
       -0.244,
       0.394,
@@ -493,6 +483,17 @@
       "NissanSileighty_MirrorGlass"
     ],
     "light_pieces": 597,
+    "steering_wheel": {
+      "prop": "static.prop.nissansileightysteer",
+      "hub": [
+        0.3755,
+        0.3939,
+        0.6557
+      ],
+      "pitch": -10.01,
+      "yaw": -0.0,
+      "diameter_m": 0.397
+    },
     "eye_tuned": true
   },
   "vehicle.redbull.rb16": {
@@ -534,19 +535,8 @@
       0.5738
     ],
     "mass_kg": 746,
-    "steering_wheel": {
-      "prop": "static.prop.redbullrb16steer",
-      "hub": [
-        0.6844,
-        -0.0042,
-        0.5725
-      ],
-      "pitch": -2.03,
-      "yaw": 0.08,
-      "diameter_m": 0.224
-    },
     "driver_eye": [
-      0.14,
+      0.16,
       0.0,
       0.76
     ],
@@ -560,11 +550,22 @@
       "RedBullRB16_MirrorGlass"
     ],
     "light_pieces": 2,
+    "steering_wheel": {
+      "prop": "static.prop.redbullrb16steer",
+      "hub": [
+        0.6844,
+        -0.0042,
+        0.5725
+      ],
+      "pitch": -2.03,
+      "yaw": 0.08,
+      "diameter_m": 0.224
+    },
     "cameras": [
       {
         "name": "Cockpit",
         "loc": [
-          0.14,
+          0.16,
           0.0,
           0.76
         ],
@@ -643,17 +644,6 @@
       0.6166
     ],
     "mass_kg": 1660,
-    "steering_wheel": {
-      "prop": "static.prop.ferrarisf90xxsteer",
-      "hub": [
-        0.5361,
-        0.3436,
-        0.7383
-      ],
-      "pitch": -15.19,
-      "yaw": 0.13,
-      "diameter_m": 0.356
-    },
     "driver_eye": [
       -0.0839,
       0.3436,
@@ -673,7 +663,18 @@
     "mirror": [
       "FerrariSF90XX_MirrorGlass"
     ],
-    "light_pieces": 1538
+    "light_pieces": 1538,
+    "steering_wheel": {
+      "prop": "static.prop.ferrarisf90xxsteer",
+      "hub": [
+        0.5361,
+        0.3436,
+        0.7383
+      ],
+      "pitch": -15.19,
+      "yaw": 0.13,
+      "diameter_m": 0.356
+    }
   },
   "vehicle.rollsroyce.dawn": {
     "name": "RollsRoyceDawn",
@@ -714,17 +715,6 @@
       0.7464
     ],
     "mass_kg": 2560,
-    "steering_wheel": {
-      "prop": "static.prop.rollsroycedawnsteer",
-      "hub": [
-        0.2869,
-        0.3955,
-        1.0159
-      ],
-      "pitch": -24.6,
-      "yaw": 0.0,
-      "diameter_m": 0.392
-    },
     "driver_eye": [
       -0.3331,
       0.3955,
@@ -745,7 +735,18 @@
     "mirror": [
       "RollsRoyceDawn_MirrorGlass"
     ],
-    "light_pieces": 471
+    "light_pieces": 471,
+    "steering_wheel": {
+      "prop": "static.prop.rollsroycedawnsteer",
+      "hub": [
+        0.2869,
+        0.3955,
+        1.0159
+      ],
+      "pitch": -24.6,
+      "yaw": 0.0,
+      "diameter_m": 0.392
+    }
   },
   "vehicle.honda.s800": {
     "name": "HondaS800",
@@ -786,17 +787,6 @@
       0.5978
     ],
     "mass_kg": 755,
-    "steering_wheel": {
-      "prop": "static.prop.hondas800steer",
-      "hub": [
-        -0.0939,
-        0.2816,
-        0.7624
-      ],
-      "pitch": -13.12,
-      "yaw": 0.0,
-      "diameter_m": 0.351
-    },
     "driver_eye": [
       -0.7139,
       0.2816,
@@ -815,6 +805,87 @@
     "mirror": [
       "HondaS800_MirrorGlass"
     ],
-    "light_pieces": 22
+    "light_pieces": 22,
+    "steering_wheel": {
+      "prop": "static.prop.hondas800steer",
+      "hub": [
+        -0.0939,
+        0.2816,
+        0.7624
+      ],
+      "pitch": -13.12,
+      "yaw": 0.0,
+      "diameter_m": 0.351
+    }
+  },
+  "vehicle.oitabus.erga": {
+    "name": "OitaBusErga",
+    "blueprint": "vehicle.oitabus.erga",
+    "drive_side": "right",
+    "wheels": {
+      "Wheel_Front_Left": [
+        2.6597,
+        -1.1174,
+        0.4867
+      ],
+      "Wheel_Front_Right": [
+        2.6597,
+        1.1174,
+        0.4867
+      ],
+      "Wheel_Rear_Left": [
+        -2.6597,
+        -0.9669,
+        0.4867
+      ],
+      "Wheel_Rear_Right": [
+        -2.6597,
+        0.9669,
+        0.4867
+      ]
+    },
+    "wheel_radius_m": 0.4867,
+    "tyre_width_m": 0.275,
+    "bounds_extent_m": [
+      5.3841,
+      1.4368,
+      1.5395
+    ],
+    "bounds_centre_m": [
+      -0.0762,
+      0.0492,
+      1.5395
+    ],
+    "mass_kg": 9660,
+    "driver_eye": [
+      3.65,
+      0.7,
+      2.2
+    ],
+    "materials": 1,
+    "glass": [],
+    "blinker_left": [],
+    "blinker_right": [],
+    "mirror": [],
+    "light_pieces": 0,
+    "base_type": "bus",
+    "npc_only": true,
+    "brake_torque_nm": 7000,
+    "handbrake_torque_nm": 7000,
+    "com_height_m": 1.1,
+    "collision_box": {
+      "x": [
+        -5.44,
+        4.95
+      ],
+      "y": [
+        -1.235,
+        1.235
+      ],
+      "z": [
+        0.35,
+        3.0
+      ]
+    }
   }
 }

@@ -57,7 +57,8 @@ OLD_KEYS = {
     "help": ["h", "shift+/"], "fullscreen": ["f11"], "quit": ["escape", "ctrl+q"],
     "eye_fwd": ["ctrl+i"], "eye_back": ["ctrl+k"], "eye_left": ["ctrl+j"],
     "eye_right": ["ctrl+l"], "eye_down": ["ctrl+u"], "eye_up": ["ctrl+o"],
-    "signal_left": [], "signal_right": [], "hazard": [],
+    "signal_left": [], "signal_right": [], "hazard": ["e"],
+    "road_overlay": ["o"],          # added 2026-11-09 (road_overlay.py) / 追加
 }
 OLD_KEYS.update({"sensor_%d" % n: [str(n)] for n in range(1, 10)})
 bad = [a for a, k in OLD_KEYS.items() if d[a]["keys"] != k]
@@ -65,7 +66,8 @@ check("every keyboard default matches the old script", not bad, ", ".join(bad))
 check("every action has a default", set(d) == set(OLD_KEYS), str(set(d) ^ set(OLD_KEYS)))
 OLD_WHEEL = {"car_next": 0, "hud": 1, "camera_next": 2, "weather_next": 3,
              "gear_up": 4, "gear_down": 5, "reverse": 6, "handbrake": 7,
-             "transmission": 9, "signal_right": 10, "signal_left": 11, "sensor_next": 23}
+             "transmission": 9, "signal_right": 10, "signal_left": 11, "sensor_next": 23,
+             "hazard": 8}
 bad = [a for a, b in OLD_WHEEL.items() if d[a]["wheel"] != ["button:%d" % b]]
 check("every wheel default matches the old button numbers", not bad, ", ".join(bad))
 others = [a for a in d if a not in OLD_WHEEL and d[a]["wheel"]]

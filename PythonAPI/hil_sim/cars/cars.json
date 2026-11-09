@@ -1,5 +1,5 @@
 {
-  "_doc": "Your own cars (cars/build_cars.sh). Per car: source model, which objects are the wheels and the steering wheel, and the vehicle's specs. forward = the model's axis the car's nose points along. Lengths in metres, mass in kg. / \u81ea\u4f5c\u8eca\u4e21\u306e\u8a2d\u5b9a glass = window material names made invisible (make_glass.py); glass_objects = objects given their own window material first (when windows or lamp lenses share a material with something else). blinkers = indicator lens/bulb faces given <Name>_BlinkerL/_BlinkerR (side from CARLA y) and made to blink by make_lights.py; mirrors = side-mirror glass faces given <Name>_MirrorGlass (a mirror material). Rule keys: name/objects/materials, material, per_face, box {x|y|abs_y|z: [lo, hi]} in the vehicle frame (metres, x forward from mid-axle, y right, z up from the ground), tint, side (car_guide ch. 4, 12). lenses = lamp lens faces that come out opaque in UE, made invisible with the glass (<Name>_LensGlass). rhd_convert = make a left-hand-drive model right-hand drive: move (shared parts: wheel, column, cluster, pedals, as one block, axis_y), mirror (driver-shaped mouldings, per_face box symmetric about the centre line), flip_uv / unmirror (graphics on mirrored faces read right again; uv_box picks a decal in an atlas) (car_guide ch. 13). drop = helper meshes removed; split = one mesh cut per material and connected piece; vertex_colour_base = game-rip vertex colours and atlas UVs made visible in UE; steering_wheel box/in = the wheel cut out of merged meshes by a CAR-frame box, exclude = parts never joined to the wheel.",
+  "_doc": "Your own cars (cars/build_cars.sh). Per car: source model, which objects are the wheels and the steering wheel, and the vehicle's specs. forward = the model's axis the car's nose points along. Lengths in metres, mass in kg. / \u81ea\u4f5c\u8eca\u4e21\u306e\u8a2d\u5b9a glass = window material names made invisible (make_glass.py); glass_objects = objects given their own window material first (when windows or lamp lenses share a material with something else). blinkers = indicator lens/bulb faces given <Name>_BlinkerL/_BlinkerR (side from CARLA y) and made to blink by make_lights.py; mirrors = side-mirror glass faces given <Name>_MirrorGlass (a mirror material). Rule keys: name/objects/materials, material, per_face, box {x|y|abs_y|z: [lo, hi]} in the vehicle frame (metres, x forward from mid-axle, y right, z up from the ground), tint, side (car_guide ch. 4, 12). lenses = lamp lens faces that come out opaque in UE, made invisible with the glass (<Name>_LensGlass). rhd_convert = make a left-hand-drive model right-hand drive: move (shared parts: wheel, column, cluster, pedals, as one block, axis_y), mirror (driver-shaped mouldings, per_face box symmetric about the centre line), flip_uv / unmirror (graphics on mirrored faces read right again; uv_box picks a decal in an atlas) (car_guide ch. 13). drop = helper meshes removed; split = one mesh cut per material and connected piece; vertex_colour_base = game-rip vertex colours and atlas UVs made visible in UE; steering_wheel box/in = the wheel cut out of merged meshes by a CAR-frame box, exclude = parts never joined to the wheel. Heavy NPC vehicles (car_guide ch. 16): steering_wheel {\"none\": true} (no interior, needs driver_eye), npc_only (never parked, random traffic or a hero choice; own_cars.py), base_type, brake_torque_nm / handbrake_torque_nm (per wheel), collision_box {x,y,z: [lo, hi]} (own physics body box), com_height_m, max_texture, wheel_radius_m (dry-run radius for drivetrain.py).",
   "rx7": {
     "name": "MazdaRX7",
     "make": "mazda",
@@ -1795,6 +1795,146 @@
         "0_100_s": 13
       },
       "_note": "Final 4.71 and 156-160 km/h sourced; ALL four gear ratios APPROXIMATE (no source found; 4th chosen so 160 km/h falls near peak power). Cd 0.59 effective."
+    }
+  },
+  "oitabus": {
+    "name": "OitaBusErga",
+    "make": "oitabus",
+    "model": "erga",
+    "_licence": "Model: \"Japanese bus \\\"Nagoya City Bus\\\" (Aichi)\" by VRC-IW, https://sketchfab.com/3d-models/japanese-bus-nagoya-city-bus-aichi-37c0a04a7aef4139b6aa037d17e768e5, CC BY-NC 4.0 (non-commercial only). Livery repainted as an Oita Bus (Oita Bus Co. route livery) by the oita_station_map_v8 author; mesh unchanged. Unofficial fan model.",
+    "_note": "NPC bus for the OitaStation timetable (2026-11-08). Isuzu Erga non-step, short body (QRG-LV290N1 class: 10,430 x 2,485 x 3,045 mm, WB 5,300). Exterior shell only (4k tris, one atlas material): no interior, no steering wheel, windows painted opaque in the atlas -> no glass list (making them invisible would show an empty shell). Scale from the body length 10.537 m (bumper to bumper; the front under-mirror arms add 0.34 m) to 10.43 m. Wheels are split pieces (sidewalls, hub discs, tread quarters); rear duals modelled as one wheel per side. Heavy-NPC keys (ch. 16): npc_only (no parking, no random traffic, not a hero choice), base_type bus, brakes 7000 Nm per wheel (4 x 7000 / 0.487 m / 9660 kg = 6.0 m/s2), own physics box = the body without mirrors (x -5.44..4.95, z 0.35..3.0), centre of mass 1.1 m up, atlases scaled to 4096 px, wheel_radius_m = the dry-run's measured radius for drivetrain.py until a build writes car_views.json.",
+    "source": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/cars/sources/oitabus/source/unzipped/oitabus.glb",
+    "split": true,
+    "forward": "-y",
+    "scale": 0.98985,
+    "wheels": {
+      "objects": [
+        "OitaBus_OitaBus_42",
+        "OitaBus_OitaBus_43",
+        "OitaBus_OitaBus_44",
+        "OitaBus_OitaBus_45",
+        "OitaBus_OitaBus_46",
+        "OitaBus_OitaBus_47",
+        "OitaBus_OitaBus_58",
+        "OitaBus_OitaBus_81",
+        "OitaBus_OitaBus_82",
+        "OitaBus_OitaBus_83",
+        "OitaBus_OitaBus_84",
+        "OitaBus_OitaBus_85",
+        "OitaBus_OitaBus_86",
+        "OitaBus_OitaBus_99",
+        "OitaBus_OitaBus_48",
+        "OitaBus_OitaBus_49",
+        "OitaBus_OitaBus_50",
+        "OitaBus_OitaBus_51",
+        "OitaBus_OitaBus_52",
+        "OitaBus_OitaBus_53",
+        "OitaBus_OitaBus_54",
+        "OitaBus_OitaBus_55",
+        "OitaBus_OitaBus_56",
+        "OitaBus_OitaBus_57",
+        "OitaBus_OitaBus_59",
+        "OitaBus_OitaBus_87",
+        "OitaBus_OitaBus_88",
+        "OitaBus_OitaBus_89",
+        "OitaBus_OitaBus_90",
+        "OitaBus_OitaBus_91",
+        "OitaBus_OitaBus_92",
+        "OitaBus_OitaBus_93",
+        "OitaBus_OitaBus_94",
+        "OitaBus_OitaBus_95",
+        "OitaBus_OitaBus_96",
+        "OitaBus_OitaBus_97",
+        "OitaBus_OitaBus_98",
+        "OitaBus_OitaBus_100"
+      ]
+    },
+    "steering_wheel": {
+      "none": true
+    },
+    "driver_eye": [
+      3.65,
+      0.7,
+      2.2
+    ],
+    "mass": 9660,
+    "tyre_width_m": 0.275,
+    "drive_side": "right",
+    "npc_only": true,
+    "base_type": "bus",
+    "brake_torque_nm": 7000,
+    "handbrake_torque_nm": 7000,
+    "collision_box": {
+      "x": [
+        -5.44,
+        4.95
+      ],
+      "y": [
+        -1.235,
+        1.235
+      ],
+      "z": [
+        0.35,
+        3.0
+      ]
+    },
+    "com_height_m": 1.1,
+    "max_texture": 4096,
+    "wheel_radius_m": 0.4867,
+    "drivetrain": {
+      "transmission": "6AMT (Isuzu, automatic mode)",
+      "layout": "rear-engine RR, 4HK1-TCS 5.2 L I4 turbo diesel",
+      "gears": [
+        6.615,
+        4.095,
+        2.358,
+        1.531,
+        1.0,
+        0.722
+      ],
+      "final": 6.83,
+      "reverse": 6.0,
+      "max_rpm": 2600,
+      "torque_curve": [
+        [
+          600,
+          420
+        ],
+        [
+          1000,
+          600
+        ],
+        [
+          1600,
+          735
+        ],
+        [
+          2300,
+          735
+        ],
+        [
+          2400,
+          732
+        ],
+        [
+          2600,
+          560
+        ]
+      ],
+      "shift_up": 0.8,
+      "switch_time": 0.8,
+      "autobox_latency": 1.0,
+      "moi": 0.4,
+      "drag": 0.65,
+      "frontal_area_m2": 6.8,
+      "drive": "rear",
+      "_real": {
+        "power": "184 kW (250 PS) @ 2400",
+        "torque": "735 Nm @ 1600-2300",
+        "top_kmh": 90,
+        "0_100_s": null
+      },
+      "_note": "Engine and gearbox type from env.go.jp LEV list 2015 (QRG-LV290N1). Gear ratios (Isuzu 6-speed truck box) and final 6.83 APPROXIMATE, not sourced; final chosen so the speed at max RPM is near the 90 km/h limiter that Japanese vehicles over 8 t must have (CARLA has no limiter). Cd 0.65 effective, frontal area 2.485 x 2.75 m."
     }
   }
 }

@@ -57,8 +57,17 @@ TERT_UP = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "prima
 W = 0.15                 # line width / 線幅
 DASH, GAP = 5.0, 5.0
 STOP_W = 0.45
-STOP_BACK = 2.0
-STOP_ROAD_MIN = 12.0     # a stop needs an approach road longer than this (room for line + sign) / 一時停止に必要な進入路長          # stop line this far before a crossing / 横断歩道の手前 2 m
+STOP_BACK = 2.0          # stop line this far before a crossing / 横断歩道の手前 2 m
+STOP_PLAIN = 1.0         # ... or before the junction edge when there is none / 横断歩道が無ければ交差点の 1 m 手前
+STOP_POLE_CLEAR = 0.5    # signal line's front edge at least this far before the light pole / 信号柱との間隔
+STOP_NEAR_CROSS = 10.0   # a crossing whose near edge is within this of the lane end sets the line back / 停止線を手前に下げる横断歩道の距離
+STOP_ROAD_MIN = 12.0     # a stop needs an approach road longer than this (room for line + sign) / 一時停止に必要な進入路長
+CROSS_W = 4.0            # zebra band along the road / 横断歩道の幅
+CROSS_OUT = 2.5          # a crossing at a junction: band centre this far before the junction lanes / 交差点の脚の横断歩道位置
+CROSS_LEG_DEG = 15.0     # lanes within this heading of the crossing's road belong to it / 同じ道路とみなす方位差
+CROSS_MAX_SPAN = 32.0    # longer kerb-to-kerb spans are not a crossing (a whole junction) / これより長い横断は無し
+CROSS_REACH = 2.5        # band may reach this far past the road's lanes + gutters (to the kerb) / 車線外へ届く最大距離
+GUTTER_W = 0.4           # layout.GUTTER / 路肩幅
 NO_PASS = 30.0           # no overtaking this close to a junction or crossing / 追越し禁止の距離
 NO_PASS_R, NO_PASS_GRADE = 150.0, 0.07
 CENTRE_MIN = 5.5         # carriageway needed for a centre line / 中央線を引く最小幅員
@@ -66,11 +75,121 @@ SIGNAL_NEAR = 22.0
 FONT = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 
 
+def xodr_roads(xodr):
+    """Per xodr road: OSM way (sumoId), runs against the way, length, upstream
+    junction. Shared with check_markings.py. / xodr の道路ごとの OSM ウェイ・向き・長さ・上流交差点。"""
+    way, rev, length, pred, lights = {}, {}, {}, {}, {}
+    for r in ET.parse(xodr).getroot().findall("road"):
+        rid = int(r.get("id"))
+        length[rid] = float(r.get("length"))
+        for sg in r.findall("signals/signal"):
+            if sg.get("type") == "1000011":
+                pi = sg.find("positionInertial")
+                xy = (float(pi.get("x")), float(pi.get("y"))) if pi is not None else None
+                lights.setdefault(rid, []).append((float(sg.get("s")), xy))
+        pr = r.find("link/predecessor")
+        if pr is not None and pr.get("elementType") == "junction":
+            pred[rid] = int(pr.get("elementId"))
+        u = r.find("userData[@code='sumoId']")
+        if u is not None:
+            v = u.get("value")
+            way[rid] = v.lstrip("-").split("#")[0]
+            rev[rid] = v.startswith("-")
+    return {"way": way, "rev": rev, "len": length, "pred": pred, "lights": lights}
+
+
+def road_classes(sections, rid_way, ways, core=None):
+    """{(road, section): MAIN/TERT/MINOR/NARROW} from the OSM way behind each
+    road (see the module doc). Shared with check_markings.py. core: meta
+    "core" rectangle (x0, y0, x1, y1) or None; a road crossing it takes its
+    lane width from the part outside, where its markings are drawn (inside,
+    fit_core_widths.py narrowed it to the embedded model, which keeps its own
+    paint; guide ch. 35). / 区間ごとの道路の格（埋め込みモデルを越える道路は外側の幅で）。"""
+    cls = {}
+    for key, lanes in sections.items():
+        l = lanes[0]
+        t = ways.get(rid_way.get(l["road"], ""), (None, {}))[1]
+        hw = t.get("highway")
+        ws = [q["w"] for q in l["pts"]]
+        if core is not None:
+            out = [q["w"] for q in l["pts"]
+                   if not (core[0] < q["c"][0] < core[2] and core[1] < q["c"][1] < core[3])]
+            ws = out if len(out) >= 5 else ws
+        w = float(np.median(ws))
+        try:
+            nl = int(float((t.get("lanes") or "0").split(";")[0]))
+        except ValueError:
+            nl = 0
+        if len(lanes) >= 2 or (hw in TERT_UP and nl >= 4):
+            c = MAIN
+        elif hw in TERT_UP or l["name"] == "Ring Road":
+            c = TERT
+        elif hw == "service" or t.get("lane_markings") == "no" or w < 2.95:
+            c = NARROW
+        else:
+            c = MINOR
+        cls[key] = c
+    return cls
+
+
+def pole_back(lights, lanes):
+    """Distance of a road's light pole from the approach lane end, along the
+    lane: the light's road s mapped through the lane points' s (pole at the
+    reference line, offset t), or its positionInertial projected on the lane.
+    ``lights``: [(s, (x, y) or None)] of the road (xodr_roads). None without a
+    light. Shared with check_markings.py. / 信号柱の車線終端からの距離。"""
+    out = None
+    for s_sig, xy in lights:
+        for l in lanes:
+            C = np.array([q["c"] for q in l["pts"]])
+            cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(C, axis=0).T))])
+            if xy is not None:
+                d = cum[-1] - LineString(C).project(Point(*xy))
+            else:
+                sx = np.array([q["s"] for q in l["pts"]])
+                if sx[-1] < sx[0]:
+                    d = float(np.interp(s_sig, sx[::-1], (cum[-1] - cum)[::-1]))   # positive lanes / 正の車線
+                else:
+                    d = cum[-1] - float(np.interp(s_sig, sx, cum))
+            out = d if out is None else max(out, d)
+    return out
+
+
+def tangent(line, s, h=0.75):
+    """Unit direction of ``line`` at distance s (central difference). / 線の s における接線方向。"""
+    a = line.interpolate(max(0.0, s - h))
+    b = line.interpolate(min(line.length, s + h))
+    f = np.array([b.x - a.x, b.y - a.y])
+    nrm = np.linalg.norm(f)
+    if nrm < 1e-6:
+        c = np.asarray(line.coords)
+        f = c[-1] - c[0]
+        nrm = np.linalg.norm(f) or 1.0
+    return f / nrm
+
+
+def heading_mean(vs, ref):
+    """Mean direction of unit vectors modulo 180 deg, pointing the way ``ref``
+    does. / 向きを無視した平均方向（ref と同じ側）。"""
+    acc = np.zeros(2)
+    for v in vs:
+        a = 2.0 * math.atan2(v[1], v[0])
+        acc += (math.cos(a), math.sin(a))
+    if np.linalg.norm(acc) < 1e-9:
+        return np.asarray(ref, float)
+    a = math.atan2(acc[1], acc[0]) / 2.0
+    f = np.array([math.cos(a), math.sin(a)])
+    return f if float(f @ ref) >= 0 else -f
+
+
 class MarkingsJP(Markings):
     def __init__(self, layout, xodr):
         self.L = layout
         self.out, self.giveway, self.stops = [], [], []
         self.cut_w, self.keep_w, self.cut_y, self.keep_y = [], [], [], []
+        # every marking as an element for check_markings.py: kind, where, geometry
+        # 全標示の要素記録（check_markings.py 用）
+        self.elements = []
         self.count = collections.Counter()
         self.lanes = [l for l in layout.lanes if l["junction"] < 0]
         self.lefthand = layout.meta.get("lefthand", False)
@@ -105,43 +224,23 @@ class MarkingsJP(Markings):
             if p.area > 0.002:
                 dst.append(p)
 
+    def mark(self, kind, g, col="w", cut=False, **info):
+        """Paint ``g`` and record it as an element (kind, geometry, where) for
+        check_markings.py. / 描いて要素として記録する。"""
+        if g is None or g.is_empty:
+            return
+        self.add(g, col, cut=cut)
+        e = {"kind": kind, "col": col, "geom": g}
+        e.update(info)
+        self.elements.append(e)
+
     # -- road classes / 道路の格
     def classify(self, xodr):
-        rid_way = {}
-        self.rid_rev = {}             # road runs against its OSM way (sumoId "-<way>") / OSM と逆向き
-        self.rid_len, self.rid_pred = {}, {}   # xodr length, upstream junction / 長さ・上流の交差点
-        for r in ET.parse(xodr).getroot().findall("road"):
-            rid = int(r.get("id"))
-            self.rid_len[rid] = float(r.get("length"))
-            pr = r.find("link/predecessor")
-            if pr is not None and pr.get("elementType") == "junction":
-                self.rid_pred[rid] = int(pr.get("elementId"))
-            u = r.find("userData[@code='sumoId']")
-            if u is not None:
-                v = u.get("value")
-                rid_way[int(r.get("id"))] = v.lstrip("-").split("#")[0]
-                self.rid_rev[int(r.get("id"))] = v.startswith("-")
-        self.rid_way = rid_way
-        ways = self.L.osm.ways
-        self.cls = {}
-        for key, lanes in self.sections.items():
-            l = lanes[0]
-            t = ways.get(rid_way.get(l["road"], ""), (None, {}))[1]
-            hw = t.get("highway")
-            w = float(np.median([q["w"] for q in l["pts"]]))
-            try:
-                nl = int(float((t.get("lanes") or "0").split(";")[0]))
-            except ValueError:
-                nl = 0
-            if len(lanes) >= 2 or (hw in TERT_UP and nl >= 4):
-                c = MAIN
-            elif hw in TERT_UP or l["name"] == "Ring Road":
-                c = TERT
-            elif hw == "service" or t.get("lane_markings") == "no" or w < 2.95:
-                c = NARROW
-            else:
-                c = MINOR
-            self.cls[key] = c
+        x = xodr_roads(xodr)
+        self.rid_way, self.rid_rev, self.rid_len, self.rid_pred = x["way"], x["rev"], x["len"], x["pred"]
+        self.rid_lights = x["lights"]
+        from core_merge import core_rect
+        self.cls = road_classes(self.sections, self.rid_way, self.L.osm.ways, core_rect(self.L.meta))
         self.road_cls = {}
         for (road, sec), c in self.cls.items():
             self.road_cls[road] = max(self.road_cls.get(road, 0), c)
@@ -173,13 +272,16 @@ class MarkingsJP(Markings):
                 centre_lane = i == n - 1 if lh else i == 0
                 kerb_edge, kerb_out = (left, 1.0) if lh else (right, -1.0)
                 centre_edge, centre_in = (right, 1.0) if lh else (left, -1.0)
+                where = {"road": l["road"], "section": l["section"], "lane": l["lane"]}
                 if i + 1 < n:
                     for d in dashes(right if lh else left, DASH, GAP):
                         self.add(strip(d, W))
                     self.count["lane line m"] += (right if lh else left).length
+                    self.elements.append(dict(kind="lane", m=(right if lh else left).length, **where))
                 if kerb_lane and c >= MINOR:
                     self.add(strip(offset(kerb_edge, kerb_out * 0.1), W))
                     self.count["edge line m"] += kerb_edge.length
+                    self.elements.append(dict(kind="edge", side="kerb", m=kerb_edge.length, **where))
                 if not centre_lane:
                     continue
                 opp = self.opposite_jp(centre_edge, l)
@@ -189,17 +291,22 @@ class MarkingsJP(Markings):
                         # 分離帯側・一方通行の右側の外側線
                         self.add(strip(offset(centre_edge, -centre_in * 0.1), W))
                         self.count["edge line m"] += centre_edge.length
+                        self.elements.append(dict(kind="edge", side="centre", m=centre_edge.length, **where))
                     continue
                 okey = (opp["road"], opp["section"])
                 oc = self.cls.get(okey, c)
                 if c == MAIN or oc == MAIN:
                     self.add(strip(offset(centre_edge, centre_in * 0.3), W))
                     self.count["centre double white m (per side)"] += centre_edge.length
+                    self.elements.append(dict(kind="centre", style="double", m=centre_edge.length, opp=opp["road"],
+                                              **where))
                 elif min(c, oc) >= TERT and l["road"] < opp["road"]:
                     width = float(np.median([q["w"] for q in l["pts"]])) + \
                         float(np.median([q["w"] for q in opp["pts"]]))
                     if width >= CENTRE_MIN:
                         self.centre_line(centre_edge, l)
+                        self.elements.append(dict(kind="centre", style="jp", m=centre_edge.length, opp=opp["road"],
+                                                  **where))
 
     def opposite_jp(self, edge, l, tol=1.5):
         """The other direction alongside this lane's centre-side edge: the road
@@ -441,36 +548,77 @@ class MarkingsJP(Markings):
                                 "stop line and sign) and no longer road of the same way enters the cluster "
                                 "upstream" % (self.rid_len.get(road, 0.0), STOP_ROAD_MIN),
                         "road": road, "junction": j, "why": info[key]["why"]})
-        # pass 3: paint / 描画
+        # pass 3: paint. Every piece sits ON the lane's centre line at its own
+        # distance from the lane end, square to the lane THERE (the old straight
+        # extrapolation of the end heading skewed lines and text on curved
+        # approaches). A signalised approach gets one stop line and never 止まれ.
+        # 描画: 各要素は車線中心線上の位置でその場の接線に直角（信号の進入路は停止線 1 本のみ、止まれ無し）
         for (road, j), v in info.items():
             lanes, end, signal, stop = v["lanes"], v["end"], v["signal"], v["stop"]
-            back = self.setback(end, lanes[0][0])
+            back, cross_at = self.setback([l for l, t in lanes])
+            # signalised: the standard setback too. signs.py then moves the
+            # light's s (its trigger: where cars stop) to just before this line
+            # and lht_poles pins the pole at its old corner spot past the line
+            # (positionInertial), so line -> crossing -> pole as on real roads.
+            # 信号の停止線も標準位置。信号の s は signs.py が停止線の手前へ、柱は角に固定。
+            where = {"road": road, "junction": j, "signal": bool(signal), "back": back, "crossing": cross_at}
             for l, turns in lanes:
-                P = np.array([q["c"] for q in l["pts"]])
-                f = P[-1] - P[-3]
-                f = f / (np.linalg.norm(f) or 1.0)
-                nrm = np.array([-f[1], f[0]])
-                yaw = math.atan2(f[1], f[0])
+                ln = LineString([q["c"] for q in l["pts"]])
+                total = ln.length
                 w = l["pts"][-1]["w"]
-                ln = LineString(P)
                 if signal or stop:
-                    c = P[-1] - f * (back + STOP_W / 2)
-                    self.add(strip(LineString([c - nrm * (w / 2 + 0.05), c + nrm * (w / 2 + 0.05)]), STOP_W),
-                             cut=False)
-                    self.count["stop lines (signal)" if signal else "stop lines + 止まれ"] += 1
-                if stop and ln.length > back + 10.0:
-                    self.add(self.text("止まれ", P[-1] - f * (back + STOP_W + 1.5), yaw, 3.0, 1.5, 0.5), cut=False)
+                    sc = total - back - STOP_W / 2
+                    if sc < STOP_W:
+                        self.count["stop lines skipped (lane shorter than the setback)"] += 1
+                    else:
+                        q, f = self.at(ln, sc)
+                        nrm = np.array([-f[1], f[0]])
+                        self.mark("stop_signal" if signal else "stop",
+                                  strip(LineString([q - nrm * (w / 2 + 0.05), q + nrm * (w / 2 + 0.05)]), STOP_W),
+                                  lane=l["lane"], s=sc, **where)
+                        self.count["stop lines (signal)" if signal else "stop lines + 止まれ"] += 1
+                if stop and not signal and total > back + 10.0:
+                    # 止まれ right behind the line, 止 nearest it / 止まれは停止線の直後（止が線側）
+                    self.mark("tomare", self.text_along(ln, total - back - STOP_W - 1.0, "止まれ", 3.0, 1.5, 0.5),
+                              lane=l["lane"], **where)
                 if len(lanes) >= 2 and turns:
                     for dist in (7.0, 27.0):
-                        if dist + back + 8.0 < ln.length:
-                            p = ln.interpolate(ln.length - back - dist)
-                            self.add(self.arrow_jp((p.x, p.y), yaw, turns), cut=False)
+                        sc = total - back - dist
+                        if sc - 2.5 > 0.5:
+                            q, f = self.at(ln, sc)
+                            self.mark("arrow", self.arrow_jp(q, math.atan2(f[1], f[0]), turns), lane=l["lane"],
+                                      turns=sorted(turns), s=sc, **where)
                             self.count["lane arrows"] += 1
             if stop:
                 self.stops.append((road, j, back + STOP_W))
                 self.stop_log.append({"junction": j, "road": road, "way": self.rid_way.get(road, "?"),
                                       "why": v["why"], "x": round(float(end[0]), 1), "y": round(float(end[1]), 1),
                                       "back": round(back + STOP_W, 2)})
+
+    def pole_back(self, road, lanes):
+        return pole_back(self.rid_lights.get(road, []), lanes)
+
+    @staticmethod
+    def at(ln, s):
+        """Point on the lane centre line at distance s and the unit tangent there.
+        車線中心線上の点とその接線。"""
+        s = min(max(0.0, s), ln.length)
+        q = ln.interpolate(s)
+        return np.array([q.x, q.y]), tangent(ln, s)
+
+    def text_along(self, ln, s_far, s, length, width, gap):
+        """Road text along the lane centre line: character k centred at
+        s_far - k (length + gap) - length / 2, each square to the lane there;
+        the first character furthest ahead. / 車線に沿う路面文字（先頭の字が最も前）。"""
+        out = []
+        for k, ch in enumerate(s):
+            g = glyph_jp(ch, length, width)
+            sc = s_far - (k * (length + gap) + length / 2)
+            if g is None or sc - length / 2 < 0.0:
+                continue
+            q, f = self.at(ln, sc)
+            out.append(self.place(rotate(g, -90, origin=(0, 0)), q, math.atan2(f[1], f[0])))
+        return unary_union(out) if out else None
 
     def speed_signs(self, speeds=(30, 40, 60, 70, 80, 90, 100), min_len=40.0):
         """Speed-limit signs, Japanese practice: only where a road's limit
@@ -678,20 +826,30 @@ class MarkingsJP(Markings):
             out.append((float(np.linalg.norm(q - P)), q))
         return sorted(out, key=lambda t: t[0])
 
-    def setback(self, end, lane):
-        """Distance of the stop line from the lane end: 2 m behind a crossing
-        at this arm. / 横断歩道があればその 2 m 手前。"""
-        P = np.array([q["c"] for q in lane["pts"]])
-        f = P[-1] - P[-3]
-        f = f / (np.linalg.norm(f) or 1.0)
-        best = 0.5
-        for cr in self.crossings:
-            v = np.array(cr["c"]) - end
-            along = -float(v @ f)
-            side = abs(float(v @ np.array([-f[1], f[0]])))
-            if -3.0 < along < 15.0 and side < 15.0:
-                best = max(best, along + cr["width"] / 2 + STOP_BACK)
-        return best
+    def setback(self, lanes):
+        """(distance of the stop line's front edge from the lane end, crossing
+        index or None): STOP_BACK before a crossing band that the approach lanes
+        run through within STOP_NEAR_CROSS of their end, else STOP_PLAIN before
+        the junction edge. Only bands the lanes really cross count (a crossing on
+        the side street 10 m away used to set the line back too).
+        停止線の位置: 進入車線が通る横断歩道の 2 m 手前、無ければ交差点端の 1 m 手前。"""
+        best, which = STOP_PLAIN, None
+        for k, cr in enumerate(self.crossings):
+            for l in lanes:
+                P = np.array([q["c"] for q in l["pts"]])
+                f = P[-1] - P[-3]
+                f = f / (np.linalg.norm(f) or 1.0)
+                ext = LineString(list(map(tuple, P)) + [tuple(P[-1] + f * 3.0)])   # 3 m into the junction / 交差点側へ延長
+                hit = ext.intersection(cr["band"])
+                if hit.is_empty:
+                    continue
+                s_min = min(ext.project(Point(q)) for g in getattr(hit, "geoms", [hit]) for q in g.coords)
+                gap = (ext.length - 3.0) - s_min          # band's near edge before the lane end / 帯の手前端まで
+                if gap > STOP_NEAR_CROSS:
+                    continue
+                if gap + STOP_BACK > best:
+                    best, which = gap + STOP_BACK, k
+        return best, which
 
     def arrow_jp(self, p, yaw, turns):
         """Japanese lane arrow, 5 m long, combined for the lane's turns. / 進行方向別通行区分の矢印。"""
@@ -765,36 +923,220 @@ class MarkingsJP(Markings):
         for p, t, src in cands:
             if all(p.distance(q) > 6.0 for q, _, _ in kept):
                 kept.append((p, t, src))
-        lane_lines = [(LineString([q["c"] for q in l["pts"]]), l) for l in self.lanes]
-        tree = STRtree([g for g, _ in lane_lines])
+        self.lane_ls = [(LineString([q["c"] for q in l["pts"]]), l) for l in self.lanes if len(l["pts"]) >= 2]
+        self.lane_tree = STRtree([g for g, _ in self.lane_ls])
         out = []
         for p, t, src in kept:
-            i = tree.query_nearest(p, max_distance=12.0)
-            if len(i) == 0:
+            cr = self.place_crossing(p)
+            if cr is None:
+                self.count["crossings not placed (no road under the point)"] += 1
                 continue
-            line = lane_lines[int(i[0])][0]
-            s = line.project(p)
-            a, b = line.interpolate(max(0, s - 1.0)), line.interpolate(min(line.length, s + 1.0))
-            yaw = math.atan2(b.y - a.y, b.x - a.x)
-            f = np.array([math.cos(yaw), math.sin(yaw)])
-            n = np.array([-f[1], f[0]])
-            c = np.array([p.x, p.y])
-            g = LineString([c - n * 30.0, c + n * 30.0]).intersection(cw)
-            segs = [q for q in getattr(g, "geoms", [g]) if q.geom_type == "LineString" and q.distance(p) < 10.0]
-            if not segs or sum(q.length for q in segs) > 32.0:
-                continue
-            ts = [float((np.array(q) - c) @ n) for sg in segs for q in sg.coords]
-            signal = t.get("crossing") == "traffic_signals" or t.get("crossing:signals") == "yes" or \
+            cr["signal"] = t.get("crossing") == "traffic_signals" or t.get("crossing:signals") == "yes" or \
                 t.get("highway") == "traffic_signals" or any(q.distance(p) < 20.0 for q in self.osm_signals)
-            wdt = 4.0
-            band = unary_union([sg.buffer(wdt / 2, cap_style="flat") for sg in segs]).intersection(cw)
-            out.append({"c": c.tolist(), "f": f.tolist(), "n": n.tolist(), "t0": min(ts), "t1": max(ts),
-                        "segs": segs, "width": wdt, "kind": "zebra_jp", "signal": signal, "yaw": yaw,
-                        "band": band, "src": src})
+            cr["kind"], cr["src"], cr["point"] = "zebra_jp", src, [p.x, p.y]
+            out.append(cr)
+        return self.merge_crossings(out)
+
+    def leg_lanes(self, c, f, ref=None):
+        """The lanes of the road a crossing at c (heading f) runs over: lanes whose
+        centre line crosses the across-line within 14 m of c with a heading within
+        CROSS_LEG_DEG of ``ref`` (the road's own lane heading; f when None), mod
+        180: both directions of the road, not the side street.
+        [(lane, crossing point, unit tangent)] / 横断歩道が跨ぐ道路の車線。"""
+        ref = f if ref is None else ref
+        n = np.array([-f[1], f[0]])
+        across = LineString([c - n * 30.0, c + n * 30.0])
+        out = []
+        for k in self.lane_tree.query(across):
+            ln, l = self.lane_ls[int(k)]
+            x = ln.intersection(across)
+            for q in getattr(x, "geoms", [x]):
+                if q.geom_type != "Point" or math.hypot(q.x - c[0], q.y - c[1]) > 14.0:
+                    continue
+                h = tangent(ln, ln.project(q))
+                if abs(float(h @ ref)) >= math.cos(math.radians(CROSS_LEG_DEG)):
+                    out.append((l, np.array([q.x, q.y]), h))
         return out
 
+    def place_crossing(self, p):
+        """One crossing from a candidate point: square to the lanes of the road it
+        crosses (their mean heading AT the band), kerb to kerb across that road
+        only (the across-line is clipped to the road's own lanes + CROSS_REACH, so
+        it never runs through the junction's paving into the side street; both
+        halves of a divided road count), its centre kept CROSS_OUT before the
+        junction lanes when the point lies at or in a junction (OSM nodes often
+        sit inside netconvert's junction area: the old band ran 24 m diagonally
+        across junction 266's lanes), and moved back from the junction while the
+        band covers junction lanes or does not end at a kerb (the corner flare:
+        Japanese crossings sit behind the corner radii).
+        候補点から横断歩道 1 本: 跨ぐ道路の車線に直角、その道路の縁石から縁石まで、交差点車線・隅切りに掛からない位置。"""
+        cw = self.L.carriageway
+        jl = self.L.junction_lanes
+        c = np.array([p.x, p.y])
+        near = [int(i) for i in self.lane_tree.query(p.buffer(12.0))]
+        near = [i for i in near if self.lane_ls[i][0].distance(p) <= 12.0]
+        if not near:
+            return None
+        # the road's own lane: nearest, preferring lanes long enough to have a heading
+        # 最も近い車線（向きの判る長さの物を優先）
+        near.sort(key=lambda i: (self.lane_ls[i][0].length < 6.0, self.lane_ls[i][0].distance(p)))
+        line, lane = self.lane_ls[near[0]]
+        s = line.project(p)
+        f0 = tangent(line, s)                  # the road's own heading anchors the leg / 道路自身の向きが基準
+        # at a junction: the band centre CROSS_OUT before the junction lanes of the
+        # leg, so the band ends 0.5 m short of them / 交差点の脚では交差点車線の手前に
+        c0, c1 = np.asarray(line.coords[0]), np.asarray(line.coords[-1])
+        j_end = jl.distance(Point(c1)) < 1.0            # the lane enters a junction at its end / 終端が交差点
+        j_start = jl.distance(Point(c0)) < 1.0          # ... or leaves one at its start / 始端が交差点
+        inside = jl.buffer(0.5).contains(p)
+        if inside and j_end and j_start:
+            j_end = np.linalg.norm(c - c1) <= np.linalg.norm(c - c0)
+            j_start = not j_end
+        if j_end and (inside or s > line.length - CROSS_OUT):
+            s = max(0.0, line.length - CROSS_OUT)
+        elif j_start and (inside or s < CROSS_OUT):
+            s = min(line.length, CROSS_OUT)
+        q = line.interpolate(s)
+        f = tangent(line, s)
+        # c on the across-line through the lane point, at the candidate's offset
+        # from the lane (mid-block points keep their place across the road)
+        # 車線上の点を通る横断線上に中心（道路を横切る方向の位置は候補点のまま）
+        n = np.array([-f[1], f[0]])
+        c = np.array([q.x, q.y]) + n * float((np.array([p.x, p.y]) - np.array([q.x, q.y])) @ n)
+        back_dir = -f if j_end else (f if j_start else None)
+        best = None
+        for shift in range(0, 17):
+            cr = self.band_at(c, f, cw, f0)
+            if cr is not None:
+                inj = cr["band"].intersection(jl).area / cr["band"].area
+                score = (inj > 0.1) + (not cr["at_kerb"]) + 0.01 * shift
+                if best is None or score < best[0]:
+                    best = (score, cr, inj)
+                if back_dir is None or score < 0.5:
+                    break
+            elif back_dir is None:
+                break
+            c = c + back_dir * 0.5                       # further from the junction / 交差点から離す
+        if best is None:
+            return None
+        cr = best[1]
+        cr["in_junction"] = round(best[2], 3)
+        return cr
+
+    def band_at(self, c, f, cw, ref=None):
+        """The crossing band centred at c, across f: the carriageway pieces, under
+        the road's own lanes, of the across-line clipped to those lanes + CROSS_REACH.
+        f is refined to the lanes' mean heading at the band. Returns None when no
+        lane of the road passes here.
+        c を中心に f に直角な横断歩道の帯（道路自身の車線の幅 + 余裕に限る）。"""
+        ref = f if ref is None else ref
+        legs = self.leg_lanes(c, f, ref)
+        for _ in range(2):
+            if not legs:
+                return None
+            f2 = heading_mean([h for _, _, h in legs], ref)
+            if abs(float(f2 @ f)) > math.cos(math.radians(0.3)):
+                break
+            f = f2
+            legs = self.leg_lanes(c, f, ref)
+        n = np.array([-f[1], f[0]])
+        t_l = [(float((q - c) @ n), l["pts"][min(len(l["pts"]) - 1, int(np.argmin([math.hypot(*(np.array(pt["c"]) - q))
+                                                                                 for pt in l["pts"]])))]["w"])
+               for l, q, _ in legs]
+        lo = min(t - w / 2 for t, w in t_l) - GUTTER_W - CROSS_REACH
+        hi = max(t + w / 2 for t, w in t_l) + GUTTER_W + CROSS_REACH
+        g = LineString([c + n * lo, c + n * hi]).intersection(cw)
+        segs = [q for q in getattr(g, "geoms", [g]) if q.geom_type == "LineString"]
+        pts = [Point(*q) for _, q, _ in legs]
+        segs = [sg for sg in segs if any(sg.distance(pt) < 0.3 for pt in pts)]
+        if not segs or sum(q.length for q in segs) > CROSS_MAX_SPAN:
+            return None
+        band = unary_union([sg.buffer(CROSS_W / 2, cap_style="flat") for sg in segs]).intersection(cw)
+        if band.is_empty:
+            return None
+        ts = [float((np.array(q) - c) @ n) for sg in segs for q in sg.coords]
+        t0, t1 = min(ts), max(ts)
+        edge = cw.boundary
+        at_kerb = all(edge.distance(Point(*(c + n * t))) <= 0.35 for t in (t0, t1))
+        on = [(l, q) for l, q, _ in legs if any(sg.distance(Point(*q)) < 0.3 for sg in segs)]
+        seg_roads = [sorted({l["road"] for l, q in on if sg.distance(Point(*q)) < 0.3}) for sg in segs]
+        return {"seg_roads": seg_roads, "c": c.tolist(), "f": f.tolist(), "n": n.tolist(), "t0": t0, "t1": t1, "segs": segs,
+                "width": CROSS_W, "yaw": math.atan2(f[1], f[0]), "band": band, "at_kerb": at_kerb,
+                "lanes_w": round(sum(w for t, w in t_l), 2), "paved": round(sum(q.length for q in segs), 2),
+                "roads": sorted({l["road"] for l, _ in on})}
+
+    def merge_crossings(self, out):
+        """Bands that overlap: parallel ones (the same crossing from two sources,
+        or two OSM lines) merge into the longer; at a junction corner the longer
+        band is cut back where it runs into the other, so no bars overlap.
+        重なる横断歩道: 平行なら統合、角で交わるなら長い方を切り詰める。"""
+        drop = set()
+        for i in range(len(out)):
+            for k in range(i + 1, len(out)):
+                if i in drop or k in drop:
+                    continue
+                a, b = out[i], out[k]
+                ov = a["band"].intersection(b["band"]).area
+                if ov < 0.2:
+                    continue
+                if abs(float(np.array(a["f"]) @ np.array(b["f"]))) > 0.9 and ov > 0.3 * min(a["band"].area,
+                                                                                            b["band"].area):
+                    lose, keep = (a, b) if a["band"].area < b["band"].area else (b, a)
+                    keep["signal"] = keep.get("signal") or lose.get("signal")
+                    keep["src"] += " + " + lose["src"]
+                    drop.add(i if lose is a else k)
+                    self.count["crossings merged (parallel overlap)"] += 1
+                    continue
+                cut, other = (a, b) if (a["t1"] - a["t0"]) >= (b["t1"] - b["t0"]) else (b, a)
+                self.trim_band(cut, other["band"].buffer(0.3))
+                self.count["crossings trimmed at a corner"] += 1
+        out = [cr for i, cr in enumerate(out) if i not in drop]
+        # one crossing per carriageway at a corner: a piece of a multi-carriageway
+        # crossing over a carriageway that has its own crossing within 12 m is left
+        # out (j266: the band across the west approach also crossed the slip road
+        # 7 m before the slip road's own crossing)
+        # 角では 1 車道に 1 本: 近くに専用の横断歩道がある車道の部分は除く
+        for a in out:
+            if len(a["segs"]) < 2:
+                continue
+            keep = []
+            for sg, rs in zip(a["segs"], a.get("seg_roads", [[]] * len(a["segs"]))):
+                dup = any(b is not a and set(rs) and set(rs) <= set(b.get("roads", []))
+                          and len(b["segs"]) < len(a["segs"]) and b["band"].distance(sg) < 12.0 for b in out)
+                if dup:
+                    self.count["crossing pieces left out (own crossing nearby)"] += 1
+                else:
+                    keep.append((sg, rs))
+            if keep and len(keep) < len(a["segs"]):
+                cut = unary_union([sg.buffer(CROSS_W / 2 + 0.05, cap_style="flat") for sg, rs in keep])
+                a["band"] = a["band"].intersection(cut)
+                a["segs"] = [sg for sg, rs in keep]
+                a["seg_roads"] = [rs for sg, rs in keep]
+                a["roads"] = sorted({r for sg, rs in keep for r in rs})
+                c, n = np.array(a["c"]), np.array(a["n"])
+                ts = [float((np.array(q) - c) @ n) for sg in a["segs"] for q in sg.coords]
+                a["t0"], a["t1"] = min(ts), max(ts)
+        return out
+
+    @staticmethod
+    def trim_band(cr, cutter):
+        c, n = np.array(cr["c"]), np.array(cr["n"])
+        band = cr["band"].difference(cutter)
+        parts = [q for q in polys(band) if q.area > 0.5]
+        if not parts:
+            return
+        band = unary_union(parts)
+        cr["band"] = band
+        ts = [float((np.array(q) - c) @ n) for g in polys(band) for q in np.asarray(g.exterior.coords)]
+        cr["t0"], cr["t1"] = min(ts), max(ts)
+        segs = []
+        for sg in cr["segs"]:
+            d = sg.difference(cutter)
+            segs += [q for q in getattr(d, "geoms", [d]) if q.geom_type == "LineString" and q.length > 0.3]
+        cr["segs"] = segs or cr["segs"]
+
     def crossing_marks(self):
-        for cr in self.crossings:
+        for k, cr in enumerate(self.crossings):
             f, n, c = np.array(cr["f"]), np.array(cr["n"]), np.array(cr["c"])
             w = cr["width"]
             bars = []
@@ -803,7 +1145,8 @@ class MarkingsJP(Markings):
                 q = c + n * (t + 0.225)
                 bars.append(LineString([q - f * w / 2, q + f * w / 2]).buffer(0.225, cap_style="flat"))
                 t += 0.9
-            self.add(unary_union(bars).intersection(cr["band"]), cut=False)
+            self.mark("zebra", unary_union(bars).intersection(cr["band"]) if bars else None, crossing=k,
+                      signal=bool(cr["signal"]), roads=cr.get("roads", []))
             self.count["zebra crossings"] += 1
             if cr["signal"]:
                 continue
@@ -822,7 +1165,8 @@ class MarkingsJP(Markings):
                     a, b = ln.interpolate(s0 - dist - 1.0), ln.interpolate(s0 - dist + 1.0)
                     yaw = math.atan2(b.y - a.y, b.x - a.x)
                     m = ln.interpolate(s0 - dist)
-                    self.add(self.diamond((m.x, m.y), yaw), cut=False)
+                    self.mark("diamond", self.diamond((m.x, m.y), yaw), crossing=k, road=lane["road"],
+                              lane=lane["lane"], dist=dist)
                     self.count["diamonds"] += 1
 
     # -- bus bays / バス停車帯
@@ -848,7 +1192,7 @@ class MarkingsJP(Markings):
             ctr = np.array(ring.centroid.coords[0])
             txt = "バス停留所"
             ln_t = 1.9 * len(txt) + 0.25 * (len(txt) - 1)
-            self.add(self.text(txt, ctr + fwd * ln_t / 2, yaw, 1.9, 1.4, 0.25), "y", cut=False)
+            self.mark("bus_text", self.text(txt, ctr + fwd * ln_t / 2, yaw, 1.9, 1.4, 0.25), "y")
             self.count["bus bays marked"] += 1
             self.bay_zone = getattr(self, "bay_zone", []) + [bay["poly"].buffer(0.3)]
 

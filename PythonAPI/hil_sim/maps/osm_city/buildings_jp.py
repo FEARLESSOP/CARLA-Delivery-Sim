@@ -56,6 +56,7 @@ FOOT_CLEAR = 0.4         # footprints keep this off them (AC units, sills, gutte
 NEAR_HEAD = 6.0          # a block this near a dead-end head was cut by it / 転回部に削られた棟
 HEAD_SHED_MAX = 150.0    # ... and this small (m2) becomes a shed when its rectangle reaches a footway / 小さい棟のみ
 LOT_PATH_CLEAR = 0.6     # lots keep this off them (battered stone toes) / 敷地の離れ
+CORE_LIFT = 0.12         # lots inside an embedded model: over its plots (+0.127) / 埋め込みモデルの敷地面より上へ
 RAISED_Z = 0.15          # ground.RAISED_Z: the ground / pavement surface / 地面の高さ
 BUILD_CLEAR = 2.2        # layout.BUILD_CLEAR / 建物と車道の最小距離
 REACH = 1.5              # longest projection (balconies) / 最大の張り出し
@@ -120,6 +121,9 @@ AKENO_APAATO = [("jp_wall_beige", 0.3), ("jp_wall_ivory", 0.25), ("jp_wall_white
                 ("jp_wall_mocha", 0.1), ("jp_wall_brown", 0.05), ("jp_wall_blue", 0.05)]
 DANCHI_ACC = [("jp_concrete_white", 0.45), ("jp_wall_grey", 0.2), ("jp_wall_beige", 0.2), ("jp_wall_mocha", 0.15)]
 AKENO_KAWARA += [("jp_roof_slate_grey", 0.3), ("jp_roof_slate", 0.2), ("jp_roof_slate_brown", 0.15)]
+FAC_STYLES = ("house", "apaato", "mansion", "shop", "shed", "office", "carpark", "school")  # survey styles / 調査で指定できる様式
+FAC_NEAR = 5.0           # a survey point this near a footprint still names it (m) / 調査点の許容距離
+OFFICE_Z1 = 4.8          # an office's first upper floor (local z): textures_jp_bld FLOOR_Z0 + FLOOR_M / 事務所 2 階床
 OBS_R, OBS_SHARE = 120.0, 0.35       # an observation colours its style within 120 m, 35 % of them / 観察の影響範囲
 PITCHED = ("jp_kawara", "jp_roof_slate")     # same pitch: interchangeable by paint / 同じ勾配の屋根
 METAL = ("jp_roof_metal",)                   # lower pitch: only among themselves / 低勾配の金属屋根
@@ -665,6 +669,12 @@ class JP(object):
             it = Item()
             it.i, it.t, it.raw = i, t, p
             it.style = self.style_of(t, p, lv_tag)
+            # a per-building survey entry (colour_notes.json "facades", e.g. the
+            # OitaStation core from the v8 author's buildings.csv + Street View):
+            # its style and storeys win / 建物ごとの調査（様式・階数を優先）
+            it.fac = self.facade_of(p)
+            if it.fac is not None and it.fac.get("style") in FAC_STYLES:
+                it.style = it.fac["style"]
             it.poly, it.shape, it.R, it.R2 = self.regularise(p, it.style, i)
             if it.style in ("apaato", "danchi", "mansion") and min(it.R.A, it.R.B) < 6.5 and \
                     max(it.R.A, it.R.B) > 5 * min(it.R.A, it.R.B):
@@ -681,10 +691,43 @@ class JP(object):
                 # 外接矩形が歩道に掛かる不整形の棟は廊下が歩道上に出る: 平屋の棟
                 it.style = "shed"
             it.levels = self.levels(it.style, t, p, rng)
+            if it.fac is not None and it.fac.get("levels") and it.style == it.fac.get("style"):
+                it.levels = int(it.fac["levels"])
+                if it.style == "house":
+                    it.levels = min(it.levels, 3)
+                elif it.style == "apaato":
+                    it.levels = min(it.levels, 2)
             self.items[i] = it
         self.lots()
         self.variants()
         self.terraces()
+
+    def facade_of(self, p):
+        """The survey entry for footprint p: an entry point inside it (+1 m),
+        the biggest surveyed footprint first, canopies last; else the nearest
+        within FAC_NEAR. None without colour_notes.json "facades" (other maps).
+        外形に入る調査点（大きい建物を優先）、無ければ FAC_NEAR 以内の最寄り。"""
+        if getattr(self, "_fac", None) is None:
+            fs = [f for f in ((getattr(self.B.sites, "notes", None) or {}).get("facades") or [])
+                  if isinstance(f, dict) and len(f.get("xy") or []) == 2]
+            self._fac = fs
+            self._fac_pts = shapely.points([f["xy"] for f in fs]) if fs else None
+            self._fac_tree = shapely.STRtree(self._fac_pts) if fs else None
+        if not self._fac:
+            return None
+        inside = [int(k) for k in self._fac_tree.query(p.buffer(1.0), predicate="contains")]
+        if inside:
+            return max((self._fac[k] for k in inside),
+                       key=lambda f: (f.get("style") != "shed", float(f.get("area") or 0.0)))
+        near = [int(k) for k in self._fac_tree.query(p.buffer(FAC_NEAR))]
+        # not a point that stands in another footprint: that building's survey (a
+        # tower's height must not pass to the low block beside it) / 他棟内の調査点は使わない
+        near = [k for k in near if not any(int(j) != self.cur for j in
+                                           self.tree.query(self._fac_pts[k], predicate="intersects"))]
+        if not near:
+            return None
+        k = min(near, key=lambda k: p.distance(self._fac_pts[k]))
+        return self._fac[k]
 
     def near_head(self, p):
         """p stands beside a dead-end turning head (layout.dead_end_head_area). / 転回部の横"""
@@ -712,7 +755,7 @@ class JP(object):
             p = orient(max(q, key=lambda g: g.area).simplify(0.05), 1.0)
             R = Rect.of(p)
             ratio = p.area / max(R.A * R.B, 1e-6)
-        if st in ("house", "apaato", "danchi", "mansion", "shop", "shed") and ratio > 0.86:
+        if st in ("house", "apaato", "danchi", "mansion", "shop", "shed", "office", "carpark") and ratio > 0.86:
             for d in (0.0, 0.15, 0.3, 0.45, 0.6):
                 if min(R.A, R.B) - 2 * d < 2.0:
                     break
@@ -782,9 +825,14 @@ class JP(object):
             obst.append(L.landmark_areas.buffer(1.0))
         if keep is not None:
             obst.append(keep)
+        # an embedded model's streets and kept station (layout.build_buildings) / 埋め込みモデルの道路と駅
+        for nm in ("core_hard", "core_keep"):
+            if getattr(L, nm, None) is not None:
+                obst.append(getattr(L, nm).buffer(0.2))
         self.obst = unary_union([g for g in obst if g is not None and not g.is_empty])
         shapely.prepare(self.obst)
         setback = {"house": 2.2, "apaato": 2.2, "danchi": 3.0, "mansion": 2.5, "shop": 1.2, "shed": 0.4,
+                   "office": 1.0, "carpark": 0.8,
                    "school": 1.5, "worship": 1.5}
         for i, it in self.items.items():
             try:
@@ -810,11 +858,22 @@ class JP(object):
         lot shrinks where the cut or fill beyond the footprint grows too big.
         敷地を最高地盤で造成（切土・盛土が大きすぎる所は敷地を縮める）。"""
         L, D = self.L, self.D
+        # inside an embedded model (maps.json "core") its plots are the lot
+        # ground, 2 cm under a terrace top: lift those lots clear (no z-fight)
+        # 埋め込みモデル内はその敷地面が地面: 造成面を持ち上げて重なりを避ける
+        core = None
+        if L is not None and getattr(L, "meta", None):
+            from core_merge import core_rect, in_rect
+            core = core_rect(L.meta)
         for i, it in self.items.items():
             if D is not None:
                 zlo, zhi = D.footprint(it.poly)
             else:
                 zlo = zhi = 0.0
+            c = it.poly.centroid
+            it.core = core is not None and bool(in_rect(c.x, c.y, core))
+            if it.core:
+                zhi += CORE_LIFT
             it.zb, it.drop = zhi, zhi - zlo
             s = it.setback
             for _ in range(4):
@@ -837,6 +896,14 @@ class JP(object):
             pp = [q for q in polys(g) if q.intersects(it.poly)]
             it.lot = orient(max(pp, key=lambda q: q.intersection(it.poly).area), 1.0) if pp else it.poly
         self.unoverlap()
+        if core is not None:
+            # a lot reaching into the core from outside: lifted too / 外から入り込む敷地も持ち上げる
+            cb = shapely.box(*core)
+            for it in self.items.values():
+                if not it.core and it.lot.intersects(cb):
+                    it.core = True
+                    it.zb += CORE_LIFT
+                    it.drop += CORE_LIFT
         lots = [it.lot for it in self.items.values()]
         self.lot_ids = np.array(list(self.items.keys()))
         self.lot_tree = shapely.STRtree(lots)
@@ -958,6 +1025,16 @@ class JP(object):
             if a:
                 v["acc"] = a
             done[i] = (v.get("wall"), v.get("roof"))
+        # the per-building survey's colours and facade type (colour_notes.json
+        # "facades") / 建物ごとの調査の配色・外装
+        for i in ids:
+            it = self.items[i]
+            f = getattr(it, "fac", None)
+            if f is None or f.get("style") != it.style:
+                continue
+            for k in ("wall", "acc", "roof", "bal", "glass", "front", "podium", "kanban", "ribbon"):
+                if f.get(k):
+                    it.var[k] = f[k]
         # colours fixed by the building's own tags (maps.json osm_fixes, from the
         # user's photo: it wins over the mixes, ch. 17) / タグで指定した配色（利用者の写真）
         for i in ids:
@@ -1038,6 +1115,14 @@ class JP(object):
                                       "jp_wall_ivory", "jp_tile_brown"]),
                      sign=rng.choice(SIGNS), awning=rng.choice(AWNINGS + [None, None]),
                      roof=rng.choice(["flat", "flat", "flat", "hip"]), rmat=rng.choice(HOUSE_ROOFS[:5]))
+        elif st == "office":
+            v.update(wall=rng.choice(["jp_panel_white", "jp_panel_grey", "jp_panel_beige", "jp_tile_white"]),
+                     acc=rng.choice(["jp_panel_grey", "jp_panel_darkgrey", "jp_panel_white"]),
+                     front=rng.choice(["punched", "ribbon", "ribbon", "curtain"]), podium="office",
+                     glass=rng.choice(["jp_curtain_blue", "jp_curtain_dark"]), ribbon=rng.choice(["a", "b"]),
+                     kanban=rng.choice(SIGNS))
+        elif st == "carpark":
+            v.update(wall=rng.choice(["jp_panel_grey", "jp_panel_white"]), acc="jp_panel_white")
         elif st == "shed":
             v.update(wall=rng.choice(["jp_metal_siding", "jp_metal_siding", "jp_wall_grey", "jp_wall_beige"]),
                      roof=rng.choice(["jp_roof_metal", "jp_roof_metal_brown", "jp_metal_siding"]))
@@ -1062,7 +1147,7 @@ class JP(object):
             self.B.b_school(m, it.poly, t, it.levels, rng)
             it.height = it.levels * 3.5 + 1.0
         elif it.style == "worship":
-            self.B.b_worship(m, it.poly, t, it.levels, rng)
+            self.B.b_worship(m, it.poly, t, it.levels, rng, roof_ok=self.free)
             it.height = max(2, it.levels) * 3.8 + 4.0
         else:
             getattr(self, "b_" + it.style)(m, it, rng)
@@ -1647,11 +1732,15 @@ class JP(object):
         zt = zg + H0 + (lv - 1) * H
         front = self.front(it.poly)
         public = it.t.get("amenity") in ("community_centre", "post_office", "bank", "public_bath")
-        for a, b, L, n in edges_of(it.poly):
+        import shopfront_jp
+        for ei, (a, b, L, n) in enumerate(edges_of(it.poly)):
             f = Facade(m, a, b, n)
             fr = float(n @ front) > 0.55 and L > 3.0
             if fr and not public:
                 f.face("shopfront", 0.0, L, zg, zg + 2.7, -0.3)
+                # tenant units and their entrances, recorded for the props (shopfront_jp)
+                # テナント区画と入口（店先の小物のため記録）
+                shopfront_jp.shop_front(self, m, f, it, self.cur, ei, 0.0, L, zg, 0.3, wall)
                 f.hplane(wall, 0.0, L, -0.3, 0.0, zg + 2.7, False)
                 f.hplane("jp_foundation", 0.0, L, -0.3, 0.0, zg, True)
                 for u in (0.0, L - 0.3):
@@ -1672,6 +1761,7 @@ class JP(object):
                 if fr and public and ops:
                     u0, u1 = ops[len(ops) // 2][:2]
                     ops[len(ops) // 2] = (u0 - 0.2, u1 + 0.2, zg, zg + 2.3, "door")
+                    shopfront_jp.record_door(it, self.cur, ei, f, (u0 + u1) / 2, u1 - u0 + 0.4, zg, "public")
                 self.wall_ops(f, z0, zg + H0, wall, ops)
             for k in range(1, lv):
                 za = zg + H0 + (k - 1) * H
@@ -1692,6 +1782,181 @@ class JP(object):
                 return
         self.B.flat_roof(m, it.poly, zt, wall, 0.8, mat="roof_concrete")
         it.height = zt + 0.8
+
+    def b_office(self, m, it, rng):
+        """City-centre office / hotel / tall retail (style "office"): a 4.65 m
+        ground floor (shopfront + kanban band, or stone base + entrance), upper
+        storeys of 3.6 m (hotels 3.2) as punched windows, ribbon windows
+        (spandrel band + recessed glass strip) or a curtain wall recessed
+        behind full-height fins; flat roof with parapet and plant room.
+        Relief stays inside the footprint (recesses 0.2-0.3 m), only vertical
+        kanban boxes project (tested like balconies). / 駅前の事務所・ホテル・大型店舗。"""
+        v = it.var
+        wall, acc = v["wall"], v.get("acc") or v["wall"]
+        front = v.get("front", "punched")
+        z0 = RAISED_Z
+        z1 = OFFICE_Z1
+        lv = max(2, it.levels)
+        H = 3.2 if front == "hotel" else 3.6
+        zt = z1 + (lv - 1) * H
+        fn = self.front(it.poly)
+        shop = v.get("podium") == "shop"
+        base = acc if not acc.startswith("jp_curtain") else "jp_panel_grey"
+        import shopfront_jp
+        for ei, (a, b, L, n) in enumerate(edges_of(it.poly)):
+            f = Facade(m, a, b, n)
+            fr = float(n @ fn) > 0.55 and L > 3.0
+            # -- ground floor / 1 階
+            f.block("jp_foundation", 0.0, L, 0.0, 0.03, z0 - 0.02, z0 + 0.25, top=True, bottom=False, ends=False)
+            zg = z0 + 0.25
+            if fr and shop and L > 4.0:
+                f.face("shopfront", 0.3, L - 0.3, zg, zg + 2.9, -0.35)
+                f.hplane(base, 0.3, L - 0.3, -0.35, 0.0, zg + 2.9, False)
+                f.hplane("jp_foundation", 0.3, L - 0.3, -0.35, 0.0, zg, True)
+                f.side(base, 0.3, -0.35, 0.0, zg, zg + 2.9, 1)
+                f.side(base, L - 0.3, -0.35, 0.0, zg, zg + 2.9, -1)
+                for u0, u1 in ((0.0, 0.3), (L - 0.3, L)):
+                    f.face(base, u0, u1, zg, zg + 2.9, 0.0)
+                f.face(base, 0.0, L, zg + 2.9, z1, 0.0)
+                f.block(v.get("kanban", "jp_kanban_white"), 0.25, L - 0.25, 0.0, 0.15, zg + 3.05, zg + 3.85)
+                # tenant units and entrances on the podium (shopfront_jp) / 低層部の店舗区画と入口
+                shopfront_jp.shop_front(self, m, f, it, self.cur, ei, 0.3, L - 0.3, zg, 0.35, base, door_h=2.9)
+            elif fr and L > 5.0:
+                u = L / 2
+                shopfront_jp.record_door(it, self.cur, ei, f, u, 3.6, zg, "office")
+                f.wall_with_openings(base, zg, z1, [(u - 1.8, u + 1.8, zg, zg + 2.8)])
+                f.face("jp_glass_dark", u - 1.8, u + 1.8, zg, zg + 2.8, -0.4)
+                f.hplane(base, u - 1.8, u + 1.8, -0.4, 0.0, zg + 2.8, False)
+                f.hplane("jp_foundation", u - 1.8, u + 1.8, -0.4, 0.0, zg, True)
+                f.side(base, u - 1.8, -0.4, 0.0, zg, zg + 2.8, 1)
+                f.side(base, u + 1.8, -0.4, 0.0, zg, zg + 2.8, -1)
+                ca = self.depth(f, u - 2.4, u + 2.4, 1.6, low=0.8)
+                if ca > 0:
+                    f.block(acc if acc != base else "jp_metal_dark", u - 2.4, u + 2.4, 0.0, ca, zg + 3.0, zg + 3.3,
+                            bottom=True)
+            else:
+                ops = [((u0 + u1) / 2 - 0.8, (u0 + u1) / 2 + 0.8, zg + 1.0, zg + 2.6, "win")
+                       for u0, u1 in bays(L, 3.6, 0.8)]
+                f.wall_with_openings(base, zg, z1, [o[:4] for o in ops])
+                for u0, u1, oz0, oz1, _ in ops:
+                    f.window(u0, u1, oz0, oz1, base, glass="jp_glass_office", mullions=0, depth=0.2)
+            f.block(acc if acc != wall else "jp_foundation", 0.0, L, 0.0, 0.05, z1 - 0.12, z1 + 0.05, ends=False)
+            # -- upper storeys / 上階
+            if L < 2.4:
+                f.face(wall, 0.0, L, z1, zt, 0.0)
+                continue
+            if front == "curtain":
+                g = v.get("glass") or "jp_curtain_blue"
+                d = 0.3
+                pier = min(0.5, L / 6)
+                f.face(wall, 0.0, pier, z1, zt, 0.0)
+                f.face(wall, L - pier, L, z1, zt, 0.0)
+                f.face(g, pier, L - pier, z1, zt, -d)
+                f.side(wall, pier, -d, 0.0, z1, zt, 1)
+                f.side(wall, L - pier, -d, 0.0, z1, zt, -1)
+                f.hplane(wall, pier, L - pier, -d, 0.0, z1, True)
+                f.hplane(wall, pier, L - pier, -d, 0.0, zt, False)
+                fins = np.arange(pier + 1.8, L - pier - 0.5, 1.8)
+                for u in fins:
+                    f.block("jp_alu", u - 0.05, u + 0.05, -d, -0.02, z1, zt, top=False, bottom=False)
+            elif front == "ribbon":
+                gl = "jp_ribbon_" + v.get("ribbon", "a")
+                pier = min(0.6, L / 6)
+                for k in range(lv - 1):
+                    za = z1 + k * H
+                    f.wall_with_openings(wall, za, za + H, [(pier, L - pier, za + 1.0, za + 3.0)])
+                    f.face(gl, pier, L - pier, za + 1.0, za + 3.0, -0.22)
+                    f.hplane(wall, pier, L - pier, -0.22, 0.0, za + 1.0, True)
+                    f.hplane(wall, pier, L - pier, -0.22, 0.0, za + 3.0, False)
+                    f.side(wall, pier, -0.22, 0.0, za + 1.0, za + 3.0, 1)
+                    f.side(wall, L - pier, -0.22, 0.0, za + 1.0, za + 3.0, -1)
+                    f.block(acc, 0.0, L, 0.0, 0.05, za + 0.95, za + 1.0, ends=False)
+            else:
+                hotel = front == "hotel"
+                bw = 3.0 if hotel else 2.4
+                for k in range(lv - 1):
+                    za = z1 + k * H
+                    ops = [((u0 + u1) / 2 - (0.65 if hotel else 0.85), (u0 + u1) / 2 + (0.65 if hotel else 0.85),
+                            za + 0.85, za + (2.35 if hotel else 2.75)) for u0, u1 in bays(L, bw, 0.5)]
+                    f.wall_with_openings(wall, za, za + H, ops)
+                    for u0, u1, oz0, oz1 in ops:
+                        f.window(u0, u1, oz0, oz1, wall, glass="glass" if hotel else "jp_glass_office",
+                                 mullions=1 if hotel else 0, depth=0.2)
+                    if acc != wall:
+                        f.block(acc, 0.0, L, 0.0, 0.04, za - 0.06, za + 0.06, ends=False)
+            # vertical kanban on a shop building's street front (縦看板) / 縦看板
+            if fr and shop and lv >= 3 and L > 5.0:
+                u = 0.7
+                zk1 = min(zt - 0.5, z1 + 0.4 + min(lv - 1, 6) * H * 0.8)
+                dd = self.depth(f, u - 0.18, u + 0.18, 1.0, low=0.6)
+                if dd > 0 and zk1 - z1 > 2.5:
+                    f.block(v.get("kanban", "jp_kanban_white"), u - 0.15, u + 0.15, 0.05, dd, z1 + 0.4, zk1)
+        self.B.flat_roof(m, it.poly, zt, wall, 1.1, mat="roof_concrete")
+        it.height = zt + 1.1
+        c = it.poly.centroid
+        es = edges_of(it.poly)
+        if it.poly.area > 120 and it.poly.buffer(-3.0).contains(c):
+            e = max(es, key=lambda q: q[2])
+            ang = math.atan2(e[1][1] - e[0][1], e[1][0] - e[0][0])
+            m.box(base, c.x, c.y, zt, zt + 3.4, 5.0, 3.6, ang)          # lift / plant room / 塔屋
+            it.height = zt + 3.4
+            ax = np.array([math.cos(ang), math.sin(ang)])
+            q = np.array([c.x, c.y]) + ax * 5.5
+            if lv >= 5 and it.poly.buffer(-2.5).contains(Point(q[0] + ax[0] * 2, q[1] + ax[1] * 2)) and \
+                    it.poly.buffer(-2.5).contains(Point(q[0] - ax[0] * 2, q[1] - ax[1] * 2)):
+                m.box("jp_louvre", q[0], q[1], zt, zt + 2.4, 3.6, 3.0, ang)   # plant screen / 屋上目隠し
+
+    def b_carpark(self, m, it, rng):
+        """Japanese multi-storey car park (立体駐車場): open decks every 2.9 m,
+        slab edge bands, louvred parapets (two-sided, so the decks read
+        through the openings), columns every ~7.5 m, a dark core, a top deck
+        with a stair tower. / 立体駐車場（開放床・ルーバー手摺・柱・塔屋）。"""
+        v = it.var
+        wall, acc = v["wall"], v.get("acc") or v["wall"]
+        z0 = RAISED_Z
+        H = 2.9
+        lv = max(1, it.levels)
+        zt = z0 + lv * H
+        inner = it.poly.buffer(-0.3, join_style="mitre")
+        if inner.is_empty:
+            inner = it.poly
+        m.flat("jp_lot", it.poly, z0 + 0.01, 2.0)
+        for k in range(1, lv + 1):
+            z = z0 + k * H
+            m.flat("jp_lot", inner, z, 2.0)
+            m.flat("jp_soffit", inner, z - 0.3, 2.0, up=False)
+        core = it.poly.buffer(-6.0, join_style="mitre")
+        for g in polys(core):
+            if g.area > 20:
+                m.ring_walls("jp_dark", g.exterior, z0, zt, outward=True, uv_scale=3.0)
+        fn = self.front(it.poly)
+        for a, b, L, n in edges_of(it.poly):
+            f = Facade(m, a, b, n)
+            fr = float(n @ fn) > 0.55
+            inward = (-float(n[0]), -float(n[1]), 0.0)
+            if not fr:
+                f.face("jp_louvre", 0.0, L, z0, z0 + 1.2, 0.0)
+                face_out(m, "jp_louvre", [f.P(0.0, -0.15, z0), f.P(L, -0.15, z0), f.P(L, -0.15, z0 + 1.2),
+                                          f.P(0.0, -0.15, z0 + 1.2)], inward)
+            for k in range(1, lv + 1):
+                z = z0 + k * H
+                f.face(acc, 0.0, L, z - 0.35, z, 0.0)
+                f.block("jp_louvre" if k < lv else wall, 0.0, L, -0.15, 0.0, z, z + 1.1, top=True, bottom=False,
+                        ends=False)
+                face_out(m, "jp_louvre" if k < lv else wall,
+                         [f.P(0.0, -0.15, z), f.P(L, -0.15, z), f.P(L, -0.15, z + 1.1), f.P(0.0, -0.15, z + 1.1)],
+                         inward)
+            for u in np.linspace(0.3, L - 0.3, max(2, int(L // 7.5) + 1)):
+                f.block(wall, u - 0.3, u + 0.3, -0.6, 0.0, z0, zt + 1.1, top=True, bottom=False)
+        c = it.poly.centroid
+        it.height = zt + 1.1
+        es = edges_of(it.poly)
+        e = max(es, key=lambda q: q[2])
+        P = e[0] + (e[1] - e[0]) / e[2] * 3.0 - e[3] * 3.0
+        if it.poly.buffer(-1.0).contains(Point(P[0], P[1])) and it.poly.area > 150:
+            ang = math.atan2(e[1][1] - e[0][1], e[1][0] - e[0][0])
+            m.box(wall, P[0], P[1], zt, zt + 3.3, 4.0, 4.0, ang)             # stair / lift tower / 階段室
+            it.height = zt + 3.3
 
     def b_shed(self, m, it, rng):
         if it.t.get("roof:shape") == "flat" and it.t.get("height"):
@@ -1790,6 +2055,8 @@ class JP(object):
         cosh = np.maximum((Vn * On).sum(axis=1), 0.35)
         Vn = Vn / cosh[:, None]
         g = (self.D.z(P[:, 0], P[:, 1]) if self.D is not None else np.zeros(N)) - it.zb + RAISED_Z
+        if getattr(it, "core", False):
+            g = g - 0.05                # wall toes into the model's plot / 擁壁の根元をモデルの敷地面の下へ
         # a neighbouring terrace across the boundary (its top, local) / 隣の造成面
         nb = np.full(N, np.nan)
         nbj = np.full(N, -1)

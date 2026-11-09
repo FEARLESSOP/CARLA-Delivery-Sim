@@ -84,7 +84,7 @@ def main():
         meta["road_style"] = style
     if road_style(name, "ring_guardrail"):
         meta["ring_guardrail"] = True      # props.py: guardrail on the ring's outer kerb / 外周ガードレール
-    L = layout.Layout(meta, os.path.join(out, "lanes.json"), osm)
+    L = layout.Layout(meta, os.path.join(out, "lanes.json"), osm, write_bays=True)   # -> bus_bays.json
     print(L.summary(), flush=True)
     # hilly maps: the ground follows the elevated road logic and the terrain
     # 起伏のある地図: 地面は標高付きの道路情報と地形に沿う
@@ -141,6 +141,13 @@ def main():
             print("  jartic: %s" % ", ".join("%s %s" % kv for kv in q.items()))
         for r, j, why in M.dropped_stops:
             print("  stop dropped: junction %s road %s (%s): short link, no road outside the cluster" % (j, r, why))
+        if getattr(L, "pavements", None) is not None:
+            # the pavement network (pavements.py, ch. 31): islands dropped, tactile
+            # zones, tree pits, navmesh areas / 歩道網の仕上げ
+            stops = [p for p, t, nid in L.osm.points(lambda t: t.get("highway") == "bus_stop")]
+            prep = L.pavements.finish(M.crossings, stops)
+            L.pavements.write_nav(out)
+            print("pavements: %s" % ", ".join("%s %s" % kv for kv in prep.items()), flush=True)
         surfaces = surfaces_jp.partition(L, M)
         print("road surfaces: %s" % ", ".join("%s %.0f m2" % (k, float(np.sum(shapely_area(v))))
                                                for k, v in surfaces.items()), flush=True)
@@ -295,6 +302,13 @@ def main():
     print("buildings built: %s" % B.count, flush=True)
     if B.jp:
         J = B.jp_styles()
+        # the shop / office entrances buildings_jp drew, for the shop-front props
+        # (shopfront_jp.py after core_merge) / 店先の小物のための入口の記録
+        doors = [d for i in sorted(J.items) for d in getattr(J.items[i], "doors", [])]
+        json.dump({"map": name, "doors": doors}, open(os.path.join(out, "shopfronts.json"), "w"), indent=0)
+        print("shop-front entrances: %d (%s)" % (len(doors), ", ".join(
+            "%s %d" % (u, sum(1 for d in doors if d["use"] == u)) for u in sorted({d["use"] for d in doors}))),
+            flush=True)
         st = sorted(J.stats.items())
         print("roofs: %s" % ", ".join("%s %d" % kv for kv in st), flush=True)
         wm = [it.wall_max for it in J.items.values() if getattr(it, "wall_max", 0) > 0.3]
@@ -343,6 +357,9 @@ def main():
     if style == "japan":
         for k, v in jtrees.write_textures(tex_dir).items():
             manifest["materials"][k] = [v[0], None, v[2], v[3], v[4]]
+        # shop entrances and noren drawn by buildings_jp (shopfront_jp) / 店の入口・暖簾
+        import shopfront_jp
+        manifest["materials"].update(shopfront_jp.write_door_textures(tex_dir))
     json.dump(manifest, open(os.path.join(mesh_dir, "manifest.json"), "w"), indent=0)
     # CARLA's PrepareAssetsForCooking drops a whole mesh when its name or ANY of
     # its material names contains "light" or "sign" (ValidateStaticMesh): a
@@ -362,8 +379,8 @@ def main():
             continue
         d = np.load(os.path.join(mesh_dir, o["name"] + ".npz"))
         for k in d.files:
-            if not k.endswith("|V"):
-                continue
+            if not k.endswith("|V") or k == "asphalt_rosoku|V":
+                continue            # (路側帯: carriageway pieces at road level in the Sidewalk object)
             V, I = d[k], d[k[:-2] + "|I"]
             cen = V[I].mean(axis=1)
             # surfaces a wheel could touch: below 1 m over the road surface there
@@ -388,6 +405,11 @@ def main():
         extra["speed_set"] = M.jartic_speed
         extra["jartic_log"] = M.jartic_log
     pickle.dump(extra, open(os.path.join(out, "crossings.pkl"), "wb"))
+    if hasattr(M, "elements"):
+        # Japan: every marking as an element (kind, geometry, road / junction /
+        # lane) for osm_city/check_markings.py / 標示の要素記録（check_markings.py 用）
+        pickle.dump({"elements": M.elements, "cls": getattr(M, "cls", {})},
+                    open(os.path.join(out, "markings.pkl"), "wb"))
     tot = sum(o["tris"] for o in manifest["objects"])
     if getattr(P, "dropped_over_road", 0):
         print("trees left out, built crown over a road below %.1f m: %d" % (props.CLEAR_OVER_ROAD, P.dropped_over_road))

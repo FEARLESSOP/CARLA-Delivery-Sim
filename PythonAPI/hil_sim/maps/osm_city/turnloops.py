@@ -238,6 +238,8 @@ def _arcs_of(road, w):
     write_road. / 書いたループの中心線円弧"""
     out = []
     for g in road.findall("planView/geometry"):
+        if g.find("arc") is None:
+            return None                       # not a loop written here (a straight piece) / 書いたループではない
         kr = float(g.find("arc").get("curvature"))
         rr = 1.0 / kr
         r = rr + w / 2
@@ -457,7 +459,10 @@ def fix(xodr_in, xodr_out, log=print, buildings=None, refine=False, sites=None):
         if obst is not None:
             shapely.prepare(obst)
         if refine:
-            now = sample([(np.array(a), b, c, d) for a, b, c, d in _arcs_of(cr, w)])
+            arcs = _arcs_of(cr, w)
+            if arcs is None:
+                continue                         # netconvert's own head, not our loop: left as it is / 既存の形のまま
+            now = sample([(np.array(a), b, c, d) for a, b, c, d in arcs])
             c_now = clearance(now, w, obst)
             if c_now >= CLR_GOOD:
                 continue                     # clear of roads at other heights: kept / そのまま
@@ -574,5 +579,17 @@ if __name__ == "__main__":
             meta.setdefault("dead_end_refined", {}).update(
                 {str(r["j"]): {k: round(r[k], 2) for k in ("R", "back", "g", "clr")} for r in rep})
             json.dump(meta, open(mp, "w"), indent=1)
+        if rep and os.path.exists(mp):
+            # moved loops: the heights were solved for the loops before (a loop moved 0.4 m
+            # beside its own street stayed 0.08 m off it, OitaKosen j137): lanes and
+            # elevation again for the final loops / 動かしたループに合わせて車線と標高を再計算
+            import subprocess
+            d = os.path.dirname(mp)
+            here = os.path.dirname(os.path.abspath(__file__))
+            vpy = os.path.join(here, "..", ".venv", "bin", "python")
+            if os.path.exists(os.path.join(d, "terrain_field.npz")) and os.path.exists(vpy):
+                subprocess.check_call([sys.executable, os.path.join(here, "lanes.py"), args[-1],
+                                       os.path.join(d, "lanes.json")], stdout=subprocess.DEVNULL)
+                subprocess.check_call([vpy, os.path.join(here, "elevate.py"), d])
     elif len(args) > 2:
         json.dump({"loops": rep, "failed": bad}, open(args[2], "w"), indent=0)

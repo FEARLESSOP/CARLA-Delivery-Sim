@@ -61,10 +61,16 @@ export interface PipelineState {
   cyclists: number
   traffic: boolean
   delivery: number
+  minipod_hubs?: number
+  /** LastMile charging stations (newer pipelines) / 充電ステーション */
+  charge_stations?: number
+  charge_mode?: ChargeMode
   start_vehicle: string
   ffb: boolean
   traction_fx: boolean
   weather_cycle: boolean
+  /** road_overlay.py runs (newer pipelines) / 道路ロジック表示ヘルパー */
+  road_overlay?: boolean
   running: string[]
   launcher: boolean
 }
@@ -78,9 +84,14 @@ export interface LauncherInfo {
   catalog: { maps: MapEntry[]; cars: CarEntry[] }
 }
 
+/** where the LastMile charging stations come from: placed by the sim
+ *  (random, charge_stations of them) or every spot placed on the Delivery map
+ *  (manual) / 充電ステーションの配置方法 */
+export type ChargeMode = 'random' | 'manual'
+
 export type ControlRequest =
   | { action: 'traffic'; vehicles?: number; walkers?: number; cyclists?: number }
-  | { action: 'delivery'; vans: number }
+  | { action: 'delivery'; vans: number; lmh?: number; charge_stations?: number; charge_mode?: ChargeMode }
   | { action: 'map'; map: string }
   | { action: 'vehicle'; vehicle: string }
   | { action: 'helper'; name: string; on: boolean }

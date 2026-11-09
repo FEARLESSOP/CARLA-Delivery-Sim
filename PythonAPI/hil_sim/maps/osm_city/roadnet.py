@@ -293,7 +293,11 @@ def add_ring(src, dst, meta, fixes=False):
     area = ring_area(meta)
     edge = area.exterior
     short = area.buffer(-(RING_W / 2 + 4.0))     # paths stop before the ring's pavement / 歩道等は手前で止める
-    nid = [-1]
+    # new ids below every id already in the file (negative ids from an earlier
+    # step, e.g. topo_buildings.py, collided and merged unrelated nodes)
+    # 既存の ID より小さい番号を使う（衝突すると無関係なノードが一つになる）
+    used = [int(e.get("id")) for e in root if e.get("id") and e.get("id").lstrip("-").isdigit()]
+    nid = [min([0] + used) - 1]
     new_nodes = []
 
     def node_for(c):
@@ -447,6 +451,60 @@ def osm_buildings(osm, meta):
     return out
 
 
+STUB_MAX = 0.5             # reversed end pieces shorter than this are cut off / これより短い逆向きの端片は除く
+
+
+def drop_reversed_stubs(root):
+    """netconvert sometimes ends a road with a 0.1-0.15 m line pointing BACK
+    (where it cut the edge at the junction's shape): lane -1 jumps 3 m to the
+    other side of the reference line in its last sample (OitaKosen roads 3483,
+    4026). Such a last piece (< STUB_MAX m, heading > 90 deg off the piece
+    before) is removed and the road shortened by it; lane sections, objects and
+    signals past the new end are pulled back. Runs before fix_xodr_signals.py
+    and elevate.py, so no s-dependent data is lost. Returns the roads fixed.
+    逆向きの短い端片（交差点形状で切った残り）を除き、道路を短くする。"""
+    import math as _m
+    fixed = []
+    for r in root.findall("road"):
+        gs = r.findall("planView/geometry")
+        if len(gs) < 2:
+            continue
+        last, prev = gs[-1], gs[-2]
+        Ls = float(last.get("length"))
+        if Ls >= STUB_MAX:
+            continue
+        # heading at the end of the piece before (line / arc / paramPoly3 end tangent)
+        el = list(prev)[0]
+        h0, Lp = float(prev.get("hdg")), float(prev.get("length"))
+        if el.tag == "arc":
+            h1 = h0 + float(el.get("curvature")) * Lp
+        elif el.tag == "paramPoly3":
+            bU, cU, dU = (float(el.get(k)) for k in ("bU", "cU", "dU"))
+            bV, cV, dV = (float(el.get(k)) for k in ("bV", "cV", "dV"))
+            p = 1.0 if el.get("pRange", "normalized") == "normalized" else Lp
+            h1 = h0 + _m.atan2(bV + 2 * cV * p + 3 * dV * p * p, bU + 2 * cU * p + 3 * dU * p * p)
+        else:
+            h1 = h0
+        if abs((float(last.get("hdg")) - h1 + _m.pi) % (2 * _m.pi) - _m.pi) < _m.pi / 2:
+            continue
+        r.find("planView").remove(last)
+        L = float(r.get("length")) - Ls
+        r.set("length", "%.8f" % L)
+        lanes = r.find("lanes")
+        if lanes is not None:
+            for ls in lanes.findall("laneSection"):
+                if float(ls.get("s")) > L - 0.05 and ls is not lanes.findall("laneSection")[0]:
+                    lanes.remove(ls)
+        for tag in ("objects/object", "signals/signal", "signals/signalReference"):
+            for o in r.findall(tag):
+                if float(o.get("s", "0")) > L:
+                    o.set("s", "%.4f" % L)
+        fixed.append((r.get("id"), round(Ls, 2)))
+    if fixed:
+        print("reversed end stubs cut off (netconvert's junction cut): %s" % fixed)
+    return fixed
+
+
 def netconvert(osm, xodr, meta, lefthand):
     fr = geo.Frame(meta)
     cmd = [NETCONVERT if os.path.exists(NETCONVERT) else "netconvert",
@@ -491,6 +549,8 @@ def netconvert(osm, xodr, meta, lefthand):
     for el in [root.find("header")] + root.findall("road"):
         if el is not None and "rule" in el.attrib:
             del el.attrib["rule"]                  # never rule="LHT", see the docstring / LHT は付けない
+    if meta.get("road_fixes"):
+        meta["reversed_stubs"] = drop_reversed_stubs(root)
     tree.write(xodr, encoding="utf-8", xml_declaration=True)
     os.remove(xodr + ".raw")
     fix = os.path.join(HERE, "..", "fix_xodr_signals.py")

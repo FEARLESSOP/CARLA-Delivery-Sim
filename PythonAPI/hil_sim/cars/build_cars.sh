@@ -84,6 +84,14 @@ e = c["bounds_extent_m"]
 print('NAME=%s MAKE=%s MODEL=%s R=%.2f W=%.2f MASS=%.0f BOUNDS=%.1f,%.1f,%.1f,%.1f' % (
     c["name"], make, model, c["wheel_radius_m"] * 100, c["tyre_width_m"] * 100, c["mass_kg"],
     e[0] * 100, e[1] * 100, e[2] * 100, c["bounds_centre_m"][2] * 100))
+# heavy / NPC vehicles (car_guide ch. 16); empty = as before (Prius values)
+# 大型・NPC 車両（ガイド 16 章）。空ならこれまで通り
+b = c.get("collision_box")
+body = ",".join("%.1f" % v for v in ([(b[a][0] + b[a][1]) * 50 for a in "xyz"] +
+                                     [(b[a][1] - b[a][0]) * 50 for a in "xyz"])) if b else ""
+print('BASE_TYPE=%s BRAKE=%s HBRAKE=%s BODY=%s COMZ=%s STEER=%d' % (
+    c.get("base_type", "car"), c.get("brake_torque_nm", ""), c.get("handbrake_torque_nm", ""), body,
+    "%.1f" % (c["com_height_m"] * 100) if "com_height_m" in c else "", int("steering_wheel" in c)))
 PYEOF
 )"
     # real gears / engine / drag (cars.json "drivetrain", car_guide ch. 15); none = the Prius's
@@ -95,10 +103,14 @@ PYEOF
         VEH_NAME="$NAME" VEH_DEST="/Game/$PKG/Vehicles/$NAME" VEH_MAKE="$MAKE" VEH_MODEL="$MODEL" \
         VEH_WHEEL_R_CM="$R" VEH_WHEEL_W_CM="$W" VEH_MASS="$MASS" VEH_BOUNDS="$BOUNDS" \
         VEH_TEXTURES=1 VEH_LOG="build_car_$k.log" VEH_DRIVETRAIN="$DT" \
+        VEH_BASE_TYPE="$BASE_TYPE" VEH_BRAKE_NM="$BRAKE" VEH_HANDBRAKE_NM="$HBRAKE" \
+        VEH_BODY="$BODY" VEH_COM_Z_CM="$COMZ" \
         "$EDITOR" "$UPROJECT" -run=pythonscript -script="$ASSETS/build_vehicle.py" >/dev/null 2>&1) || true
     cat "$ASSETS/build_car_$k.log"
     tail -1 "$ASSETS/build_car_$k.log" | grep -q '^OK$' || { echo "vehicle build failed: $k"; exit 1; }
     [ -z "$DT" ] || grep -q '^drivetrain gears' "$ASSETS/build_car_$k.log" || { echo "drivetrain not applied: $k"; exit 1; }
+    [ -z "$BRAKE$HBRAKE" ] || grep -q '^brakes' "$ASSETS/build_car_$k.log" || { echo "brakes not applied: $k"; exit 1; }
+    [ -z "$BODY" ] || grep -q '^physics body box' "$ASSETS/build_car_$k.log" || { echo "physics body not applied: $k"; exit 1; }
     GLASS="$("$PY" -c "import json,sys; print(','.join(json.load(open(sys.argv[1])).get('glass', [])))" "$VEHSTAGE/$k.json")"
     if [ -n "$GLASS" ]; then          # see-through windows / 窓を半透明に
         rm -f "$HERE/make_glass_$k.log"   # no stale OK / 古い OK を残さない
@@ -121,7 +133,10 @@ PYEOF
     fi
     # the steering-wheel prop too: the props map alone left one out (Soarer)
     # ハンドルも明示的に cook する（props map だけでは漏れることがある）
-    BPS="$BPS+/Game/$PKG/Vehicles/$NAME/BP_$NAME+/Game/$PKG/Static/Car/${NAME}Steer/${NAME}Steer_${NAME}Steer"
+    BPS="$BPS+/Game/$PKG/Vehicles/$NAME/BP_$NAME"
+    # NPC vehicles without a steering wheel (steering_wheel "none") have no prop
+    # ハンドルの無い NPC 車両（steering_wheel "none"）はプロップ無し
+    [ "$STEER" = 0 ] || BPS="$BPS+/Game/$PKG/Static/Car/${NAME}Steer/${NAME}Steer_${NAME}Steer"
 done
 
 step "5/8 cook the props and the cars"

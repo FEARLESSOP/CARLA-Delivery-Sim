@@ -1,4 +1,4 @@
-// Deliveries & failures, Drones, Delivery pods, Drone events.
+// Deliveries & failures, Drones, Delivery pods (with Send to charge), Drone events.
 // 配達と失敗・ドローン一覧・配送ポッド・イベント
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useT } from '@/lib/i18n'
@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { Badge, Card, EmptyState, KV } from '@/components/ui'
 import { DOWN, TD, TDN, TH, failReason } from './shared'
 import { Battery, DroneBadge, TableFrame } from './widgets'
+import { ChargeButton } from './ChargeButton'
 import type { DeliveryState } from './types'
 
 /* -------------------------------------------------- deliveries & failures */
@@ -93,17 +94,21 @@ export function PodsTable({ state }: { state: DeliveryState | null }) {
               <th key={h} scope="col" className={TH}>{h}</th>)}
             <th scope="col" className={TH} title={t('dr_s_deliv')}><span aria-hidden>✓</span><span className="sr-only">{t('dr_s_deliv')}</span></th>
             <th scope="col" className={TH} title={t('dr_s_fail')}><span aria-hidden>✗</span><span className="sr-only">{t('dr_s_fail')}</span></th>
+            <th scope="col" className={TH}>{t('dr_th_charge')}</th>
           </tr></thead>
           <tbody>
             {vans.map((v) => (
               <tr key={v.id} className="hover:bg-muted/40">
-                <th scope="row" className={cn(TDN, 'text-left font-semibold')}>V{v.id}</th>
+                <th scope="row" className={cn(TDN, 'text-left font-semibold')}>
+                  V{v.id}{v.kind === 'lmh' && <span className="ml-1 text-[10px] font-normal text-fg-mute">{t('dr_ch_kind_lmh')}</span>}
+                </th>
                 <td className={TD}><Battery value={v.battery} label={`V${v.id} ${t('dr_th_podbatt')}`} /></td>
                 <td className={TD}><Badge>{v.state}</Badge></td>
                 <td className={TDN}>{v.drone ? `D${v.drone}` : v.incoming ? `→ D${v.incoming}` : '–'}</td>
                 <td className={TDN}>{v.pending}</td>
                 <td className={cn(TDN, 'text-accent')}>{v.delivered}</td>
                 <td className={cn(TDN, v.failed > 0 && 'text-danger')}>{v.failed}</td>
+                <td className={cn(TD, 'py-1')}><ChargeButton van={v} state={state} /></td>
               </tr>
             ))}
           </tbody>

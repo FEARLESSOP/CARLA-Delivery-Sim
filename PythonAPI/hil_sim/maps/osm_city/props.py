@@ -88,6 +88,12 @@ class Props(object):
         return out
 
     def add_tree(self, x, y, kind, size):
+        core = getattr(self, "_core", False)
+        if core is False:
+            from core_merge import core_rect
+            core = self._core = core_rect(self.L.meta)
+        if core and core[0] < x < core[2] and core[1] < y < core[3]:
+            return                            # the embedded model has its own trees / 埋め込みモデルの木を使う
         self.trees.append((x, y, kind, size))
         self.grid.setdefault((int(x // 20), int(y // 20)), []).append((x, y, kind, size))
 
@@ -98,6 +104,10 @@ class Props(object):
         verge = L.carriageway.buffer(0.2 + 0.9, quad_segs=2)
         main_roads = unary_union([Polygon([q["l"] for q in l["pts"]] + [q["r"] for q in l["pts"]][::-1]).buffer(0)
                                   for l in L.lanes if (l["speed"] or 0) >= 13.0 and l["junction"] < 0])
+        if getattr(L, "tree_pits", None) is not None:
+            # Japan (pavements.py): street trees only in the main-road tree pits (the
+            # estate lanes have walls and lots at the kerb, no verge) / 日本: 植樹桝のみ
+            verge = Polygon()
         for p in polys(verge):
             for ring in [p.exterior] + list(p.interiors):
                 n = int(ring.length // 9.0)
@@ -109,6 +119,10 @@ class Props(object):
                     kind = "palm" if big and self.rng.random() < 0.12 else \
                         ("rain" if self.rng.random() < 0.55 else "angsana")
                     self.add_tree(q.x, q.y, kind, self.rng.uniform(0.85, 1.2) * (1.15 if big else 0.95))
+        # Japan: street trees in the pits of the main-road pavements (pavements.py) / 植樹桝の街路樹
+        for pit in polys(getattr(L, "tree_pits", None)):
+            c = pit.centroid
+            self.add_tree(c.x, c.y, "zelkova", self.rng.uniform(0.9, 1.1))
         island_min = ISLAND_MIN_W / 2 if L.meta.get("road_fixes") else 1.2
         for p in polys(L.islands):
             if p.buffer(-island_min).is_empty:
@@ -175,9 +189,14 @@ class Props(object):
             for ring in [p.exterior] + list(p.interiors):
                 if ring.length < 30:
                     continue
+                pave = getattr(L, "pave_band", None)        # Japan: lamps stand in the road pavements / 歩道上の街灯
+                pits = getattr(L, "tree_pits", None)
                 for k in range(int(ring.length // 32.0)):
                     q = ring.interpolate(k * 32.0 + 4.0)
-                    if L.driveways.buffer(1.0).contains(q) or L.footpaths.contains(q) or \
+                    if pits is not None and not pits.is_empty and pits.distance(q) < 1.0:
+                        q = ring.interpolate((k * 32.0 + 5.8) % ring.length)      # past the tree pit / 植樹桝を避ける
+                    on_path = L.footpaths.contains(q) and not (pave is not None and pave.contains(q))
+                    if L.driveways.buffer(1.0).contains(q) or on_path or \
                             getattr(L, "reserved", Polygon()).buffer(1.0).contains(q):
                         continue
                     heads = getattr(L, "dead_end_head_area", None) if jl is not None else None

@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react'
-import { Activity, ArrowBigLeft, ArrowBigRight, Car, Gauge, MapPin, Navigation, Route, Satellite, ShieldCheck, Timer, TrendingUp } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { Activity, ArrowBigLeft, ArrowBigRight, Car, Gauge, MapPin, Navigation, Route, Satellite, ShieldCheck, Timer, TrendingUp, TriangleAlert } from 'lucide-react'
+import { postJSON } from '@/lib/api'
 import '@/i18n/drive'
 import { useT } from '@/lib/i18n'
 import { num, useTelemetry, type Telemetry } from '@/lib/telemetry'
@@ -13,6 +14,8 @@ import { H, HIST_LEN, samples } from './history'
 import './alerts'   // alert rules + beeps (the banner is mounted by App on every page)
 import { CollChart, GGDiagram, KIND, LaneVis, Minimap, Trail } from './canvases'
 import { DayCycleCard, SeasonCard, WeatherCard, WindowsCard } from './environment'
+import { BusCard } from './buses'
+import { RoadOverlayCard } from './roadOverlay'
 import { EventsCard } from './events'
 import { bool, gnssOf, imuOf, nearbyOf, numsOf, pointsOf, str, vec3Of } from './types'
 
@@ -57,6 +60,23 @@ function Signal({ on, side, label }: { on: boolean; side: 'l' | 'r'; label: stri
         on ? 'animate-pulse border-accent/60 bg-accent/15 text-accent' : 'border-line text-fg-mute/40')}>
       <I className="h-6 w-6" fill={on ? 'currentColor' : 'none'} aria-hidden />
     </span>
+  )
+}
+
+/** Hazard lights toggle: POST /signal (the same state as the wheel / E key). */
+function HazardButton({ on }: { on: boolean }) {
+  const t = useT()
+  const [busy, setBusy] = useState(false)
+  const toggle = async () => {
+    setBusy(true)
+    try { await postJSON('/signal', { side: 'hazard' }) } catch { /* the lamp shows the real state */ } finally { setBusy(false) }
+  }
+  return (
+    <button type="button" onClick={toggle} disabled={busy} aria-pressed={on} aria-label={t('dv_haz_btn')} title={t('dv_haz_btn')}
+      className={cn('grid h-10 w-10 place-items-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60',
+        on ? 'animate-pulse border-warn/60 bg-warn/15 text-warn' : 'border-line text-fg-mute hover:border-warn/50 hover:text-warn')}>
+      <TriangleAlert className="h-5 w-5" aria-hidden />
+    </button>
   )
 }
 
@@ -128,6 +148,7 @@ function Hero({ s }: { s: S }) {
         <div className="col-span-2 flex flex-wrap items-center gap-3 sm:col-span-1 sm:justify-end">
           <div className="flex items-center gap-1.5" role="group" aria-label={t('dv_signals')}>
             <Signal side="l" on={sig === 'left' || sig === 'hazard'} label={sig === 'hazard' ? t('dv_sig_hazard') : t('dv_sig_left')} />
+            <HazardButton on={sig === 'hazard'} />
             <Signal side="r" on={sig === 'right' || sig === 'hazard'} label={sig === 'hazard' ? t('dv_sig_hazard') : t('dv_sig_right')} />
           </div>
           <div className="grid grid-cols-2 gap-1.5">
@@ -512,6 +533,8 @@ export default function DriveView() {
             <SeasonCard />
             <WindowsCard />
           </div>
+          <BusCard />
+          <RoadOverlayCard />
         </Grid>
       </Section>
 

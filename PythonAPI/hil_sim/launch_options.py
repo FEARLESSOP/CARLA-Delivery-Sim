@@ -37,6 +37,22 @@ SCHEMA = [
      "label": "NPC traffic", "help": "cars, walkers and cyclists (off: an empty world)", "live": "live"},
     {"key": "delivery", "flag": "--delivery", "type": "int", "default": 3, "min": 0, "max": 10,
      "group": "delivery", "label": "Delivery pods", "help": "car + drone delivery vans (0 = none)", "live": "live"},
+    {"key": "minipod_hubs", "flag": "--minipod-hubs", "type": "int", "default": 0, "min": 0, "max": 6,
+     "group": "delivery", "label": "Mini-pod hubs",
+     "help": "LastMile hubs that deliver with mini pods (in addition to the drone pods)", "live": "live"},
+    # LastMile charging stations: "random" = the sim places charge_stations of
+    # them on free ground beside a road; "manual" = every spot placed on the
+    # Delivery page's City Map for this map (data/delivery_zones.json "charge").
+    # 0 (random) or no spots (manual) = off: the old road-side chargers.
+    # run_pipeline.py turns these into delivery_sim's --charge-stations N --charge-mode.
+    # LastMile 充電ステーション：random はシミュが配置、manual は地図に置いた地点
+    {"key": "charge_mode", "flag": "--charge-mode", "type": "choice", "default": "random",
+     "choices": ["random", "manual"], "group": "delivery", "label": "Charging stations",
+     "help": "random: the sim places them on free ground beside a road; manual: the spots placed "
+             "on the Delivery map", "live": "live"},
+    {"key": "charge_stations", "flag": "--charge-stations", "type": "int", "default": 0, "min": 0,
+     "max": 12, "group": "delivery", "label": "Charging stations (random)",
+     "help": "how many the sim places (0 = off: the road-side chargers)", "live": "live"},
     {"key": "drone_cams", "flag": "--drone-cams", "type": "bool", "default": True, "group": "delivery",
      "label": "Drone camera wall", "help": "a window with one camera per flying drone", "live": "live"},
     # driving / 運転
@@ -56,12 +72,25 @@ SCHEMA = [
      "live": "live"},
     {"key": "traction_fx", "flag": "--no-traction-fx", "type": "nbool", "default": True,
      "group": "environment", "label": "Skid marks", "help": "marks behind sliding tyres", "live": "live"},
+    {"key": "road_overlay", "flag": "--no-road-overlay", "type": "nbool", "default": True,
+     "group": "environment", "label": "Road logic overlay",
+     "help": "O key / dashboard card: the road logic the AI uses, drawn around your car", "live": "live"},
     # display / 表示
     {"key": "control_res", "flag": "--res", "type": "choice", "default": "1080p",
      "choices": ["720p", "1080p", "1440p", "4k"], "group": "display", "label": "Driving window",
      "help": "resolution of your view", "live": "restart"},
     {"key": "fov", "flag": "--fov", "type": "float", "default": 100.0, "min": 60, "max": 130,
      "group": "display", "label": "Field of view", "help": "degrees", "live": "restart"},
+    {"key": "screens", "flag": "--screens", "type": "choice", "default": "single",
+     "choices": ["single", "triple"], "group": "display", "label": "Screens",
+     "help": "triple: your view across 3 side-by-side monitors (5760×1080)", "live": "restart"},
+    {"key": "screen_layout", "flag": "--screen-layout", "type": "choice", "default": "angled",
+     "choices": ["angled", "flat"], "group": "display", "label": "3-screen layout",
+     "help": "angled: side monitors turned towards you (a camera per screen); flat: in one line",
+     "live": "restart"},
+    {"key": "triple_fov", "flag": "--triple-fov", "type": "float", "default": 150.0, "min": 90, "max": 210,
+     "group": "display", "label": "3-screen field of view", "help": "degrees across all three screens",
+     "live": "restart"},
     {"key": "fps", "flag": "--fps", "type": "int", "default": 60, "min": 20, "max": 144,
      "group": "display", "label": "Frame cap", "help": "driving window FPS limit", "live": "restart"},
     {"key": "sensor_viewer", "flag": "--no-sensor-viewer", "type": "nbool", "default": False,
@@ -133,7 +162,10 @@ def to_argv(opts):
     return argv
 
 
-def load_saved(path=SAVED_PATH):
+def load_saved(path=None):
+    # SAVED_PATH read at call time, so tests that move it never touch the real
+    # file / 呼び出し時に読む（テストが実ファイルを上書きしない）
+    path = path or SAVED_PATH
     try:
         with open(path) as fh:
             return clean(json.load(fh))
@@ -141,7 +173,8 @@ def load_saved(path=SAVED_PATH):
         return defaults()
 
 
-def save(opts, path=SAVED_PATH):
+def save(opts, path=None):
+    path = path or SAVED_PATH
     tmp = path + ".tmp"
     with open(tmp, "w") as fh:
         json.dump(clean(opts), fh, indent=2)
@@ -162,7 +195,8 @@ def catalog():
     cars = []
     try:
         for k, c in json.load(open(os.path.join(HERE, "cars", "cars.json"))).items():
-            if isinstance(c, dict) and c.get("make"):
+            # npc_only vehicles (the Oita bus) are not a car to drive / 自車にはしない
+            if isinstance(c, dict) and c.get("make") and not c.get("npc_only"):
                 cars.append({"id": "vehicle.%s.%s" % (c["make"], c["model"]), "name": c.get("name", k),
                              "own": True})
     except (OSError, ValueError):
@@ -185,6 +219,9 @@ def self_test():
     c = clean({"vehicles": "300", "ffb": "false", "control_res": "8k", "junk": 1, "traffic": False})
     assert c["vehicles"] == 150 and c["ffb"] is False and c["control_res"] == "1080p" and "junk" not in c
     assert "--no-traffic" in to_argv(c) and "--ffb" not in to_argv(c)
+    c = clean({"charge_mode": "everywhere", "charge_stations": 40})
+    assert c["charge_mode"] == "random" and c["charge_stations"] == 12
+    assert d["charge_mode"] == "random" and d["charge_stations"] == 0
     print("launch_options self-test OK")
 
 

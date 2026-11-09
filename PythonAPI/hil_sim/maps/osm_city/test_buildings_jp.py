@@ -183,10 +183,15 @@ def test_styles_smoke():
                                                                          (0, 10)])),
                         ("apaato", box(0, 0, 16, 9)), ("danchi", box(0, 0, 48, 9)),
                         ("mansion", box(0, 0, 30, 12)), ("shop", box(0, 0, 9, 12)), ("shed", box(0, 0, 3, 2.5)),
-                        ("shed", box(0, 0, 20, 12))):
+                        ("shed", box(0, 0, 20, 12)), ("office:punched", box(0, 0, 24, 16)),
+                        ("office:ribbon", box(0, 0, 24, 16)), ("office:curtain", box(0, 0, 24, 16)),
+                        ("office:hotel", box(0, 0, 14, 30)), ("carpark", box(0, 0, 30, 20))):
         B, jp = fake_jp()
+        style, _, front = style.partition(":")
         it = item(jp, poly, style, poly.buffer(2.0, join_style="mitre"))
-        it.levels = {"danchi": 5, "mansion": 6}.get(style, it.levels)
+        it.levels = {"danchi": 5, "mansion": 6, "office": 9, "carpark": 4}.get(style, it.levels)
+        if front:
+            it.var.update(front=front, podium="shop" if front != "hotel" else "office")
         m = Mesh()
         getattr(jp, "b_" + style)(m, it, random.Random(1))
         jp.site(m, it)

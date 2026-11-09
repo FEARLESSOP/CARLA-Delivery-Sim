@@ -182,8 +182,11 @@ def table(key, entry, radius):
 
 
 def _radius(entry, views):
+    """Wheel radius: the built car's (car_views.json), else the entry's
+    ``wheel_radius_m`` (the prepare dry-run's measured radius, for a car not
+    built yet), else 0.31 m. / 車輪半径（ビルド済み→エントリ→0.31 m）"""
     v = views.get(blueprint(entry), {})
-    return float(v.get("wheel_radius_m", 0.31))
+    return float(v.get("wheel_radius_m", entry.get("wheel_radius_m", 0.31)))
 
 
 def main(argv):

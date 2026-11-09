@@ -130,8 +130,10 @@ class Mesh(object):
                 return
         self.tris(mat, [a, b, c, d], n / ln, [uva, uvb, uvc, uvd], [0, 1, 2, 0, 2, 3])
 
-    def flat(self, mat, poly, z, uv_scale=1.0, up=True, zf=None, uv_rot=0.0):
-        """Triangulated horizontal polygon with holes; z may be a function of (x, y).
+    def flat(self, mat, poly, z, uv_scale=1.0, up=True, zf=None, uv_rot=0.0, uvfun=None):
+        """Triangulated horizontal polygon with holes; z may be a function of (x, y);
+        uvfun(V) -> UV per vertex replaces the world-coordinate UVs (strips whose
+        texture must run along them). / uvfun: 頂点ごとの UV（帯に沿う模様）。
         Constrained Delaunay (GEOS): the triangles follow the polygon's edges
         and holes exactly. earcut spilled triangles across holes on large
         shapes (a grass base reaching over the road edge -- a floating wheel).
@@ -170,7 +172,9 @@ class Mesh(object):
                 n = np.cross(T3[:, 1] - T3[:, 0], T3[:, 2] - T3[:, 0])
                 n /= np.maximum(np.linalg.norm(n, axis=1), 1e-12)[:, None]
                 Nf = np.repeat(n, 3, axis=0)
-            if uv_rot:
+            if uvfun is not None:
+                U = np.asarray(uvfun(V), np.float64).reshape(-1, 2)
+            elif uv_rot:
                 cr, sr = math.cos(uv_rot), math.sin(uv_rot)
                 U = np.column_stack([V[:, 0] * cr + V[:, 1] * sr, -V[:, 0] * sr + V[:, 1] * cr]) / uv_scale
             else:

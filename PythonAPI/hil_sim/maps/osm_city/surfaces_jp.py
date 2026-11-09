@@ -111,11 +111,17 @@ def partition(L, M, seed=5):
     C = clean(prec(estate.intersection(edge, grid_size=G)).difference(unary_union([P, Wh]), grid_size=G))
     E = clean(estate.difference(unary_union([P, Wh, C]), grid_size=G))
     A = prec(cw.difference(unary_union([P, Wh, C, E]), grid_size=G))
+    # 路側帯 (pavements.py): the estate streets' edge strip, cut out as its own
+    # piece so ground.py can put it in the Road_Sidewalk object at road height
+    # (same asphalt look; the navmesh makes it walkable) / 路側帯の面を別に切る
+    R = clean(prec(getattr(L, "rosoku", Polygon()).intersection(cw, grid_size=G))) \
+        if getattr(L, "rosoku", None) is not None and not L.rosoku.is_empty else Polygon()
     return coverage(cw, {"asphalt_jp": A, "asphalt_estate": E, "asphalt_crack": C, "asphalt_wheel": Wh,
-                         "asphalt_patch": P})
+                         "asphalt_patch": P, "asphalt_rosoku": R})
 
 
-def coverage(cw, pieces):
+def coverage(cw, pieces, order=("asphalt_rosoku", "asphalt_patch", "asphalt_wheel", "asphalt_crack", "asphalt_estate"),
+             rest="asphalt_jp"):
     """Re-cut the pieces from the noded linework of all their outlines, so
     neighbours share every vertex. Overlays alone leave T-junctions (a vertex
     of one piece on the middle of another's edge): draped, the edge bends at
@@ -131,14 +137,14 @@ def coverage(cw, pieces):
     faces, rp = faces[inside], rp[inside]
     out = {}
     taken = np.zeros(len(faces), bool)
-    for mat in ("asphalt_patch", "asphalt_wheel", "asphalt_crack", "asphalt_estate"):
-        g = pieces[mat]
-        if g.is_empty:
+    for mat in order:
+        g = pieces.get(mat)
+        if g is None or g.is_empty:
             out[mat] = faces[:0]
             continue
         shapely.prepare(g)
         m = ~taken & shapely.contains(g, rp)
         taken |= m
         out[mat] = faces[m]
-    out["asphalt_jp"] = faces[~taken]
+    out[rest] = faces[~taken]
     return out          # {material: array of faces} (kept apart: they share edges) / 面の配列

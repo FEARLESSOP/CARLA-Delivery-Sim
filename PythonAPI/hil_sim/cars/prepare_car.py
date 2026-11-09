@@ -790,6 +790,48 @@ def steering_from_box(objs, rule, frame):
     return w
 
 
+def scaled_pow2(w, h, limit):
+    """(w, h) scaled so the longer side fits ``limit``, each side rounded to a
+    power of two (UE mips / compression). / 2 の累乗に丸めた縮小サイズ"""
+    def pow2(v):
+        p = 1
+        while p * 2 <= v:
+            p *= 2
+        return p if v - p <= 2 * p - v else 2 * p
+    s = min(1.0, float(limit) / max(w, h))
+    cap = 1
+    while cap * 2 <= limit:          # largest power of two <= limit / 上限以下の最大の 2 の累乗
+        cap *= 2
+    return min(cap, max(1, pow2(w * s))), min(cap, max(1, pow2(h * s)))
+
+
+def vehicle_options(cfg, lo, hi):
+    """Heavy / NPC vehicle options copied into <key>.json for build_cars.sh
+    (ch. 16): VehicleFactory base_type, npc_only, wheel brake torques, the
+    physics body box (CAR frame, checked against the bounds) and the centre
+    of mass height. Only what the entry sets; other cars stay as before.
+    大型・NPC 車両の設定を <key>.json へ（指定されたものだけ）。"""
+    out = {}
+    for k in ("base_type", "npc_only", "brake_torque_nm", "handbrake_torque_nm", "com_height_m"):
+        if k in cfg:
+            out[k] = cfg[k]
+    box = cfg.get("collision_box")
+    if box:
+        blo = Vector((lo.x, -hi.y, lo.z))            # bounds in CARLA axes / CARLA 軸の外形
+        bhi = Vector((hi.x, -lo.y, hi.z))
+        for i, a in enumerate("xyz"):
+            r = box.get(a)
+            if not r or not r[0] < r[1]:
+                raise SystemExit("collision_box: %s needs [lo, hi]: %s" % (a, box))
+            if r[0] < blo[i] - 0.05 or r[1] > bhi[i] + 0.05:
+                raise SystemExit("collision_box: %s %s outside the bounds [%.2f, %.2f]"
+                                 % (a, r, blo[i], bhi[i]))
+        out["collision_box"] = {a: [round(float(v), 4) for v in box[a]] for a in "xyz"}
+    if "com_height_m" in cfg and not 0.2 <= cfg["com_height_m"] <= hi.z - lo.z:
+        raise SystemExit("com_height_m %s outside the vehicle" % cfg["com_height_m"])
+    return out
+
+
 def main():
     cfg_path, key, out_dir = sys.argv[sys.argv.index("--") + 1:][:3]
     cfg = json.load(open(cfg_path))[key]
@@ -831,7 +873,12 @@ def main():
     if cfg.get("rhd_convert"):
         frame = wheel_frame(objs, wheels)[3]
         rhd_convert(objs, cfg["rhd_convert"], frame)
-    if "box" in cfg["steering_wheel"]:
+    if cfg["steering_wheel"].get("none"):
+        # NPC vehicle without an interior (the Oita bus): no steering-wheel
+        # prop, no hub; the eye comes from "driver_eye" (ch. 16)
+        # 内装の無い NPC 車両（大分バス）：ハンドルのプロップもハブも無い
+        steer = [None]
+    elif "box" in cfg["steering_wheel"]:
         found = steering_from_box(objs, cfg["steering_wheel"], wheel_frame(objs, wheels)[3])
         objs = [o for o in bpy.context.scene.objects if o.type == "MESH" and o.data.vertices]
         steer = [found] if found else []
@@ -847,11 +894,12 @@ def main():
     steer = steer[0]
     # small parts sitting on the steering wheel (horn badge, logo) turn with it
     # ハンドル上の小物（ロゴ・ホーンパッド）も一緒に回す
-    slo, shi = bounds([steer])
     pad = Vector((0.02, 0.02, 0.02))
     extra = []
     keep_off = [k.lower() for k in cfg["steering_wheel"].get("exclude", [])]
-    for o in objs:
+    if steer is not None:
+        slo, shi = bounds([steer])
+    for o in (objs if steer is not None else []):
         if o is steer or any(k in o.name.lower() for k in keep_off):
             continue
         olo, ohi = bounds([o])
@@ -911,14 +959,20 @@ def main():
         print("LIGHT %s %s faces=%d centre=%s" % (slot, obj, nf, [round(v / nf, 2) for v in c]))
 
     # steering wheel prop: hub at the origin, column along +x / ハンドル：ハブ原点、コラム +x
-    axis = column_axis(steer)
-    slo, shi = bounds([steer])
-    hub = (slo + shi) / 2.0
-    pitch = math.degrees(math.atan2(axis.z, math.hypot(axis.x, axis.y)))
-    yaw = math.degrees(math.atan2(axis.y, axis.x))
-    to_local = (Matrix.Rotation(math.radians(pitch), 4, "Y") @
-                Matrix.Rotation(math.radians(-yaw), 4, "Z") @ Matrix.Translation(-hub))
-    eye = hub + Vector((-0.62, 0.0, 0.26))     # first guess; tune in car_views.json / 初期値
+    if steer is not None:
+        axis = column_axis(steer)
+        slo, shi = bounds([steer])
+        hub = (slo + shi) / 2.0
+        pitch = math.degrees(math.atan2(axis.z, math.hypot(axis.x, axis.y)))
+        yaw = math.degrees(math.atan2(axis.y, axis.x))
+        to_local = (Matrix.Rotation(math.radians(pitch), 4, "Y") @
+                    Matrix.Rotation(math.radians(-yaw), 4, "Z") @ Matrix.Translation(-hub))
+        eye = hub + Vector((-0.62, 0.0, 0.26))     # first guess; tune in car_views.json / 初期値
+    elif "driver_eye" not in cfg:
+        raise SystemExit('steering_wheel "none" needs a "driver_eye" in the entry')
+    else:
+        e = cfg["driver_eye"]
+        eye = Vector((e[0], -e[1], e[2]))
 
     def export(sel, fname, armature=None):
         bpy.ops.object.select_all(action="DESELECT")
@@ -940,6 +994,15 @@ def main():
     for img in bpy.data.images:
         if img.packed_file is not None:
             os.makedirs(tex_dir, exist_ok=True)
+            # "max_texture": big or non-power-of-two atlases (the bus: 7111 px)
+            # get no mips and stay uncompressed in UE: scale them down to
+            # powers of two; the model's own files stay as they are (ch. 16)
+            # 大きい・2 の累乗でないテクスチャを縮小（元ファイルはそのまま）
+            mt = cfg.get("max_texture")
+            if mt and img.size[0] and (max(img.size) > mt or any(d & (d - 1) for d in img.size)):
+                w, h = scaled_pow2(img.size[0], img.size[1], mt)
+                print("texture %s: %dx%d -> %dx%d" % (img.name, img.size[0], img.size[1], w, h))
+                img.scale(w, h)
             safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in img.name)
             img.filepath_raw = os.path.join(tex_dir, safe + ".png")
             img.file_format = "PNG"
@@ -948,20 +1011,22 @@ def main():
             img.filepath = os.path.join(tex_dir, safe + ".png")
     bpy.context.scene.unit_settings.scale_length = 0.01      # 1 unit = 1 cm / 1 単位 = 1 cm
     # steering prop / ハンドルのプロップ
-    sp = steer.copy()
-    sp.data = steer.data.copy()
-    bpy.context.scene.collection.objects.link(sp)
-    sp.data.transform(Matrix.Scale(100.0, 4) @ to_local)
-    sp.name = sp.data.name = name + "Steer"
-    export([sp], name + "Steer.fbx")
-    bpy.data.objects.remove(sp)
+    if steer is not None:
+        sp = steer.copy()
+        sp.data = steer.data.copy()
+        bpy.context.scene.collection.objects.link(sp)
+        sp.data.transform(Matrix.Scale(100.0, 4) @ to_local)
+        sp.name = sp.data.name = name + "Steer"
+        export([sp], name + "Steer.fbx")
+        bpy.data.objects.remove(sp)
     # vehicle: everything but the steering wheel / 車両：ハンドル以外
     body = [o for o in objs if o is not steer]
     for b, g in groups.items():
         for o in g:
             vg = o.vertex_groups.new(name=b)
             vg.add(list(range(len(o.data.vertices))), 1.0, "REPLACE")
-    bpy.data.objects.remove(steer)
+    if steer is not None:
+        bpy.data.objects.remove(steer)
     bpy.ops.object.select_all(action="DESELECT")
     for o in body:
         o.select_set(True)
@@ -992,9 +1057,6 @@ def main():
         "bounds_extent_m": [round(size.x / 2, 4), round(size.y / 2, 4), round(size.z / 2, 4)],
         "bounds_centre_m": carla((lo + hi) / 2.0),
         "mass_kg": cfg.get("mass", 1400),
-        "steering_wheel": {"prop": "static.prop." + (name + "Steer").lower(), "hub": carla(hub),
-                           "pitch": round(pitch, 2), "yaw": round(-yaw, 2),
-                           "diameter_m": round(max(shi - slo), 3)},
         "driver_eye": carla(eye),
         "materials": len({m.name for m in mesh.data.materials if m}),
         "glass": glass,
@@ -1004,6 +1066,11 @@ def main():
         "mirror": light_slots["mirror"],
         "light_pieces": len(pieces),
     }
+    if steer is not None:
+        out["steering_wheel"] = {"prop": "static.prop." + (name + "Steer").lower(), "hub": carla(hub),
+                                 "pitch": round(pitch, 2), "yaw": round(-yaw, 2),
+                                 "diameter_m": round(max(shi - slo), 3)}
+    out.update(vehicle_options(cfg, lo, hi))
     if "cameras" in cfg:
         out["cameras"] = cfg["cameras"]
     if "driver_eye" in cfg:

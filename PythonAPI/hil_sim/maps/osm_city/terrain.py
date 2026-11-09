@@ -40,6 +40,10 @@ ALIGN = "terrain_align.json"
 BLEND_IN, BLEND_W = 0.6, 12.0      # ground = road within 0.6 m of the carriageway, terrain 12 m further / 道路→地形
 RES = 0.5                          # drape raster / 沿わせ用ラスタ
 OFFSET_SIGMA, OFFSET_RAMP = 3.0, 2.4   # road offset: smooth average beyond 0.6 + 2.4 m / 道路差の平滑化
+LANE_EXT = 0.5                     # a lane's z reaches this far past its edge (its gutter) / 車線の高さが及ぶ路肩幅
+LANE_WMIN = 0.05                   # ... with at least this weight (a cell only an extension covers) / 最小重み
+BLEND_DZ = 0.05                    # lanes further apart in z are not blended (nearest wins) / これ以上違う車線は混ぜない
+HEAD_LOCK = 0.35                   # dead-end head paving locked this far past the hull / 転回部の固定範囲
 
 
 class Field(object):
@@ -227,7 +231,24 @@ def make_field(out_dir, osm_path=None, glb=None, sigma=9.0, step=2.0, export_sw=
     inside = (np.abs(GX) <= hx) & (np.abs(GY) <= hy)
     z0 = float(Z[inside].min())
     Z -= z0
-    np.savez_compressed(os.path.join(out_dir, FIELD), x0=xs[0], y0=ys[0], step=step, Z=Z, z0=z0)
+    core_z = None
+    if meta.get("core"):
+        # an embedded flat model (maps.json "core", e.g. the Oita Station v8 model):
+        # the ground is level over its square at the median height there, and the
+        # real terrain comes back over "blend" metres outside it
+        # 埋め込みモデルの正方形は平坦（中央値の高さ）、外側で実地形へ戻す
+        from core_merge import core_rect
+        x0, y0, x1, y1 = core_rect(meta)
+        rb = float(meta["core"].get("blend", 80.0))
+        sq = (GX >= x0) & (GX <= x1) & (GY >= y0) & (GY <= y1)
+        core_z = float(np.median(Z[sq]))
+        d = np.hypot(np.maximum(np.maximum(x0 - GX, GX - x1), 0), np.maximum(np.maximum(y0 - GY, GY - y1), 0))
+        u = np.clip(d / rb, 0, 1)
+        Z = core_z + u * u * (3 - 2 * u) * (Z - core_z)
+        print("terrain: core x %.0f..%.0f, y %.0f..%.0f level at %.2f m, real terrain back within %.0f m"
+              % (x0, x1, y0, y1, core_z, rb))
+    np.savez_compressed(os.path.join(out_dir, FIELD), x0=xs[0], y0=ys[0], step=step, Z=Z, z0=z0,
+                        core_z=np.nan if core_z is None else core_z)
     t = Terrain(xs[0], ys[0], step, Z)
     gx, gy = np.gradient(Z, step)
     g = np.hypot(gx, gy)[inside]
@@ -253,16 +274,40 @@ def _raster(geom, x0, y0, nx, ny, res):
     return np.array(im, bool)
 
 
+def lane_surface(lane, ext=LANE_EXT):
+    """One lane as a ruled surface: (outline buffered ``ext`` m, the outline
+    itself, z(x, y)) with z = the lane's z at the nearest station of its centre
+    line (lanes are laterally level, so z depends on s alone: exactly the xodr
+    elevation profile). / 車線を線織面として: 中心線の最寄り点の標高（横断方向は水平）。"""
+    import shapely
+    from shapely.geometry import LineString
+    pts = lane["pts"]
+    C = np.array([q["c"] for q in pts], np.float64)
+    Z = np.array([q["z"] for q in pts], np.float64)
+    ring = [q["l"] for q in pts] + [q["r"] for q in pts][::-1]
+    core = shapely.make_valid(shapely.polygons(np.array(ring, np.float64)))
+    poly = core.buffer(ext, quad_segs=4)
+    line = LineString(C)
+    S = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(C, axis=0).T))])
+
+    def z(x, y):
+        s = shapely.line_locate_point(line, shapely.points(np.column_stack([x, y])))
+        return np.interp(s, S, Z)
+    return poly, core, z
+
+
 class Drape(object):
     """z of the ground (and of the road surface) at any point of the map.
     The road heights come from lanes.json (the elevated road logic): every
-    driving lane sample (centre and both edges, laterally level) is
-    interpolated linearly inside the lanes, carried outward to the nearest
-    lane value over gutter, bays and kerb, then blended to the terrain.
-    地面・路面の高さ。路面は lanes.json の標高（CARLA のウェイポイントと同じ）。"""
+    cell within LANE_EXT of a driving lane takes that lane's z at the nearest
+    station of its centre line (the xodr elevation profile; lanes are
+    laterally level), cells under several lanes (junctions) their mean; the
+    paving of a dead-end head beyond its lanes follows the nearest of the
+    head's OWN lanes (loop and street tapers); the rest of the carriageway
+    (gutter, bays, kerb) takes the nearest lane value, then blends to the
+    terrain. 地面・路面の高さ。路面は lanes.json の標高（CARLA のウェイポイントと同じ）。"""
 
     def __init__(self, terrain, L, res=RES):
-        from scipy.interpolate import LinearNDInterpolator
         from scipy.ndimage import distance_transform_edt
         self.T = terrain
         hx, hy = L.meta["half_x"], L.meta["half_y"]
@@ -272,34 +317,8 @@ class Drape(object):
         xs = x0 + (np.arange(nx) + 0.5) * res
         ys = y0 + (np.arange(ny) + 0.5) * res
         GX, GY = np.meshgrid(xs, ys)
-        # lane samples, snapped to 0.25 m and averaged (overlapping junction lanes)
-        # 車線の標本点（0.25 m に丸めて平均）
-        pts = []
-        for l in L.lanes:
-            for q in l["pts"]:
-                for k in ("c", "l", "r"):
-                    pts.append((q[k][0], q[k][1], q["z"]))
-        A = np.array(pts)
-        key = np.round(A[:, :2] / 0.25).astype(np.int64)
-        uk, inv = np.unique(key, axis=0, return_inverse=True)
-        inv = inv.ravel()
-        cnt = np.bincount(inv)
-        P = np.column_stack([np.bincount(inv, A[:, 0]) / cnt, np.bincount(inv, A[:, 1]) / cnt])
-        zz = np.bincount(inv, A[:, 2]) / cnt
-        # one cell inside the lane outline: PIL fills edge cells, and there the
-        # Delaunay of the samples can reach far (a sliver to another road)
-        # 車線の輪郭より 1 セル内側（境界では遠くの点と結ぶ細い三角形がある）
-        from scipy.ndimage import binary_erosion
-        # the lanes as drawn (dead-end heads pave beyond them: their extra area
-        # takes the nearest lane value, else it tilted towards a road beside it)
-        # 描かれた車線（袋小路の転回部の外側は最寄り車線の値）
-        lane_m = binary_erosion(_raster(getattr(L, "lane_area_drawn", L.lane_area), x0, y0, nx, ny, res))
-        R = np.full(GX.shape, np.nan)
-        R[lane_m] = LinearNDInterpolator(P, zz)(GX[lane_m], GY[lane_m])
-        for j, (hull, zh) in getattr(L, "dead_end_heads_by_j", {}).items():
-            hm = _raster(hull.buffer(0.35, quad_segs=4), x0, y0, nx, ny, res)
-            R[hm] = zh
-        have = ~np.isnan(R)
+        R, have = self.lane_raster(L, xs, ys, x0, y0, nx, ny, res)
+        self.lane_cells = int(have.sum())
         # beyond the lanes: the nearest lane value (roads are laterally level)
         # 車線の外: 最寄りの車線の値（横断方向は水平）
         idx = distance_transform_edt(~have, return_distances=False, return_indices=True)
@@ -328,6 +347,95 @@ class Drape(object):
         self.field = Field(x0 + res / 2, y0 + res / 2, res, H + w * O)
         dz = (R - H)[cw]
         self.cut_fill = (float(dz.min()), float(dz.max())) if dz.size else (0.0, 0.0)
+
+    @staticmethod
+    def lane_raster(L, xs, ys, x0, y0, nx, ny, res):
+        """The road surface z on the raster from the elevated lanes, NaN where no
+        lane reaches: (R, have). Every lane is evaluated on its own cells
+        (lane_surface), several lanes on one cell are averaged (junction lanes
+        overlap the roads leaving them). Dead-end heads (layout.dead_end_heads):
+        the hull's cells outside every lane take the z of the nearest of the
+        head's own lanes, so a sloping street's last metres keep their profile
+        up to the level loop and the extra paving beside them is laterally
+        level with the lane -- one constant height per head flattened the
+        street's taper into a 0.5-1.4 m plateau with a cliff at the hull's
+        edge (2026-11-06). The hull stays locked (have) against a neighbouring
+        road's height bleeding in (j291).
+        車線ごとの線織面を平均したラスタ。転回部の車線外は自分の車線の最寄り値（一定値は
+        坂のすり付けを平らにして段を作った）。"""
+        import shapely
+        num = np.zeros((ny, nx))
+        cnt = np.zeros((ny, nx))
+        best_w = np.zeros((ny, nx))
+        best_z = np.zeros((ny, nx))
+        zlo = np.full((ny, nx), np.inf)
+        zhi = np.full((ny, nx), -np.inf)
+        surfs = []
+        for l in L.lanes:
+            if len(l["pts"]) < 2:
+                surfs.append(None)
+                continue
+            poly, core, zf = lane_surface(l)
+            surfs.append((poly, zf))
+            bx0, by0, bx1, by1 = poly.bounds
+            i0, i1 = max(0, int((bx0 - x0) / res) - 1), min(nx, int((bx1 - x0) / res) + 2)
+            j0, j1 = max(0, int((by0 - y0) / res) - 1), min(ny, int((by1 - y0) / res) + 2)
+            if i1 <= i0 or j1 <= j0:
+                continue
+            CX, CY = np.meshgrid(xs[i0:i1], ys[j0:j1])
+            inside = shapely.contains_xy(poly, CX.ravel(), CY.ravel()).reshape(CX.shape)
+            if not inside.any():
+                continue
+            X, Y = CX[inside], CY[inside]
+            z = zf(X, Y)
+            # weight 1 on the lane itself, fading over the LANE_EXT beyond its edge: the
+            # two directions of a street are separate roads a few dm apart, and where the
+            # road logic gives them different z (0.1-0.3 m on OitaKosen) a plain mean of
+            # the overlapping extensions pulled each lane's edge cells towards the other
+            # (0.1 m at the inner wheel track); now the step lies in the gap between them
+            # 車線上は重み 1、外側は端から LANE_EXT で 0 へ（対向車線と標高が違う所の段は車線間に）
+            d = shapely.distance(core, shapely.points(np.column_stack([X, Y])))
+            w = np.clip(1.0 - d / LANE_EXT, LANE_WMIN, 1.0)
+            sub_n, sub_c = num[j0:j1, i0:i1], cnt[j0:j1, i0:i1]
+            sub_n[inside] += w * z
+            sub_c[inside] += w
+            bw, bz = best_w[j0:j1, i0:i1], best_z[j0:j1, i0:i1]
+            lo, hi = zlo[j0:j1, i0:i1], zhi[j0:j1, i0:i1]
+            cur_w, cur_z = bw[inside], bz[inside]
+            take = w > cur_w
+            cur_w[take], cur_z[take] = w[take], z[take]
+            bw[inside], bz[inside] = cur_w, cur_z
+            lo[inside] = np.minimum(lo[inside], z)
+            hi[inside] = np.maximum(hi[inside], z)
+        have = cnt > 0
+        R = np.full((ny, nx), np.nan)
+        R[have] = num[have] / cnt[have]
+        # lanes more than BLEND_DZ apart (a level dead-end loop 0.3 m from a sloping street,
+        # OitaKosen j137): not blended, the nearest lane wins and the step lies in the gap
+        # between them (the blend put both lanes' wheel tracks 0.1 m off)
+        # BLEND_DZ 以上違う車線は混ぜない（最寄りの車線、段は車線の間）
+        split = have & (zhi - zlo > BLEND_DZ)
+        R[split] = best_z[split]
+        Drape.split_cells = int(split.sum())          # for the report / 報告用
+        own_lanes = getattr(L, "dead_end_head_lanes", {})
+        for j, (hull, zh) in getattr(L, "dead_end_heads_by_j", {}).items():
+            hm = _raster(hull.buffer(HEAD_LOCK, quad_segs=4), x0, y0, nx, ny, res) & ~have
+            if not hm.any():
+                continue
+            mine = [surfs[i] for i in own_lanes.get(j, []) if i < len(surfs) and surfs[i] is not None]
+            # (surfs: (buffered outline, z) per lane; the nearest own lane's z) / 最寄りの自車線の高さ
+            if not mine:
+                R[hm] = zh                     # no lane list (older layouts): the loop's height / 旧来の一定値
+                have |= hm
+                continue
+            X, Y = np.meshgrid(xs, ys)
+            X, Y = X[hm], Y[hm]
+            P = shapely.points(np.column_stack([X, Y]))
+            D = np.stack([shapely.distance(poly, P) for poly, zf in mine])
+            Zs = np.stack([zf(X, Y) for poly, zf in mine])
+            R[hm] = Zs[D.argmin(axis=0), np.arange(len(X))]
+            have |= hm
+        return R, have
 
     def z(self, x, y):
         """Ground / road-surface z (the base the flat model's z is measured from). / 地面の高さ。"""
