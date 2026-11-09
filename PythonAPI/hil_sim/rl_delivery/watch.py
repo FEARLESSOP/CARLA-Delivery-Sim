@@ -129,8 +129,8 @@ def record_nav(checkpoint, wind, seed, map_name="OitaKosen", dist=900.0):
         if te or tr:
             break
     frames = env.log
-    xs = [f["p"][0] for f in frames] + [start_p[0], env.goal[0]]
-    ys = [f["p"][1] for f in frames] + [start_p[1], env.goal[1]]
+    xs = [f["p"][0] for f in frames] + [start_p[0], env.drop_goal[0], env.meet_goal[0]]
+    ys = [f["p"][1] for f in frames] + [start_p[1], env.drop_goal[1], env.meet_goal[1]]
     # a square view of at least 300 m round the flight / 飛行を囲む正方形（300 m 以上）
     cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
     half = max(150.0, (max(xs) - min(xs)) / 2.0 + 60.0, (max(ys) - min(ys)) / 2.0 + 60.0)
@@ -143,7 +143,8 @@ def record_nav(checkpoint, wind, seed, map_name="OitaKosen", dist=900.0):
     X, Y = np.meshgrid(gx, gy, indexing="ij")
     top, gnd = H.top_at(X, Y), H.ground_at(X, Y)
     return {"brain": "nav", "checkpoint": os.path.basename(str(checkpoint)), "wind_level": wind, "seed": seed,
-            "start": start_p.round(2).tolist(), "goal": env.goal.round(2).tolist(), "frames": frames,
+            "start": start_p.round(2).tolist(), "goal": env.drop_goal.round(2).tolist(),
+            "meet": env.meet_goal.round(2).tolist(), "frames": frames,
             "kpi": info["kpi"], "box": box, "nofly": env.nofly, "zones": env.m["zones"]["pods"],
             "cell": cell, "nx": len(gx), "ny": len(gy),
             "above": np.clip(np.round(top - gnd), 0, 99).astype(int).ravel().tolist(),

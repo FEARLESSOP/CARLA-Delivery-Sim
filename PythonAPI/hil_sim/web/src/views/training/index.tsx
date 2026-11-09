@@ -64,7 +64,7 @@ function Learning({ rows, brain, rule }: { rows: Record<string, number>[]; brain
     ['reached', 100, C.accent, t('tr_s_reached')], ['crash', 100, C.danger, t('tr_s_crash')],
     ['xtrack_mean', 10, C.s1, t('tr_s_xtrack')], ['wind_level', 100, C.warn, t('tr_s_wind')],
   ] : brain === 'nav' ? [
-    ['reached', 100, C.accent, t('tr_n_reached')], ['crash_obstacle', 100, C.danger, t('tr_n_obst')],
+    ['delivered', 100, C.cyan, t('tr_n_delivered')], ['reached', 100, C.accent, t('tr_n_reached')], ['crash_obstacle', 100, C.danger, t('tr_n_obst')],
     ['crash_nofly', 100, C.violet, t('tr_n_nofly')], ['dist', 0.1, C.s1, t('tr_n_dist')], ['wind_level', 100, C.warn, t('tr_s_wind')],
   ] : [
     ['deliveries', 5, C.accent, t('tr_m_deliv')], ['crashes_per_100', 5, C.danger, t('tr_m_crash')],
@@ -365,8 +365,8 @@ function MissionWatch({ ckpts }: { ckpts: string[] }) {
 
 interface NFrame { t: number; p: number[]; wind: number[]; cmd: number[]; clear: number }
 interface NRec {
-  checkpoint: string; wind_level: number; seed: number; start: number[]; goal: number[]; frames: NFrame[]
-  kpi: { reached: boolean; crash: string; time_s: number; battery_used: number; min_clear: number; start_dist: number }
+  checkpoint: string; wind_level: number; seed: number; start: number[]; goal: number[]; meet?: number[]; frames: NFrame[]
+  kpi: { reached: boolean; delivered?: boolean; crash: string; time_s: number; battery_used: number; min_clear: number; start_dist: number }
   box: number[]; nofly: Rect[]; cell: number; nx: number; ny: number; above: number[]; ground: number[]
 }
 
@@ -401,6 +401,11 @@ function NavMap({ rec, i }: { rec: NRec; i: number }) {
     }
     const [sx, sy] = P(rec.start[0], rec.start[1]); g.strokeStyle = C.fg; g.lineWidth = 2; g.strokeRect(sx - 6, sy - 6, 12, 12)
     const [gx, gy] = P(rec.goal[0], rec.goal[1]); g.strokeStyle = C.accent; g.lineWidth = 3; g.beginPath(); g.arc(gx, gy, 8, 0, Math.PI * 2); g.stroke()
+    if (rec.meet) {
+      const [mx, my] = P(rec.meet[0], rec.meet[1])
+      g.fillStyle = C.cyan; g.fillRect(mx - 6, my - 6, 12, 12)
+      g.fillStyle = C.fg2; g.font = `11px ${FONT_MONO}`; g.fillText('POD', mx + 9, my + 4)
+    }
     })
     for (let k = 1; k <= i; k++) {
       const a = rec.frames[k - 1], b = rec.frames[k]
@@ -494,7 +499,8 @@ function NavWatch({ ckpts }: { ckpts: string[] }) {
       </Card>
       <Card title={t('tr_episode')}>
         {k && <>
-          <KV k={t('tr_n_result')} v={k.reached ? t('tr_done') : (k.crash || 'timeout')} tone={k.reached ? 'good' : 'bad'} />
+          <KV k={t('tr_n_deliv')} v={k.delivered ? t('tr_yes') : t('tr_no')} tone={k.delivered ? 'good' : 'bad'} />
+          <KV k={t('tr_n_result')} v={k.reached ? t('tr_n_landed') : (k.crash || 'timeout')} tone={k.reached ? 'good' : 'bad'} />
           <KV k={t('tr_n_distk')} v={`${fmt(k.start_dist, 0)} m`} />
           <KV k={t('tr_n_clear')} v={`${fmt(k.min_clear, 1)} m`} tone={k.min_clear < 2 ? 'warn' : 'good'} />
           <KV k={t('tr_batt')} v={`${fmt(k.battery_used, 1)} %`} />

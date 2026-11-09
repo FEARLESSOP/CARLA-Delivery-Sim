@@ -24,7 +24,7 @@ Mini Pods and porter bots come later.
 
 | Brain | Decides | Status | Code |
 |---|---|---|---|
-| Drone navigation | thrust / tilt / turn 20× a second; finds its own way to the drop | training | `env_nav.py` |
+| Drone navigation | thrust / tilt / turn 20× a second; finds its own way to the drop, then to the meeting point and lands on the pod | training | `env_nav.py` |
 | Drone mission | launch now (low / medium / high) or wait; which meeting point to return to | training | `env_mission.py` |
 | Drone flight (retired) | followed a given route in wind | done, replaced by navigation | `env_flight.py` |
 | Pod mission | orders, stop order, charging | to build | |
@@ -55,6 +55,20 @@ Mini Pods and porter bots come later.
   heights) until the navigation brain replaces it (option B: train both now,
   top-up later).
 
+## A navigation flight (two legs, like the delivery sim)
+
+Every flight is new: random take-off road in a pod zone, random building
+(1,204) to deliver to, random meeting point on another road of that zone, new
+wind. Tests use seeds it never practised on.
+1. Pod roof -> drop: hover 4-10 m above the ground within 2.5 m, slower than
+   1.5 m/s = parcel lowered (+60).
+2. Drop -> meeting point: land on the pod roof (2.6 m above the road) within
+   1 m of its centre, sinking < 1 m/s, drifting < 0.8 m/s (+100 + battery
+   bonus). Any other touch of the pod is a crash ("pod"). Time limit 480 s.
+The closer-is-better reward and the circling cost switch to the pod after the
+drop; the brain senses which leg it is on. Scripted baseline at <= 200 m:
+19 / 20 delivered and landed.
+
 ## Rewards and the tricks they had to stop
 
 Every trick the brains found, and the fix (world rules / costs, never steering):
@@ -72,8 +86,8 @@ Watch for new tricks: a failure type (time-out, battery, ceiling) rising while
 
 ## Curriculum
 
-- Navigation: trips of 80 m, then +60 m steps to 200 m, then +150 m steps to
-  900 m, each when 70 % of test trips succeed; then wind in 20 % steps to full.
+- Navigation: trips (start -> drop and drop -> meeting point) of 80 m, then +60 m steps to 200 m, then +150 m steps to
+  900 m, each when 70 % of test flights land back on the pod; then wind in 20 % steps to full.
 - Flight (retired): wind in 20 % steps when 80 % of flights finished within 3 m.
 
 ## Baselines (the scores to beat)

@@ -173,6 +173,8 @@ def evaluate_nav(model, map_name, level, dist, n=16, seed=4242):
                 break
     crash = [r["crash"] for r in res]
     return {"wind_level": level, "dist": dist, "reached": float(np.mean([r["reached"] for r in res])),
+            "delivered": float(np.mean([r.get("delivered", False) for r in res])),
+            "crash_pod": float(np.mean([c == "pod" for c in crash])),
             "crash": float(np.mean([bool(c) and c != "timeout" for c in crash])),
             "crash_obstacle": float(np.mean([c == "obstacle" for c in crash])),
             "crash_nofly": float(np.mean([c == "nofly" for c in crash])),
@@ -184,7 +186,7 @@ def evaluate_nav(model, map_name, level, dist, n=16, seed=4242):
             "time_s": float(np.mean([r["time_s"] for r in res]))}
 
 
-NAV_COLS = ["steps", "wall_s", "wind_level", "dist", "reached", "crash", "crash_obstacle", "crash_nofly",
+NAV_COLS = ["steps", "wall_s", "wind_level", "dist", "reached", "delivered", "crash_pod", "crash", "crash_obstacle", "crash_nofly",
             "crash_ceiling", "crash_battery",
             "timeout", "min_clear", "battery_used", "time_s", "ep_reward"]
 
@@ -255,8 +257,8 @@ def train_nav(a):
                     json.dump({"brain": "nav", "running": True, "steps": self.num_timesteps, "wind_level": level,
                                "dist": dist, "last": k, "checkpoint": path, "started": t0, "deadline": deadline,
                                "t": time.time()}, f)
-                print("[nav] %d steps  dist %.0f  wind %.1f  reached %.0f%%  crash %.0f%% (obstacle %.0f%%, no-fly %.0f%%, "
-                      "ceiling %.0f%%, battery %.0f%%)  time-out %.0f%%" % (self.num_timesteps, dist, level, 100 * k["reached"],
+                print("[nav] %d steps  dist %.0f  wind %.1f  delivered %.0f%%  landed on pod %.0f%%  crash %.0f%% (obstacle %.0f%%, no-fly %.0f%%, "
+                      "ceiling %.0f%%, battery %.0f%%)  time-out %.0f%%" % (self.num_timesteps, dist, level, 100 * k["delivered"], 100 * k["reached"],
                                                            100 * k["crash"], 100 * k["crash_obstacle"],
                                                            100 * k["crash_nofly"], 100 * k["crash_ceiling"],
                                                            100 * k["crash_battery"], 100 * k["timeout"]), flush=True)

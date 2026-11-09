@@ -35,7 +35,8 @@ RAYS = 16
 RANGE = 40.0
 NOFLY_DIRS = 8
 NOFLY_RANGE = 150.0
-MAX_S = 240.0
+MAX_S = 480.0             # both legs / 往復の制限時間
+PAD_Z = 2.6               # pod roof above the road / ポッド屋根の高さ
 CEILING_AGL = 150.0
 PROG_K = 0.3              # reward per metre closer / 1 m 近づくごとの報酬
 NEAR_BONUS, NEAR_SCALE = 25.0, 15.0   # extra pull in the last metres / 最後の数十 m の引き
@@ -82,7 +83,7 @@ class NavEnv(gym.Env):
         self.ray_d = np.linspace(2.0, RANGE, 20)
         ang8 = np.arange(NOFLY_DIRS) * 2 * math.pi / NOFLY_DIRS
         self.nf_dirs = np.stack([np.cos(ang8), np.sin(ang8)], 1)
-        n_obs = 3 + 3 + 3 + 2 + 2 + 3 + RAYS + 8 + NOFLY_DIRS + 4 + 1
+        n_obs = 3 + 3 + 3 + 2 + 2 + 3 + RAYS + 8 + NOFLY_DIRS + 4 + 1 + 1
         self.observation_space = gym.spaces.Box(-10.0, 10.0, (n_obs,), np.float32)
         self.action_space = gym.spaces.Box(-1.0, 1.0, (4,), np.float32)
         self.drops = [b for b in self.m["buildings"] if b["deliverable"]]
@@ -129,8 +130,9 @@ class NavEnv(gym.Env):
 
     # -- episodes / エピソード
     def _pick(self):
-        """Take-off spot on a road in a pod zone, and a drop in the same zone
-        (or a nearby one), both clear of no-fly zones. / 離陸地点と投下点"""
+        """Take-off spot on a road in a pod zone, a drop in the same zone and
+        the meeting point (where the pod waits) on another road in that zone,
+        all clear of no-fly zones and under open sky. / 離陸地点・投下点・合流地点"""
         keep = self.m["keep"]
         for _ in range(200):
             n = self.m["nodes"][keep[int(self.rng.integers(len(keep)))]]
@@ -150,26 +152,40 @@ class NavEnv(gym.Env):
                 drop = np.array([b["x"], b["y"]]) + v * (max(b["len"], b["wid"]) / 2.0 + 3.0)
                 if not self._open_sky(drop, 2.0):
                     continue
-                return start, drop, z
-        return start, start + np.array([80.0, 0.0]), z
+                meets = []
+                for _k in range(40):
+                    q = np.array(self.m["nodes"][keep[int(self.rng.integers(len(keep)))]][:2], float)
+                    if (r["x0"] <= q[0] <= r["x1"] and r["y0"] <= q[1] <= r["y1"] and not self._in_nofly(q, 20.0)
+                            and 30.0 < math.dist(q, drop) < self.max_dist and self._open_sky(q, 3.0)):
+                        meets.append(q)
+                        break
+                if not meets:
+                    continue
+                return start, drop, meets[0], z
+        return start, start + np.array([80.0, 0.0]), start.copy(), z
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self.max_dist = float(getattr(self, "curriculum_dist", 600.0))
-        start, drop, self.zone = self._pick()
+        start, drop, meet, self.zone = self._pick()
         g0 = float(self.H.ground_at(start[0], start[1]))
         self.drone = Drone([start[0], start[1], g0 + 2.6])            # on the pod roof / ポッド屋根
         gd = float(self.H.ground_at(drop[0], drop[1]))
-        self.goal = np.array([drop[0], drop[1], gd + 7.0])
+        self.drop_goal = np.array([drop[0], drop[1], gd + 7.0])          # hover to lower the parcel / 投下ホバー
+        gm = float(self.H.ground_at(meet[0], meet[1]))
+        self.meet_goal = np.array([meet[0], meet[1], gm + PAD_Z])         # land on the pod / ポッドに着陸
+        self.goal = self.drop_goal
+        self.phase = 0                                                     # 0 to the drop, 1 to the pod
         self.wind = Wind(self.rng, level=self.wind_level, grid=self.grid)
         self.n = 0
         self.d_best = float(np.linalg.norm(self.goal - self.drone.p))
         self.d0 = self.d_best
         self.phi_last = self._phi(self.d_best)
         self.last_act = np.zeros(4)
-        self.stats = {"reached": False, "crash": None, "min_clear": RANGE, "energy": 0.0}
+        self.stats = {"reached": False, "delivered": False, "crash": None, "min_clear": RANGE, "energy": 0.0,
+                      "deliver_t": None}
         self.trail = []
         return self._obs(), {}
 
@@ -190,7 +206,7 @@ class NavEnv(gym.Env):
             np.roll(rng, -int(round(yaw / (2 * math.pi / RAYS)))) / RANGE,
             np.roll(rng_low, -int(round(yaw / (2 * math.pi / 8)))) / RANGE,
             np.roll(nfd, -int(round(yaw / (2 * math.pi / NOFLY_DIRS)))) / NOFLY_RANGE,
-            self.last_act, [self.drone.battery / 100.0]])
+            self.last_act, [self.drone.battery / 100.0], [float(self.phase)]])
         self._clear = float(min(rng.min(), max(p[2] - t_here, 0.0) + 0.0))
         return np.clip(o, -10, 10).astype(np.float32)
 
@@ -230,7 +246,14 @@ class NavEnv(gym.Env):
         self.last_act = act
         term = trunc = False
         top = float(self.H.top_at(dr.p[0], dr.p[1]))
-        if dr.p[2] < top + 0.2 and self.n > 10:
+        hd_goal = float(np.linalg.norm(self.goal[:2] - dr.p[:2]))
+        landed = (self.phase == 1 and hd_goal < 1.0 and dr.p[2] - self.goal[2] < 0.4
+                  and dr.v[2] > -1.0 and float(np.linalg.norm(dr.v[:2])) < 0.8)
+        if landed:
+            pass
+        elif self.phase == 1 and hd_goal < 1.6 and dr.p[2] < self.goal[2] + 0.2:
+            self.stats["crash"] = "pod"                                 # hit the pod / ポッドに衝突
+        elif dr.p[2] < top + 0.2 and self.n > 10:
             self.stats["crash"] = "obstacle" if top > float(self.H.ground_at(dr.p[0], dr.p[1])) + 0.5 else "ground"
         elif self._in_nofly(dr.p):
             self.stats["crash"] = "nofly"
@@ -241,11 +264,18 @@ class NavEnv(gym.Env):
         if self.stats["crash"]:
             r -= 50.0
             term = True
-        elif float(np.linalg.norm(self.goal[:2] - dr.p[:2])) < 2.5 and abs(self.goal[2] - dr.p[2]) < 3.0 \
-                and float(np.linalg.norm(dr.v)) < 1.5:
+        elif landed:                                                    # back on the pod / 帰還
             r += 100.0 + 20.0 * dr.battery / 100.0
             term = True
             self.stats["reached"] = True
+        elif self.phase == 0 and hd_goal < 2.5 and abs(self.goal[2] - dr.p[2]) < 3.0 \
+                and float(np.linalg.norm(dr.v)) < 1.5:
+            # parcel lowered: now fly to the meeting point / 投下完了、合流地点へ
+            r += 60.0
+            self.stats["delivered"], self.stats["deliver_t"] = True, self.n * DT
+            self.phase = 1
+            self.goal = self.meet_goal
+            self.phi_last = self._phi(float(np.linalg.norm(self.goal - dr.p)))
         elif self.n * DT >= MAX_S:
             # not delivering is a failure too (no safe "hover until time is up") / 時間切れも失敗
             r -= 50.0
@@ -253,10 +283,12 @@ class NavEnv(gym.Env):
             self.stats["crash"] = "timeout"
         if self.log is not None and self.n % 2 == 0:
             self.log.append({"t": round(self.n * DT, 2), "p": dr.p.round(2).tolist(), "wind": w.round(2).tolist(),
-                             "cmd": np.round(act, 3).tolist(), "clear": round(self._clear, 1)})
+                             "cmd": np.round(act, 3).tolist(), "clear": round(self._clear, 1),
+                             "phase": self.phase})
         info = {}
         if term or trunc:
-            info = {"kpi": {"reached": self.stats["reached"], "crash": self.stats["crash"] or "",
+            info = {"kpi": {"reached": self.stats["reached"], "delivered": self.stats["delivered"],
+                            "deliver_t": self.stats["deliver_t"], "crash": self.stats["crash"] or "",
                             "time_s": self.n * DT, "battery_used": 100.0 - dr.battery,
                             "min_clear": self.stats["min_clear"], "start_dist": self.d0,
                             "end_dist": d}}
@@ -277,11 +309,11 @@ class ScriptedPilot(object):
         g = e.goal - d.p
         gnd = float(e.H.ground_at(d.p[0], d.p[1]))
         hd = float(np.linalg.norm(g[:2]))
-        tz = gnd + 45.0 if hd > 15 else e.goal[2]
+        tz = gnd + 45.0 if hd > 15 else (e.goal[2] + (0.0 if hd < 0.6 or e.phase == 0 else 4.0))
         vref = np.zeros(3)
         if d.p[2] > gnd + 30 or hd < 15:
             vref[:2] = g[:2] / max(hd, 1e-3) * min(10.0, 0.4 * hd)
-        vref[2] = float(np.clip(tz - d.p[2], -3, 4))
+        vref[2] = float(np.clip(tz - d.p[2], -0.8 if e.phase == 1 and hd < 3 else -3, 4))
         a = 1.2 * (vref - d.v)
         c, s = math.cos(d.yaw), math.sin(d.yaw)
         ab = (c * a[0] + s * a[1], -s * a[0] + c * a[1])
