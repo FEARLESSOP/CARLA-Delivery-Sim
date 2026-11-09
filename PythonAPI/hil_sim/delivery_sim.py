@@ -58,6 +58,7 @@ from agents.navigation.basic_agent import BasicAgent  # noqa: E402
 from delivery.route import SafeRoutePlanner  # noqa: E402  (bounded on imported maps)
 
 from delivery import planning  # noqa: E402
+from delivery.kpi import KpiTracker  # noqa: E402
 from delivery.planning import DRONE, FACE_TO_FACE, CHARGE, Building, Stop  # noqa: E402
 from delivery.traffic import Traffic  # noqa: E402
 from delivery.backends import (DroneUnit, Hazards, OBSTACLE_HIT, DRONE_RADIUS,  # noqa: E402
@@ -3496,6 +3497,7 @@ def main(argv=None):
         fleet = Fleet(args, world, vans, gen, log, sky, livew)
         fleet.boxes = boxmgr
         fleet.lmh_shared = lmh_shared
+        kpi = KpiTracker(fleet)              # docs/DELIVERY_KPI.md
         if lmh_shared is not None:
             geo = fleet.geo
             for v in vans:
@@ -3543,6 +3545,7 @@ def main(argv=None):
                 if ahead > 0:
                     time.sleep(ahead)
             fleet.step(t, dt)
+            kpi.sample(t)
             camera.step()
             if args.duration and t >= args.duration:
                 break
@@ -3552,6 +3555,10 @@ def main(argv=None):
         if fleet is not None:
             log(t, "stop")
             summary = fleet.summary(t)
+            try:
+                summary["kpi"] = kpi.result(t)
+            except Exception as exc:          # never lose the summary over a KPI bug
+                summary["kpi"] = {"error": str(exc)}
             if not args.sync:
                 summary["missed_ticks"] = missed
             log.close(summary)

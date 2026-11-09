@@ -1530,6 +1530,12 @@ def season_worker(host, port):
         time.sleep(1.0)
         try:
             if client is None:
+                # no CARLA calls while its port is closed: a failed connect
+                # holds the GIL for the whole timeout and freezes every page
+                # CARLA が落ちている間は呼ばない（GIL を握りページ全体が止まる）
+                if not _rpc_port_open(host, port):
+                    time.sleep(4.0)
+                    continue
                 client = carla.Client(host, port)
                 client.set_timeout(20.0)
             world = client.get_world()
@@ -1569,6 +1575,9 @@ def vehicle_tuning_worker(host, port):
     while True:
         try:
             if world is None:
+                if not _rpc_port_open(host, port):        # see season_worker / 同上
+                    time.sleep(3.0)
+                    continue
                 client = carla.Client(host, port)
                 client.set_timeout(5.0)
                 world = client.get_world()
@@ -1744,6 +1753,97 @@ def road_overlay_route():
     return jsonify({"settings": road_overlay.load_control(), "status": road_overlay.read_status(),
                     "layers": road_overlay.layer_info(), "legend": road_overlay.legend(),
                     "limits": road_overlay.LIMITS})
+
+
+# RL training (rl_delivery/): trainer status + progress, start/stop, watch-mode
+# recordings. The trainer runs as its own background process (not a pipeline
+# child), so it keeps going while CARLA is stopped. / 強化学習の状態・開始/停止・ウォッチ
+RL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rl_delivery")
+RL_RES = os.path.join(RL_DIR, "results")
+RL_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                     "carla-venv", "bin", "python")
+_rl_proc = {"p": None}
+
+
+def _rl_trainer_alive():
+    p = _rl_proc["p"]
+    if p is not None and p.poll() is None:
+        return True
+    try:
+        st = json.load(open(os.path.join(RL_RES, "train_state.json")))
+        return bool(st.get("running")) and time.time() - st.get("t", 0) < 600
+    except (OSError, ValueError):
+        return False
+
+
+@app.route("/rl/state")
+def rl_state():
+    """Trainer status, progress rows and checkpoints of one brain. / 学習の状態"""
+    brain = request.args.get("brain", "flight")
+    try:
+        st = json.load(open(os.path.join(RL_RES, "train_state.json" if brain == "flight"
+                                         else "train_state_%s.json" % brain)))
+    except (OSError, ValueError):
+        st = {}
+    rows = []
+    try:
+        with open(os.path.join(RL_RES, "%s_progress.csv" % brain), newline="") as f:
+            rows = [{k: (float(v) if v not in ("", None) else None) for k, v in r.items()} for r in csv.DictReader(f)]
+    except OSError:
+        pass
+    ck = sorted(glob.glob(os.path.join(RL_DIR, "checkpoints", brain, "step_*.zip")))
+    alive = _rl_trainer_alive() if brain == "flight" else (
+        bool(st.get("running")) and time.time() - st.get("t", 0) < 900)
+    rule = None
+    try:
+        rule = json.load(open(os.path.join(RL_RES, "mission_rule_baseline.json")))
+    except (OSError, ValueError):
+        pass
+    return jsonify({"state": st, "alive": alive, "progress": rows, "rule": rule,
+                    "checkpoints": [os.path.basename(c) for c in ck]})
+
+
+@app.route("/rl/train", methods=["POST"])
+def rl_train():
+    """{action: start|stop, brain, hours, resume}. / 学習の開始・停止"""
+    body = request.get_json(silent=True) or {}
+    if body.get("action") == "stop":
+        b = str(body.get("brain", "flight"))
+        open(os.path.join(RL_RES, "STOP" if b == "flight" else "STOP_" + os.path.basename(b)), "w").close()      # the trainer saves and exits / 保存して終了
+        return jsonify({"ok": True})
+    if str(body.get("brain", "flight")) == "flight" and _rl_trainer_alive():
+        return jsonify({"error": "a trainer is already running"}), 409
+    cmd = [RL_PY, "-W", "ignore", "-m", "rl_delivery.train", "--brain", str(body.get("brain", "flight")),
+           "--hours", str(float(body.get("hours", 3)))]
+    if body.get("resume"):
+        cmd.append("--resume")
+    os.makedirs(RL_RES, exist_ok=True)
+    log = open(os.path.join(RL_RES, "train_%s.log" % body.get("brain", "flight")), "a")
+    _rl_proc["p"] = subprocess.Popen(cmd, cwd=os.path.dirname(RL_DIR), stdout=log, stderr=subprocess.STDOUT,
+                                     start_new_session=True)
+    return jsonify({"ok": True, "pid": _rl_proc["p"].pid})
+
+
+@app.route("/rl/watch", methods=["POST"])
+def rl_watch():
+    """Record one episode {brain, checkpoint (file|latest|pid), wind, seed} and
+    return it (a few seconds). / 1 エピソードを記録して返す"""
+    body = request.get_json(silent=True) or {}
+    out = os.path.join(RL_RES, "watch", "_last.json")
+    ck = str(body.get("checkpoint", "latest"))
+    if ck not in ("latest", "pid", "rule", "scripted"):
+        ck = os.path.join(RL_DIR, "checkpoints", str(body.get("brain", "flight")), os.path.basename(ck))
+    cmd = [RL_PY, "-W", "ignore", "-m", "rl_delivery.watch", "--brain", str(body.get("brain", "flight")),
+           "--checkpoint", ck, "--wind", str(float(body.get("wind", 1.0))),
+           "--seed", str(int(body.get("seed", 7))), "--out", out]
+    try:
+        r = subprocess.run(cmd, cwd=os.path.dirname(RL_DIR), capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "timeout"}), 504
+    if r.returncode != 0:
+        return jsonify({"error": (r.stderr or r.stdout)[-400:]}), 500
+    with open(out) as f:
+        return Response(f.read(), mimetype="application/json")
 
 
 # Timetabled buses (bus_schedule.py, run by generate_traffic on OitaStation):

@@ -73,3 +73,11 @@ launch_options.json.tmp
 # Web の依存パッケージ（dist はコミットする: Node なしで動く）
 web/node_modules/
 !web/dist/
+
+# RL for the pod + drones (rl_delivery/): trained models, logs, replays and the
+# generated pretend-world maps (rebuild with prepare_map / prepare_heights)
+# 強化学習の成果物・ログ・生成マップ（prepare_map / prepare_heights で再生成）
+rl_delivery/checkpoints/
+rl_delivery/results/
+rl_delivery/maps/
+rl_delivery/__pycache__/

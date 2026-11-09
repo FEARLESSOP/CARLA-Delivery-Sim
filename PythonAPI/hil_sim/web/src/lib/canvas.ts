@@ -46,3 +46,27 @@ export class Series {
   push(v: number) { this.data.push(v); if (this.data.length > this.len) this.data.shift() }
   clear() { this.data.length = 0 }
 }
+
+/** A cached layer for what never moves (roads, buildings): drawn once per
+ *  ``key`` and canvas size, then copied in with one drawImage per frame.
+ *  動かない層（道路・建物）を一度だけ描いて使い回す。 */
+export class StaticLayer {
+  private c: HTMLCanvasElement | null = null
+  private sig = ''
+
+  draw(ctx: CanvasRenderingContext2D, w: number, h: number, key: unknown, paint: DrawFn) {
+    const dpr = window.devicePixelRatio || 1
+    const sig = `${w}x${h}@${dpr}`
+    if (!this.c || this.sig !== sig || this.key !== key) {
+      this.c = this.c ?? document.createElement('canvas')
+      this.c.width = Math.round(w * dpr); this.c.height = Math.round(h * dpr)
+      const g = this.c.getContext('2d')!
+      g.setTransform(dpr, 0, 0, dpr, 0, 0)
+      paint(g, w, h)
+      this.sig = sig; this.key = key
+    }
+    ctx.drawImage(this.c, 0, 0, w, h)
+  }
+
+  private key: unknown = null
+}
