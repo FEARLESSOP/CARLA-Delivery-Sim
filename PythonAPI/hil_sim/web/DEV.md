@@ -35,6 +35,8 @@ npx vite --port 5173               # live dev server, API proxied to :5000
 | `src/components/bits/` | React Bits components (CountUp, SpotlightCard, ShinyText, GradientText, StarBorder, Aurora, AnimatedList, FadeContent) |
 | `src/views/<view>/` | one folder per page; `index.tsx` default-exports the page |
 | `src/i18n/<view>.ts` | that page's EN/JA strings (`registerDict`) |
+| `src/views/drones/three/` | the Drones page's 3D drone (three.js + @react-three/fiber + drei). Imported only through `lazy()`, so three.js stays in its own chunk (`Drone3D-*.js`) and no other page loads it. Its GLB comes from `delivery/assets/make_drone_web.py`; environment light is local Lightformers (never a downloaded HDR) |
+| `src/views/minipods/three/` | the Mini Pods page's 3D pod (same stack, lazy `Pod3D-*.js` chunk): the real model `public/models/lmh_minipod.glb` loaded by URL (`/models/`, served by `dashboard.py`), moving parts found by GLB node name, damage / X-ray like the drone |
 
 ## Rules
 

@@ -10,6 +10,10 @@ telemetry dashboard, a multi-camera viewer and the driving window as one
 supervised process tree. The collected human-error telemetry then feeds the
 RL layer in `rl/`.
 
+`AGENTS.md` beside this file is the same guidance for Google Antigravity (with
+the user's rules, the gates and the traps in `../../AGENTS.md`): when you change
+this file, change it too.
+
 Docs, comments and user-facing strings are bilingual **EN + JA**. Match that
 when editing them — every table row, help line and error message in this repo
 carries both.
@@ -24,8 +28,12 @@ CARLA_ROOT = BASE_DIR.parent.parent      # run_pipeline.py:31
 VENV_PY    = CARLA_ROOT / "carla-venv" / "bin" / "python"
 ```
 
-and it launches every child process with `VENV_PY`, the simulator via
-`CARLA_ROOT/CarlaUE4.sh`, and map loading via `CARLA_ROOT/PythonAPI/util/config.py`.
+and it launches every child process with `VENV_PY` and the simulator via
+`CARLA_ROOT/CarlaUE4.sh`. Maps are loaded by `load_world_map()` (a throwaway
+client: 120 s, then it checks the loaded map's name). It replaced
+`PythonAPI/util/config.py`, whose 10 s wait made every client time out on the
+big extended OitaStation (2026-11-09; `tests/test_map_switch.py`,
+`tests/test_pipeline_control.py`).
 Nested one level too deep, `CARLA_ROOT` silently resolves to `PythonAPI/`
 and the run dies at `run_pipeline.py:153` with `ERROR: venv python not found`.
 
@@ -71,7 +79,10 @@ Tests (no CARLA server required; needs `pygame` + `carla` in the venv):
 <CARLA_ROOT>/carla-venv/bin/python tests/test_delivery.py   # delivery planner + drone sortie
 ```
 
-It drives the real `DualControl` with synthetic key state and fake actors,
+Every `tests/test_*.py` runs alone without a server:
+`for t in tests/test_*.py; do <CARLA_ROOT>/carla-venv/bin/python $t || echo FAIL $t; done`.
+
+`test_keyboard_control.py` drives the real `DualControl` with synthetic key state and fake actors,
 asserting on the `carla.VehicleControl` actually applied. There is no test
 runner and no lint config.
 
@@ -120,6 +131,11 @@ They poll the CARLA world for a vehicle by `role_name`:
   and re-attach their sensors if it dies or is replaced.
 - `ego` — an autonomous agent sharing the same world (`agent_drive.py`,
   `rl/carla_env.py`), so human and agent can be benchmarked side by side.
+
+Other roles: `timetable_bus` (`bus_schedule.py`, OitaStation's GTFS buses),
+`parked` (`parked_cars.py`, physics-off cars on a map's parking spots),
+`bus_live_test` (`maps/bus_live.py`). generate_traffic.py runs both helpers
+and removes their cars on exit; a killed run's leftovers are cleared at start.
 
 Consequence: startup order barely matters, and a dashboard showing "waiting
 for hero" is a normal transient state, not a failure. Run the agent as
@@ -258,8 +274,11 @@ startup).
 
 `delivery_sim.py` + `delivery/` run a car + drone delivery scenario on any
 map with `--vans N` (docs/DELIVERY.md); `planning.Dispatcher` gives every
-batch to exactly one van. Keep `delivery/planning.py` and `delivery/drone.py`
-free of `carla` imports so `tests/test_delivery.py` runs without a server.
+batch to exactly one van. Keep `delivery/planning.py`, `delivery/drone.py` and
+`delivery/zones.py` free of `carla` imports so `tests/test_delivery.py` and
+`tests/test_zones.py` run without a server. Pod zones / no-fly zones / meeting points come from
+`data/delivery_zones.json` (dashboard City Map, per map); `zones.ACTIVE` is the airspace
+every drone flight routes round.
 
 Inside `run_pipeline.py --delivery N` it runs `--passive`: generate_traffic.py
 owns the synchronous tick, so delivery_sim must never tick or change world

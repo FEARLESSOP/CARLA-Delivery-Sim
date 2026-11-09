@@ -70,6 +70,13 @@ https://github.com/FEARLESSOP/CARLA-Delivery-Sim.
 When the script has copied your Claude memory (step 6) and the skills
 (step 7), restart `claude` so it picks them up.
 
+**Google Antigravity** can run the same prompt: open `~/Downloads/CARLA_0.9.16`
+as the workspace once the repo is there (it reads `AGENTS.md` from the
+workspace up to the git root, and `.agents/skills/`). Those files point to the
+Claude skills, guides and memory under `~/.claude`, so it needs steps 6
+(memory) and 7 (skills) of the script too. Details:
+`CARLA_RIG_SETUP_FROM_SCRATCH.md` section 7.4.
+
 ## What the script does
 
 | Step | What | Time / size |

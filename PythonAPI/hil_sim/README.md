@@ -23,12 +23,20 @@ hil_sim/
 ├── dashboard.py                         # web dashboard, port 5000 / Webダッシュボード（ポート5000）
 ├── sensor_viewer.py                     # multi-camera viewer / マルチカメラビューア
 ├── drone_viewer.py                      # CCTV wall of drone cameras (--drone-cams) / ドローンカメラ一覧
+├── drone_window.py                      # one drone's CARLA view (dashboard Drones tab) / 1 機の CARLA ビュー
+├── drone_windows.py                     # starts / closes those windows for the dashboard / その起動・終了
+├── minipod_window.py                    # one mini pod's CARLA view (dashboard Mini Pods tab) / 1 台の CARLA ビュー
+├── minipod_windows.py                   # starts / closes those windows for the dashboard / その起動・終了
 ├── generate_traffic.py                  # NPC traffic / NPC交通生成
 ├── traffic_profile.py                   # Japan driving rules for NPCs / 日本の交通ルール（NPC）
 ├── traffic_profiles.json                # which maps get which profile / プロファイルと適用マップ
 ├── hokousha.py                          # Japanese pedestrian signals + walkers / 歩行者用信号
 ├── signal_timing.py                     # real police signal timing, auto on OitaKosen / 実際の信号時間
 ├── traction_fx.py                       # skid marks when the tyres slide / スキッドマーク
+├── road_overlay.py                      # road logic overlay, O key / 道路ロジック表示（O キー）
+├── bus_schedule.py                      # timetabled buses (OitaStation, GTFS-JP) / 時刻表どおりの路線バス
+├── parked_cars.py                       # parked cars on a map's spots / 駐車車両
+├── own_cars.py                          # cars.json ids, npc_only filter / 自作車両 ID・NPC 専用の除外
 ├── cars/                                # your own cars: build + per-car driver view / 自作車両
 ├── wheel_config.ini                     # wheel axes & steering feel / ホイール軸・ステア感度
 ├── pedal_tuning.json                    # pedal sensitivity (live) / ペダル感度（走行中変更可）
@@ -48,6 +56,7 @@ hil_sim/
 │   └── smoke_test.py                    # env sanity check / 環境の動作確認
 ├── README.md
 ├── FILES.md                             # where is what / ファイルの場所
+├── CLAUDE.md, AGENTS.md                 # instructions for Claude Code / Google Antigravity / AI 向け説明
 └── data/                                # simulation database / 計測データ保存先
     ├── scenarios/                       # mined clips + driver profiles / 抽出クリップ・プロファイル
     └── 2026-07-07/                      # one folder per day / 日付ごとのフォルダ
@@ -139,11 +148,13 @@ Useful options / 主なオプション:
 | `--no-sim` | reuse an already-running CARLA / 起動済みCARLAを再利用 |
 | `--no-traffic` / `--no-dashboard` / `--no-sensor-viewer` | skip a component (the sensor viewer can still be opened later from the dashboard) / 各コンポーネントを起動しない（センサービューアは後からダッシュボードで開ける） |
 | `--no-traction-fx` | no skid marks / スキッドマークなし |
+| `--no-road-overlay` | do not start the road logic overlay helper (O key) / 道路ロジック表示を起動しない |
 | `--res 1080p` (or `--control-res`) | driving window resolution: `720p`, `1080p` (default), `1440p`, `4k` or `WxH` / 運転ウィンドウの解像度 |
 | `--fov 100` | driver-view field of view / ドライバー視点の視野角 |
 | `--no-log` | disable CSV logging / CSV記録を無効化 |
 | `--keyboard` | drive with W/A/S/D instead of the wheel / ホイールの代わりにW/A/S/Dで運転 |
 | `--delivery N` | also run N car + drone delivery vans; each order goes to exactly one van (docs/DELIVERY.md) / 車+ドローンの配送車を N 台追加（各注文は 1 台のみが担当） |
+| `--minipod-hubs N` | also run N LastMile hubs that deliver with 3 Mini Pods each (`delivery_sim.py --lmh N`); by default they take the orders inside no-fly zones (docs/DELIVERY.md) / ミニポッドで配達する LastMile ハブを N 台追加（既定で飛行禁止区域の注文を担当） |
 | `--drone-cams` / `--drone-cams-res 1280x720` | open the drone camera wall at start (needs `--delivery`; without the flag it can be opened later from the dashboard) / ドローンカメラ一覧を起動時に開く（後からダッシュボードでも開ける） |
 | `--delivery-args "..."` | extra options for `delivery_sim.py`, e.g. `"--first-now"` / `delivery_sim.py` への追加オプション |
 | `--ffb` / `--ffb-strength X` | also run `carla_ffb.py` (G923 force feedback); skipped if one is already running / `carla_ffb.py`（G923 のフォースフィードバック）も起動（既に起動中なら起動しない） |
@@ -170,6 +181,18 @@ every control is on the **Settings** tab.
 - **Settings tab** (`#settings-driving`, `-ffb`, `-delivery`): Driving
   (pedal tuning, vehicle performance), Force feedback, Delivery sim (wind,
   pod shell view). Everything applies live and is saved.
+- **Drones tab** (`#drones/<id>`): a fleet console for the delivery
+  drones. Tabs for every drone (status, battery); the drone itself in
+  real-time 3D in the centre (the real LMP model with physical materials,
+  rotors at the live motor RPM, an **X-ray** cutaway that shows the battery
+  cells, flight controller, winch drum and wiring; drag to turn, click a
+  part for its health and reading); parts the sim reports broken are shown
+  broken (a broken arm droops, a rotor loses a blade, a cracked shell, red
+  labels) with a **Damage report**; Drone overview, Component view
+  close-ups, flight data (battery gauge, altitude / speed, time left,
+  distance home, map with its track, pod and drop point), system tiles and
+  every sensor's card. **Open CARLA view** opens a CARLA window for that
+  drone (see Drone CARLA view below).
 - **Statistics tab** (`#stats`): current-session tiles (crashes,
   out-of-lane, red lights, hard brakes, distance, duration), a per-session
   bar chart, and a table of all saved sessions grouped by day.
@@ -189,6 +212,13 @@ every control is on the **Settings** tab.
   アニメーション再生と甲板。
 - **設定**タブ：運転（ペダル調整・車両性能）・フォースフィードバック・
   配送シミュ（風・ポッドの外殻表示）。即時反映・保存。
+- **ドローン**タブ（`#drones/<id>`）：配送ドローンのフリート画面。機体タブ、
+  中央にリアルタイム 3D の機体（実モデル・物理マテリアル・実回転数で回る
+  ローター・内部が見える **X 線**表示・部品クリックで健全性と値）、壊れた部品は
+  壊れた姿で表示（アームが垂れる・翼の欠落・外殻のひび・赤いラベル）と
+  **損傷レポート**、概要・部品ビュー・飛行データ（電池ゲージ・高度/速度・残り
+  時間・帰還距離・航跡の地図）・システムタイル・全センサーのカード。
+  「CARLA ビューを開く」でその機体の CARLA ウィンドウ（下記）。
 - **統計**タブ（`#stats`）：現在セッションの集計タイル（衝突・車線逸脱・
   信号無視・急ブレーキ・距離・時間）、セッション別棒グラフ、日付ごとの
   セッション一覧表。
@@ -375,10 +405,49 @@ runs at 10 fps (`drone_viewer.py --cam-fps`). F11 fullscreen, Esc / Q closes.
 ウィンドウを開きます。飛行中の機体だけに下向きカメラが付き（荷物は画面左下の
 隅に映る）、飛んでいない機体は描画せず OFFLINE と表示します。
 
+**Drone CARLA view.** **Open CARLA view** on the dashboard's Drones tab
+opens a native CARLA window for that drone (`drone_window.py`, started
+detached by the dashboard through `drone_windows.py`, one per drone; a
+second click brings it forward when `wmctrl` / `xdotool` is installed,
+otherwise reopens it). The big view is a chase camera behind and above
+the drone body, so you see the 3D drone itself fly; a strip shows its four
+onboard cameras (FPV gimbal, delivery camera looking down, front and rear
+stereo). Keys: 1 chase, 2 orbit, 3–6 the onboard cameras, Tab next, H HUD,
+F11, Esc / Q close. The HUD shows id, status, battery, altitude, speed,
+heading and damage warnings. Docked, the camera stays on the pod; when
+the sim respawns the body it re-attaches; closing destroys every sensor
+(`role_name` `hil_dronewin_<id>`, leftovers swept at start). Nothing is
+streamed into the browser. Test: `drone_window.py --drone 3 --snapshot
+/tmp/d3.png --duration 12`. The 3D page model comes from the GLB:
+`python3 -I delivery/assets/make_drone_web.py
+~/Downloads/unreal/unreal/LastMilePod_Drone.glb web/src/views/drones/three/lmp_drone_parts.glb`.
+
+**ドローンの CARLA ビュー**：ドローンタブの「CARLA ビューを開く」で、その機体の
+CARLA ウィンドウ（`drone_window.py`）が開きます。大画面は機体の後方上から追う
+チェイスカメラ（機体そのものが映る）、下段に機載カメラ 4 台。1〜6 キーで切替、
+HUD に状態・電池・高度・速度・損傷を表示。格納中はポッドを映し、機体が変われば
+付け直し、閉じるとセンサーをすべて破棄します。ブラウザには映像を流しません。
+
 **Tooltips** (order / hub markers, station boxes, labels over drones and pods,
 drone flight trails in the CARLA window) are off by default; turn them on in
 the dashboard's Settings > Delivery sim ("CARLA tooltips"), or start with
 `--delivery-args "--tooltips"`. The drones' winch tether always shows.
+
+**Mini Pods tab.** The dashboard's **Mini Pods** tab (`#minipods`) watches the
+LastMile Hubs' mini delivery pods like the Drones tab watches drones: a tab per
+pod, the real pod in 3D (wheels, lid, shutter and flag move with the live
+state, X-ray, broken parts shown broken), its hub and bays, drive data, a mini
+map and every sensor (cards built from whatever the sim sends). **Open CARLA
+view** opens `minipod_window.py` (chase camera behind the robot, orbit, six
+onboard cameras, keys 1-8, HUD; docked pods are followed on the hub). On the
+Delivery map, **Edit zones > Distribution points** places each LMH hub's
+distribution points (square "D" badges, max 24 per hub); an LMH hub delivers in
+the no-fly zones until you draw a zone for it. Details: `docs/DELIVERY.md`.
+
+**ミニポッドタブ**：LastMile ハブのミニポッドを 1 台ずつ 3D で監視（車輪・蓋・
+シャッター・旗が状態どおりに動く、X 線、損傷表示、ハブとベイ、走行データ、全セン
+サー）。「CARLA ビューを開く」で `minipod_window.py`。配送ページの地図の「ゾーン
+編集 > 配布地点」で LMH ハブの配布地点を置けます。
 
 **ツールチップ**（マーカー・ラベル・飛行軌跡）は既定でオフ。ダッシュボードの
 設定 > 配送シミュレーション「CARLA ツールチップ」でオン／オフできます。
@@ -404,6 +473,57 @@ old rule (tyre slip over 9° or 0.3) drew marks behind a car on autopilot.
 タイヤが滑ると路面に黒いスキッドマークが出ます（強く滑るほど太く、25 秒で
 消える）。判定は 5 km/h 以上で後軸の横滑り角 8° 超、または強いアクセル・ブレーキ・
 サイドブレーキでタイヤのスリップ率 0.3 超が 0.3 秒続いた時（自動運転中の誤表示を修正）。
+
+## Road logic overlay / 道路ロジック表示
+
+Press **O** in the driving window (or use the Drive tab card **Road logic
+overlay**) to see what the Traffic Manager, the autopilot and the NPCs drive
+on: the OpenDRIVE map, which on your own maps is built from the OSM streets.
+`road_overlay.py` (started by `run_pipeline.py`, idle until turned on;
+`--no-road-overlay` skips it) draws it around your car with CARLA debug lines,
+like CARLA's OpenDRIVE view in the UE4 editor, and your camera view shows them:
+
+| Layer | In the world |
+|---|---|
+| Road edges (on) | red lines along both edges of every Driving lane; your lane thicker and pink |
+| Driving direction (on) | blue lane centre + an arrow every 10 m near your car (keep-left shows here) |
+| Junctions (on) | the paths through a junction orange (one line per lane), junction boxes yellow |
+| Other lane types (on) | sidewalk grey, shoulder brown, parking purple, biking pink (CARLA's towns; our maps have none) |
+| Rules (on) | 止まれ red bar + octagon, give way white, speed signs; traffic lights with their stop bars in the light's colour (red / yellow / green); the lane speed limit written on the road every 60 m |
+| Lane change (off) | lane boundaries: cyan = the AI may change lanes both ways, yellow = one way, white = not; dashed = broken paint |
+| Ids (off) | road / lane / junction ids |
+| Raw OSM ways (off) | the source .osm streets in green (generated maps only), to compare OSM with the road logic |
+
+It is drawn in two places that share one line budget: around your car (what
+your driving window sees) and, with **Spectator area** on (default), around
+what the CarlaUE4 window looks at: larger and with thicker lines when that
+camera is high, and with text labels (the window shows CARLA's text, cameras
+do not). Arrows, lane centres, numbers and sign shapes are drawn only within
+45 m of your car.
+
+The card switches it on / off, sets the radius (120 m), the brightness (3),
+the arrows-and-text radius (45 m), the lines per refresh (800, nearest first),
+the spectator area and the layers, and shows the colours. Debug lines glow:
+the colours are sent very dim (channel values 1-4 of 255; 6 and up bloom the
+whole picture white), and dimmer still at night. It redraws every 2 s; live on
+OitaKosen it kept CARLA at 30 frames/s (29.3 while drawing; 2000 lines a
+second had cost a third of the frame rate). Turned off, the lines are gone
+within ~2.5 s. Files:
+`data/road_overlay.json` (settings), `data/road_overlay_status.json` (state).
+Tests: `tests/test_road_overlay.py`; live check with a camera shot:
+`maps/road_overlay_live.py` (`--calibrate 1,3,6` draws a brightness ladder).
+On our generated maps every lane boundary reads "lane change allowed" to the
+AI, even on solid lines, and a road with no lines on it is not in the road
+logic at all (map guide ch. 37).
+
+運転ウィンドウの **O**（またはダッシュボード運転タブの「道路ロジック表示」）で、
+Traffic Manager・自動運転・NPC が使う道路情報（OpenDRIVE。自作マップでは OSM の
+道路から作成）を自車の周りに線で表示します。赤：走行車線の両端、青：車線中心と
+走行方向、橙：交差点、規制：止まれ・譲れ・速度標識・信号の停止線（信号の色）・
+車線の制限速度。CarlaUE4 ウィンドウのカメラの周りにも表示します（スペクテーター範囲）。
+線は自発光でにじむため、色はとても暗く送ります（明るさ 3、夜はさらに暗く）。
+2 秒ごとに最大 800 本を近い順に描き、CARLA の速度はほぼ変わりません
+（実測 30 → 29.3 fps）。オフにすると約 2.5 秒で消えます。
 
 ---
 
@@ -460,6 +580,89 @@ Tests: `tests/test_traffic_profile.py`, `tests/test_delivery_rules.py`. Details:
 他のマップ（Pasir Ris を含む）の交通は従来どおりです。`--traffic-profile none` で無効。
 パイプラインの次の起動（または F5 のマップ切替）から有効になります。
 
+### Timetabled buses (Oita Station) / 路線バス（時刻表）
+
+On OitaStation the real Oita buses (大分バス, 大分交通, highway buses) drive
+into the map, call at their stops and leave it again on the published
+timetable (GTFS-JP from Oita Prefecture's open data, `data/oita_bus/`,
+`data/oita_bus/sources.md`). `generate_traffic.py` runs `bus_schedule.py` on
+maps whose maps.json entry has `"bus_schedule": "data/oita_bus"` (only
+`oita_station`); every other map is unchanged. It needs the **new** OitaStation
+road logic (installed 2026-11-09; it refuses the old ±423 m level by itself).
+
+| What | How |
+|---|---|
+| The bus | `vehicle.oitabus.erga` (Isuzu Erga, cars.json `oitabus`, npc_only; built and installed 2026-11-09); CARLA's `vehicle.mitsubishi.fusorosa` stands in only if that blueprint is missing. role_name `timetable_bus` / 大分バス（エルガ、2026-11-09 導入） |
+| Where it drives | its route's real roads (the GTFS shape) on the lanes, kerb-side (left) lane at each stop, door at the pole; enters / leaves just inside the ring road; trips that start or end at the station come / go empty (回送) by the edge their route uses |
+| When | spawned so it reaches its first stop on time (way in at 18 km/h, never before its last stop outside the map); dwell 20-40 s boarding, 10-20 s alighting; at Oita Station it waits for the departure time (max 5 min) |
+| Rules | the Traffic Manager drives it with the Japan profile (lights, 止まれ, walkers, lane speeds), ≤ 40 km/h, no own lane changes; left blinker pulling in, right pulling out; it waits before a junction when a bus stands at the stop behind it |
+| Clock | the time of day the sim shows (Day & weather), then **real time** (the day cycle runs a day in 5-15 minutes, which would flood the station); setting the clock on the dashboard re-anchors it. Day type from the date: weekday / Saturday / Sunday-holiday (every national holiday, also 11/3 and 11/23, which the feed misses) |
+| Safety | ≤ 25 buses at once (`--bus-max`); a bus without progress for 3 min is removed and logged; all go at exit and on F5 |
+
+Options: `generate_traffic.py --bus-schedule auto|none|<folder> --bus-time 08:00
+--bus-day weekday|saturday|sunday_holiday --bus-max 25`. One log line per bus
+event (`[bus] 08:01:16 depart ...`); status for the dashboard's "Timetabled
+buses" card (Drive page, Environment; `/buses`) in `data/bus_status.json`.
+Offline mapping report: `carla-venv/bin/python bus_schedule.py report`.
+Live check (after the import): `maps/bus_live.py watch` (read-only) or
+`maps/bus_live.py spawn --time 08:00 --day weekday --n 5` (own role and TM port,
+removes its buses). Tests: `tests/test_bus_schedule.py`. Details: map guide ch. 36.
+Credit / 出典：大分県オープンデータカタログ（BODIK）「大分バスGTFSデータ」「大分交通GTFSデータ」「高速バスGTFSデータ」（CC BY 4.0、大分県）を加工して作成; road names © OpenStreetMap contributors.
+
+大分駅マップでは、公開時刻表どおりに路線バスがマップに入り、停留所（大分駅前 1〜8 番のりば・
+降車専用・上野の森口・要町ほか）でポールに扉を合わせて停まり、出て行きます。時刻はシムの表示時刻
+から実時間で進みます（昼夜サイクルは速すぎるため）。祝日は日祝ダイヤ。同時 25 台まで、3 分動けない
+バスは削除。他のマップは従来どおり。新しい OitaStation（2026-11-09 取り込み済み）でパイプラインの次の起動から有効です（実機確認はこれから）。
+
+### Parked cars / 駐車車両
+
+On maps whose build has `maps/build/<Map>/parked_cars.json` (OitaStation: 440
+spots where the v8 model had its parked cars, made by `maps/osm_city/core_cars.py`),
+`generate_traffic.py` parks real vehicles there (`parked_cars.py`): CARLA's cars
+and your own cars from `cars/cars.json` (not the F1 car, not `npc_only` vehicles
+such as the bus), physics off, lowered onto the ground, nose either way; a car too
+big for its spot is swapped for a smaller one. A spot whose ground does not match
+the loaded level (a build newer than the installed map) stays empty. role_name
+`parked`; removed at exit, leftovers of a killed run cleared at start.
+Options: `--parked-cars auto|none`, `--parked-max N` (0 = every spot).
+Test: `tests/test_parked_cars.py`.
+
+駐車位置のあるマップ（OitaStation の 440 か所）では、CARLA の車と自作車両（F1 と
+npc_only を除く）を物理なしで地面に置きます。`--parked-cars none` で無効、
+`--parked-max N` で台数の上限。
+
+### Lane changes follow the paint (Japan maps) / 車線変更は路面標示どおり（日本のマップ）
+
+netconvert writes no `laneChange` into the road logic, so CARLA let the AI change
+lanes everywhere, even across solid lines. On Japan maps `maps/osm_city/lane_change_jp.py`
+(run by `make_osm_city.sh`) now writes every lane mark from the painted lines:
+yellow solid between lanes (進路変更禁止) = no lane change, white solid or broken =
+allowed (legal in Japan), solid kerb / centre lines = none. Installed on OitaStation
+2026-11-09; OitaKosen's patched road logic is waiting for its install. See it in the
+game with the road logic overlay (O, layer "lane change"). Map guide ch. 39.
+
+道路ロジックに laneChange が無く、AI が実線でも車線変更していました。日本のマップでは
+塗られた線から書き込みます（黄色実線 = 進路変更禁止、白線・破線 = 可）。OitaStation は
+2026-11-09 導入済み、OitaKosen は導入待ち。
+
+---
+
+## Own maps / 自作マップ
+
+Built with `maps/make_osm_city.sh <key> --lefthand` (OpenStreetMap -> road logic ->
+generated 3-D model -> import; the carla-map-generator skill and the map guide
+`../../map_guide/README.md`). They appear on the Launch page and in F5 by themselves.
+
+| Map | What |
+|---|---|
+| OitaStation (`oita_station`) | the user's v8 model of JR Oita Station kept as the core (±400 m), inside a generated city to ±640 m: generated Japanese buildings and shop fronts, core ground in the generator's materials, lanes fitted to the model's asphalt, 440 parking spots, timetabled buses, Japanese signals, plates and speed posts. Imported 2026-11-09. `oita_station_v8` (the model alone) is the rollback |
+| OitaKosen (`oita_kosen`) | hilly campus area: terrain, campus / dorm / 7-Eleven landmarks, JARTIC signs, real signal timing, seasonal trees, street lamps, ring road at 100 km/h |
+| PasirRis (`pasir_ris`) | Singapore estate, keep-left, two school landmarks |
+| MarinaBay, SpaFrancorchamps | race circuits (`maps/make_map.sh`) |
+
+大分駅マップはユーザーの v8 モデルを中心に残し、周囲 ±640 m を OSM から生成した拡張版です
+（2026-11-09 取り込み）。他に大分高専（起伏・ランドマーク）、パシリス、サーキット 2 つ。
+
 ---
 
 ## Your own cars / 自作車両
@@ -469,7 +672,11 @@ Toyota Supra A70 (`vehicle.toyota.supra_a70`), Mitsubishi i-MiEV
 (`vehicle.mitsubishi.i_miev`), Honda NSX-R (`vehicle.honda.nsx_r`), Toyota
 Soarer (`vehicle.toyota.soarer`), Nissan Sileighty (`vehicle.nissan.sileighty`),
 all right-hand drive, and BMW 3.0 CSL (`vehicle.bmw.csl_e9`, left-hand drive
-in the model). `cars/build_cars.sh` turns each into a CARLA vehicle plus its
+in the model), Red Bull RB16 (`vehicle.redbull.rb16`, centre seat), Ferrari SF90
+XX (`vehicle.ferrari.sf90_xx`) and Rolls-Royce Dawn (`vehicle.rollsroyce.dawn`),
+both converted to right-hand drive, Honda S800 (`vehicle.honda.s800`), and the
+NPC-only Oita bus (`vehicle.oitabus.erga`, driven only by the bus timetable). All
+12 were rebuilt on 2026-11-09. `cars/build_cars.sh` turns each into a CARLA vehicle plus its
 steering wheel as a separate prop;
 restart CARLA afterwards. In the driving window these cars get:
 
@@ -547,13 +754,15 @@ bindings in use. / 以下は **既定の** 割り当てです。ダッシュボ�
 | N | toggle mirrors / ミラー表示切替 |
 | Z / X (hold) | glance left / right / 左右目視（長押し） |
 | Q | reverse / リバース |
+| E (wheel: Share) | hazard lights on / off / ハザードランプ（ホイール：Share） |
 | M , . | manual gears / MTモード・シフト |
-| P | autopilot / オートパイロット |
+| P | smooth autopilot (lane limits, slows for bends, turns, lights and cars; `--tm-autopilot` = old Traffic Manager) / なめらかな自動運転 |
 | C / Shift+C | weather / 天候切替 |
 | `[` `]` (Shift: brake) | pedal strength / ペダル強度調整 |
 | Backspace | next vehicle model, alphabetical (Shift = previous) / 次の車種（アルファベット順、Shift で前） |
 | F5 / Shift+F5 | next / previous map (see below) / 次・前のマップ（下記） |
 | F11 | fullscreen / フルスクリーン |
+| O | road logic overlay: what the AI drives on, drawn on the roads (see "Road logic overlay") / 道路ロジック表示（上記） |
 | F1 | HUD info / HUD情報 |
 | H | help / ヘルプ |
 | ESC | quit / 終了 |
@@ -624,8 +833,9 @@ lists every action of the driving window with two columns, **Keyboard** and
   `wheel_last.json` (last wheel press) and `keybind_learn.json` (identify mode).
   All are regenerated when deleted. Throttle, brake and steering on the wheel
   are axes and stay in `wheel_config.ini`.
-- Besides the old actions there are **Hazard lights** and keyboard keys for the
-  turn signals; they are unbound until you bind them.
+- Besides the old actions there are **Hazard lights** (default: E, wheel
+  Share; also the hazard button on the dashboard's Drive and Vehicle pages)
+  and keyboard keys for the turn signals (unbound until you bind them).
 
 ダッシュボードの **設定 > キー割り当て** に運転ウインドウの全操作が
 **キーボード** と **ホイール（G923）** の 2 列で並びます。ホイールのボタンは
@@ -643,7 +853,58 @@ lists every action of the driving window with two columns, **Keyboard** and
   **名前を変更**。識別中はホイールのボタンを押しても運転ウインドウでは何も
   起きません。名前は `g923_buttons.json` に保存されます。
 - アクセル・ブレーキ・操舵はホイールの軸なので引き続き `wheel_config.ini` で設定します。
-- 新しく **ハザードランプ** とウインカーのキーボード操作を追加しました（既定は未割り当て）。
+- **ハザードランプ**（既定：E キー、ホイールの Share。ダッシュボードの運転・車両ページのボタンでも可）と
+  ウインカーのキーボード操作（既定は未割り当て）があります。
+
+### Three screens / 3 画面表示
+
+Launch page → Display → **Screens: triple** (or `run_pipeline.py --screens
+triple`) puts your view across three side-by-side monitors of the same size
+(5760×1080 on three 1080p screens), fullscreen across all three
+(`triple_screen.py`: monitors from `xrandr`, the EWMH
+`_NET_WM_FULLSCREEN_MONITORS` hint, so GNOME's top bar does not cover it).
+
+- **3-screen layout `angled`** (side monitors turned towards you): three
+  cameras at the driver's eye, each a third of the **3-screen field of view**
+  (default 150° = 50° each) and yawed by it, so the view runs on across the
+  bezels. **`flat`** (monitors in one line): one wide camera.
+- The HUD and the rear-view mirror are on the middle screen, the door
+  mirrors on the side screens near their inner edges.
+- Three 1080p cameras are three render passes for CARLA; lower the frame cap
+  or mirror rate if the server slows down. Tests: `tests/test_triple_screen.py`.
+
+横並び 3 画面に運転視点を表示（angled は画面ごとにカメラ、flat は横長カメラ 1 台）。
+
+### Autopilot (P) / 自動運転
+
+P hands the car to `hero_autopilot.py`: it roams like the Traffic Manager
+did (a random way at each junction, CARLA's LocalPlanner steers), but drives
+at the lane's own limit (100 on the OitaKosen ring, the real limits
+elsewhere, the sign limit on CARLA's towns) and slows only where it must:
+a lower limit ahead, a bend or a turn (2.6 m/s² sideways), a red light, the
+car in front (1.4 s gap) or a pedestrian on its path. The pedals come from
+a jerk-limited acceleration command with a coast band between throttle and
+brake and rate limits on both, so they do not pump; the automatic gearbox
+shifts. It stops at every 止まれ line (2 s, like the NPC rule), and when it is
+wedged (throttle on, no progress for 6 s) it reverses 3 m with the nose turning
+back to the lane and carries on (`recovery.py`, at most 3 times in 2 min). The
+old Traffic Manager autopilot (30 km/h on these maps, on/off pedals) is
+`--tm-autopilot`. Tests: `tests/test_hero_autopilot.py`, `tests/test_recovery.py`.
+
+### Nothing stays stuck / 立ち往生の復帰
+
+`recovery.py` runs inside the traffic script and the delivery sim: an NPC car
+that has not moved 1 m in 20 s (and is not held by a rule, queued behind a car
+or at a red light) is taken off autopilot, reversed 3.5 m out of its wedge and
+handed back; after 3 failed tries in 3 min it is moved 12 m on along its lane.
+A wedged pod reverses the same way before it is re-planned or nudged
+(`reverse_out` event). A walker still for 90 s (not waiting at a signalised
+crossing) gets a new destination, and the third time a new pavement point.
+
+NPC 車・ポッド・歩行者が動けなくなったら後退（または経路変更）で復帰させる。
+
+P で `hero_autopilot.py` が運転：車線の制限速度で走り、カーブ・曲がり角・信号・前車・
+歩行者の手前だけ減速。ペダルは躍度制限と惰行帯で踏み直しをしない。
 
 ### Keyboard driving (no wheel) / キーボード運転（ホイール無し）
 
@@ -710,6 +971,10 @@ G923/G29 が検出されない場合、運転ウィンドウは自動でキー�
   Q（またはダッシュボードの「閉じる」）で閉じたままになります。更新後に一度
   パイプラインを再起動すること。ダッシュボード単体起動ではカードに
   「run_pipeline.py が動いていません」と出ます（操作にはパイプラインが必要）。
+- **Every client times out right after the map loads (big own maps)** — fixed
+  2026-11-09: the pipeline loads the map with `load_world_map` (waits up to 120 s
+  and checks the loaded map) instead of `PythonAPI/util/config.py` (10 s).
+  / 大きな自作マップで読込直後に全クライアントがタイムアウト：修正済み（120 秒待って確認）。
 - **Dashboard shows "waiting for hero"** — the driving window isn't up yet
   or the hero vehicle died; it recovers automatically.
   / ダッシュボードが「車両待機中」のまま：運転ウィンドウが未起動か

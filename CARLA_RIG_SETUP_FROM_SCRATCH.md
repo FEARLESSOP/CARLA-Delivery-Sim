@@ -2,7 +2,7 @@
 
 This file lists everything that was changed or added on top of a stock CARLA
 0.9.16 to get this machine's driving-simulator rig to where it is now
-(2026-11-04). It is meant to be enough to set the rig up again on a new PC.
+(2026-11-09). It is meant to be enough to set the rig up again on a new PC.
 
 Each section says what was changed, why, which files are involved, how it
 works, how to set it up and run it, and what is still wrong with it. It was
@@ -27,7 +27,7 @@ itself. Anything that could not be checked is marked **(unverified)**.
 4. [The CARLA source tree + Unreal Engine 4.26 (needed for every import)](#4-the-carla-source-tree--unreal-engine-426-needed-for-every-import)
 5. [Every rig feature](#5-every-rig-feature)
 6. [Changes to the packaged CARLA folder, and how to reproduce each one](#6-changes-to-the-packaged-carla-folder-and-how-to-reproduce-each-one)
-7. [Claude Code setup: skills, agents, memory](#7-claude-code-setup-skills-agents-memory)
+7. [AI assistant setup: Claude Code and Google Antigravity](#7-ai-assistant-setup-claude-code-and-google-antigravity)
 8. [New-PC checklist, in order](#8-new-pc-checklist-in-order)
 9. [Troubleshooting, known issues and open items](#9-troubleshooting-known-issues-and-open-items)
 10. [Timeline of changes](#10-timeline-of-changes)
@@ -54,16 +54,22 @@ original study code:
 - **A delivery simulation:** delivery pods (an artist's pod and the
   "LastMile" LMP-4 pod) carrying drones, box stations, charge stations,
   batteries, wind and failures.
-- **Own cars:** 8 imported car models (RX-7, Supra A70, i-MiEV, NSX-R,
-  Soarer, Sileighty, BMW 3.0 CSL, Red Bull RB16), with invisible window
-  glass, blinkers and mirrors.
-- **Own maps:** Oita Station (Japan), Pasir Ris (Singapore), Oita Kosen
-  (Japan, hilly terrain, landmarks, real road signs from JARTIC open data,
-  seasonal trees that sway in the wind), and two race circuits (Marina Bay,
-  Spa-Francorchamps).
+- **Own cars:** 12 imported vehicles (RX-7, Supra A70, i-MiEV, NSX-R,
+  Soarer, Sileighty, BMW 3.0 CSL, Red Bull RB16, Ferrari SF90 XX, Rolls-Royce
+  Dawn, Honda S800, and the NPC-only Oita bus), with invisible window glass,
+  blinkers and mirrors.
+- **Own maps:** Oita Station (Japan; since 2026-11-09 the user's v8 model kept
+  as the core of a generated city to ±640 m, with parked cars and timetabled
+  Oita buses), Pasir Ris (Singapore), Oita Kosen (Japan, hilly terrain,
+  landmarks, real road signs from JARTIC open data, seasonal trees that sway in
+  the wind), and two race circuits (Marina Bay, Spa-Francorchamps).
+- **Road logic overlay** (O key): the OpenDRIVE map the AI drives on, drawn in
+  the game; lane-change marks on Japan maps follow the painted lines.
 - **An RL research layer:** a SAC agent, study arms, and plots.
 - **Claude Code skills** that build maps and import cars: `carla-map-generator`
-  and `carla-car-importer`, in the repo `FEARLESSOP/carla-skills`.
+  and `carla-car-importer`, in the repo `FEARLESSOP/carla-skills`; the same
+  knowledge is reachable for **Google Antigravity** through `AGENTS.md` files
+  (section 7).
 
 ### 1.2 Where it started
 
@@ -87,16 +93,19 @@ tuning (`pedal_tuning.json`), driver alerts and the turn-signal file.
 ├── CarlaUE4.sh                          stock launcher
 ├── carla-venv/                          Python 3.12 venv for every rig script (added)
 ├── map_guide -> ~/.claude/skills/carla-map-generator/map_guide   (symlink, added)
+├── AGENTS.md                            instructions for Google Antigravity (rules, method, gates, checks, traps; added 2026-11-09)
+├── .agents/skills/                      Antigravity skill stubs -> the two Claude skills (added 2026-11-09)
 ├── Import/Japan/                        OitaStation staging copy (added)
 ├── CarlaUE4/Content/
 │   ├── Carla/Blueprints/Vehicles/VehicleFactory.uasset/.uexp   REPLACED (lists the pods + own cars)
 │   ├── DeliveryModels/                  pod / drone props + vehicle.delivery.pod (added)
 │   ├── LastMileModels/                  LMP-4 pod, 37 props + vehicle.delivery.lastmile (added)
-│   ├── UserCars/                        8 own cars + their steering-wheel props (added)
+│   ├── UserCars/                        12 own vehicles (incl. the Oita bus) + steering-wheel props (added)
 │   ├── Japan/                           maps OitaStation, OitaKosen (added)
 │   ├── Singapore/                       map PasirRis (added)
 │   └── Circuits/                        maps MarinaBay, SpaFrancorchamps (added)
 └── PythonAPI/hil_sim/                   THE RIG (all code, must sit exactly here)
+    ├── AGENTS.md                        the rig's Antigravity instructions (mirror of CLAUDE.md)
     └── FILES.md                         where is what: every important file by topic (start here)
 
 ~/Documents/Dinesh-carla-copy/carla    <- CARLA 0.9.16 SOURCE tree, branch ue4/0.9.16, with a built editor
@@ -104,7 +113,7 @@ tuning (`pedal_tuning.json`), driver alerts and the turn-signal file.
 ~/UnrealEngine_4.26                    <- Unreal Engine 4.26, CarlaUnreal fork, branch carla (built from source)
 ~/Downloads/carla                      <- a UE5 CARLA git checkout (branch ue5-dev). NOT used by the rig.
 ~/.claude/skills                       <- git repo FEARLESSOP/carla-skills (map + car skills)
-~/.claude/agents                       <- the 14 agent definitions copied out of the skills
+~/.claude/agents                       <- the 15 agent definitions copied out of the skills (12 map + 3 car)
 ```
 
 **Which "carla" folder is the real one.** The memory note
@@ -124,14 +133,16 @@ after you press Play.
 ```
 run_pipeline.py  (parent; each child in its own process group; up to 3 restarts per helper)
  ├─ CarlaUE4.sh                    simulator (PRIME offload env vars on hybrid GPUs)   [skipped with --no-sim / if port 2000 answers]
- ├─ PythonAPI/util/config.py --map  loads --map
- ├─ generate_traffic.py            THE TICK MASTER (sync mode, 30 Hz), NPC cars/bikes/walkers, heartbeat file
+ ├─ load_world_map()               loads --map in a throwaway client (120 s + check; was util/config.py, 10 s)
+ ├─ generate_traffic.py            THE TICK MASTER (sync mode, 30 Hz), NPC cars/bikes/walkers, heartbeat file;
+ │                                  also parked cars (parked_cars.py) and timetabled buses (bus_schedule.py)
  ├─ dashboard.py                   Flask on :5000; also applies vehicle tuning and seasons
  ├─ agent_drive.py                 (--agent) autonomous 'ego' car
  ├─ delivery_sim.py --passive      (--delivery N) pods + drones
  ├─ drone_viewer.py                (--drone-cams)
  ├─ carla_ffb.py                   (--ffb) skipped if one already runs
  ├─ traction_fx.py                 skid marks (unless --no-traction-fx)
+ ├─ road_overlay.py                road logic overlay, idle until O / dashboard (unless --no-road-overlay)
  ├─ sensor_viewer.py               multi-camera window (unless --no-sensor-viewer)
  └─ manual_control_steeringwheel G923.py   the driving window (pipeline waits on it; ESC ends everything)
 ```
@@ -546,6 +557,13 @@ down on ESC or Ctrl+C.
 - With `--autopilot` the hero uses its own TrafficManager port (tm-port+1).
   Otherwise `set_autopilot()` took TM 8000 from generate_traffic, and the
   traffic never moved.
+- **Map load (2026-11-09):** `load_world_map()` loads the map in a throwaway
+  client with a 120 s timeout and then checks the loaded map's name (also for
+  F5 and the dashboard's map switch). `PythonAPI/util/config.py` waited only
+  10 s: on the extended OitaStation it reported a failure while the server
+  was still loading, and every client started next timed out. Tests:
+  `tests/test_map_switch.py`, `tests/test_pipeline_control.py`.
+- `--no-road-overlay` (5.21), `--no-weather-cycle` (5.17).
 
 **All options (from the argument parser):**
 `--host --port(2000) --tm-port(8000) --map --vehicles(30) --walkers(10)
@@ -777,6 +795,12 @@ black (0, 0, 0) glows white on camera; and `carla.Transform.transform(loc)`
   `--car-lights-on`, `--hero`, `--no-rendering`.
 - Walkers retry their spawn and are lifted 1 m (2026-11-03).
 - Uses `lane_spawns.lane_spawn_points()`.
+- `--parked-cars auto|none`, `--parked-max N`: parked cars on maps with
+  `maps/build/<Map>/parked_cars.json` (5.23).
+- `--bus-schedule auto|none|<folder>`, `--bus-time`, `--bus-day`,
+  `--bus-max`: timetabled buses on maps with maps.json `bus_schedule` (5.20).
+- `npc_only` vehicles (the Oita bus) are never picked for random traffic
+  (`own_cars.py`).
 
 Several "Spawn failed because of collision" lines at startup are normal.
 
@@ -971,8 +995,9 @@ The reward is fixed by the protocol, so change it only with the user's OK.
 
 ### 5.12 Own cars (`cars/`, package `UserCars`)
 
-**What (2026-10-28 → 11-04):** downloaded Sketchfab models became drivable
-CARLA vehicles, each with a separate steering-wheel prop:
+**What (2026-10-28 → 11-09):** downloaded Sketchfab models became drivable
+CARLA vehicles, each with a separate steering-wheel prop (the bus excepted).
+All 12 were rebuilt in one `build_cars.sh` run on 2026-11-09:
 
 | Key | Blueprint | Drive side |
 |---|---|---|
@@ -984,6 +1009,15 @@ CARLA vehicles, each with a separate steering-wheel prop:
 | sileighty | `vehicle.nissan.sileighty` | right |
 | csl | `vehicle.bmw.csl_e9` | left (LHD in its geometry, even though its folder says rhd) |
 | rb16 | `vehicle.redbull.rb16` | center (F1 car, fixed eye + Cockpit/T-Cam/Chase cameras) |
+| sf90 | `vehicle.ferrari.sf90_xx` | right (LHD model converted with `rhd_convert`, car guide ch. 13) |
+| dawn | `vehicle.rollsroyce.dawn` | right (LHD model converted) |
+| s800 | `vehicle.honda.s800` | right (as modelled) |
+| oitabus | `vehicle.oitabus.erga` | **NPC only** (Isuzu Erga, 10.43 m, 9,660 kg; no interior; own physics box, 7000 Nm brakes, COM 1.1 m; car guide ch. 16). Driven only by the bus timetable (5.20) |
+
+The four new vehicles (SF90, Dawn, S800, bus) are installed but **not yet
+checked live**. `npc_only` (cars.json) keeps a vehicle out of parking, random
+traffic, the "Your car" list and the hero cycle (`own_cars.py`,
+`tests/test_heavy_npc.py`).
 
 **Why:** the user wants right-hand-drive cars with a fixed first-person view
 and a visible wheel that turns, for left-hand-traffic maps.
@@ -1045,7 +1079,7 @@ Logs: `cars/make_glass_<key>.log`, `cars/make_lights_<key>.log` and
 - Restart CARLA after a build. Ask before restarting the user's pipeline.
 
 **Skill:** `carla-car-importer` (section 7) carries the whole workflow and
-`car_guide/` chapters 01–12.
+`car_guide/` chapters 01–16.
 
 ### 5.13 Maps
 
@@ -1089,6 +1123,54 @@ material on each `v` line. Without `crosswalk` areas, walkers never cross.
 
 #### 5.13.2 Oita Station (`oita_station`, package `Japan`)
 
+**Since 2026-11-09 the installed OitaStation is the extended map** (built
+2026-11-08/09, agent-checker APPROVED, imported 2026-11-09). The user asked to
+"touch the current one ... not build from scratch" and "extend it with new
+info". Map guide ch. 35 has every step and trap.
+
+- **What:** the user's v8 model is kept as an embedded **core** (maps.json
+  `"core": {"fbx", "bounds": [-384, -406, 410, 412], "x_scale": 0.9983243}`,
+  lifted to the terrain level core_z 2.17 m; start z 2.67) inside a city
+  generated by `make_osm_city.sh` out to ±640 m: Overpass OSM
+  (`~/Downloads/oita_station_ext/oita_station_ext_topo.osm`, with the
+  buildings OSM lacks added from the user's topoexport by
+  `osm_city/topo_buildings.py`), terrain from the same topoexport
+  (`~/Downloads/oita_station_topo/...glb`), one keep-left road logic for the
+  whole map with a new ring road at the edge (100 km/h).
+- **Buildings:** every v8 building except the JR Oita City station and the
+  railway (`core_keep`) is replaced by generated Japanese buildings; the
+  layout keeps off `core_hard` (the model's streets, pavements and plazas, a
+  triangle union: a raster mask stair-stepped the lot edges) and lifts lots in
+  the core by CORE_LIFT 0.12 m. Facades from the v8 author's survey +
+  Street View (`core_facades.py`); Japanese shop fronts with doors, vending
+  machines, kanban, pots and のぼり on every Japan map (`shopfront_jp.py`,
+  doors drawn by `buildings_jp`); the v8 bicycles and shop-front props of the
+  replaced shops removed (`core_props.py`).
+- **Core ground:** re-materialled in the generator's materials
+  (`core_materials.py`; M_plot → `Terrain_Lots_Plots`; 止まれ glyphs as paint,
+  cut 止まれ words dropped by `drop_cut_texts`).
+- **Road logic in the core:** lane widths fitted to the model's asphalt
+  (`fit_core_widths.py`, seam targets, kerb-bulge rule; reference line moved,
+  t = 0 stays the kerb), seam wedges (`layout.add_seam_fill`), a drive patch
+  where lanes leave the model's asphalt (`core_patch.py`: check_drive 0 in
+  every class), the kept station / viaduct walls a hard limit with the gate
+  `check_keep_walls.py` (no lane within 0.3 m; osm_fixes dropped the roads
+  under the station), the bus pool ways kept (`access: null`) and
+  `bus_bays.json` shared by every Layout. Poles, plates, pedestrian heads and
+  speed posts keep off the v8 asphalt (`core_merge.core_asphalt`).
+- **Parked cars:** the v8 car meshes became 440 spots (`core_cars.py` →
+  `parked_cars.json`), where `parked_cars.py` parks CARLA and the user's cars
+  (5.23). Buses (5.20) and lane-change marks (5.22) are on this map too.
+- **Rebuild:** `maps/make_osm_city.sh oita_station --lefthand` (the core_fbx
+  CUT step, about 90 min, is cached in `build/OitaStation/core/stamp.json`
+  until lanes.json or the code changes).
+- **Rollback:** the model-only entry `oita_station_v8` (below). It has the
+  same level name, and lookups by name take the FIRST entry, so it must stay
+  after `oita_station` in maps.json.
+- **Open items:** 9.2.
+
+**The original model-only build (now `oita_station_v8`, the rollback):**
+
 - Source: an artist's 3-D model `~/Downloads/oita_station_map_v8/.../FBX_Maya_Unreal/oita_station_map_v2.fbx`
   plus its `traffic_sumo/oita_station.osm`, and `buildings.csv`.
 - **Road logic:** `maps/prepare_oita.py` runs:
@@ -1121,7 +1203,7 @@ maps/build_map.sh oita_station /tmp/oita_stage
 - **TM cache:** `Maps/OitaStation/TM/OitaStation.bin` came from the old
   xodr and made the TM segfault in `InMemoryMap::Load`. It was renamed
   `.bin.before_ring`. Move or rebuild the TM cache whenever the xodr
-  geometry changes.
+  geometry changes. (The 2026-11-09 import installs no TM cache at all.)
 - `delivery/route.py` SafeRoutePlanner exists because of this map
   (runaway segments went from 118 to 0). Box sites and hubs are kept to
   the largest strongly connected part of the road graph.
@@ -1145,10 +1227,18 @@ The chain (from the script):
    props, textures, landmarks, trees.
 6. `signs.py` (CARLA's 274 speed / 205 give-way signals); `jp_signs.py`
    (Japanese plates, only for maps with `jartic_d`).
+   Japan maps also: `jp_speeds.py` (5.18), `hokousha_crossings.py` +
+   `jp_hokousha.py` (pedestrian heads).
+   **Embedded core** (maps.json `core`, OitaStation): after the terrain block
+   `fit_core_widths.py`, lanes / lht_poles again and the gate
+   `check_keep_walls.py` (exit 1 stops the chain); after the model
+   `core_merge.py`.
+   Japan maps: `lane_change_jp.py` (5.22), then `shopfront_jp.py`.
 7. `check_roads.py` (exit 1 if anything stands on or over a road, which
-   stops the chain).
+   stops the chain), then `surface_grid.py` (lawn grid for charging stations).
 8. `blender -b -P osm_city/blender_build.py -- build/<Name> --fbx`
-   (previews: `--render name:x,y,z:tx,ty,tz`).
+   (previews: `--render name:x,y,z:tx,ty,tz`); embedded core: `core_fbx.py`
+   cuts the model (cached) and joins it with the generated FBX.
 9. `build_map.sh`.
 
 `maps/.venv` is created on the first run with `numpy pillow shapely
@@ -1263,10 +1353,14 @@ maps/make_map.sh spa_francorchamps
 #### 5.13.7 Map guide
 
 All map knowledge is in `~/.claude/skills/carla-map-generator/map_guide/`
-(README + 20 chapters, each under 100 lines, at the user's request). A
+(README + 39 chapters, each under 100 lines, at the user's request). A
 symlink is at `~/Downloads/CARLA_0.9.16/map_guide`. Every new lesson goes
-into a chapter and the change log (ch. 9 / 20), and open items are kept
-current. The older `MAP_BUILDING_GUIDE.md` no longer exists.
+into a chapter and the change log (ch. 9 / 20 / 27, now 38), and open items
+are kept current (ch. 8). The older `MAP_BUILDING_GUIDE.md` no longer exists.
+Checks every build must pass: `check_roads` PASS, `check_drive` 0 spots in
+every class, `check_paths` (every crossing end on the network),
+`check_markings` 0, `check_keep_walls` on core maps (root `AGENTS.md`
+section 7 has the commands).
 
 ### 5.14 Road signs and signal timing (JARTIC open data, `signal_timing.py`)
 
@@ -1425,6 +1519,77 @@ cd ~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/web && npm install && npm run buil
 Tests: `tests/test_launcher.py` (15), `tests/test_pipeline_control.py` (14),
 plus the map-switch and Windows-card tests.
 
+### 5.20 Timetabled buses (`bus_schedule.py`, `data/oita_bus/`)
+
+**What (2026-11-08, vehicle built 2026-11-09):** real Oita buses (大分バス,
+大分交通, highway buses) drive into OitaStation, call at their stops (Oita
+Station platforms 1-8, 降車専用, 上野の森口, 要町 and the city stops) with the
+door at the pole, and leave again, on the published timetable.
+- **Data:** Oita Prefecture's GTFS-JP on BODIK
+  (https://data.bodik.jp/organization/440001, **CC BY 4.0**; the credit line is
+  in `data/oita_bus/sources.md` and must stay wherever the buses are shown).
+  gtfs-data.jp has no Oita-city feeds; the 大分バス website forbids reuse.
+  `data/oita_bus/` (git-ignored: copy it) holds `stops.json`, `routes.json`,
+  `timetable.json`, `shapes.json` and `tools/` to regenerate them. Every
+  national holiday runs the Sunday timetable (the feed misses 11/3 and 11/23).
+- **Planning:** each stop → the kerb lane with the pole on the bus's left;
+  GTFS shape vias; SafeRoutePlanner; TM `set_path` (no own lane changes, never
+  a point within 4 m of a junction), Japan rules through `SpeedArbiter`.
+- **Clock:** starts at the sim's shown time, then runs in real time (the day
+  cycle would flood the station); the dashboard clock re-anchors it.
+- **Vehicle:** `vehicle.oitabus.erga` (5.12), role `timetable_bus`; ≤ 25 at
+  once; a bus with no progress for 3 min is removed.
+- **Run:** on by itself on maps with maps.json `"bus_schedule": "data/oita_bus"`
+  (only `oita_station`); `generate_traffic.py --bus-schedule none` turns it off.
+  Dashboard card "Timetabled buses" (Drive page, `/buses`, `data/bus_status.json`).
+- **Checks:** `../../carla-venv/bin/python bus_schedule.py report --xodr maps/build/OitaStation/OitaStation.xodr`
+  (offline mapping), `maps/bus_live.py watch | spawn` (live), `tests/test_bus_schedule.py`.
+  Map guide ch. 36. **Live check on the installed map: still to do.**
+
+### 5.21 Road logic overlay (`road_overlay.py`)
+
+**What (2026-11-09):** the OpenDRIVE map the TM, the autopilot and the NPCs
+drive on, drawn in the game with debug lines, like CARLA's OpenDRIVE view in
+the UE4 editor: road edges (red), direction arrows (keep-left shows here),
+junction paths and boxes, other lane types, rules (止まれ, give way, speed
+posts, lights with their stop bars, lane limits), lane-change permission,
+ids, and the raw OSM ways. Drawn round the hero and round what the CarlaUE4
+window's camera looks at. **O** in the driving window, or the Drive tab card
+"Road logic overlay" (settings `data/road_overlay.json`). Started on every
+map by run_pipeline (`--no-road-overlay`), idle until turned on. Colours are
+very dim on purpose (debug lines are self-lit and bloom: a measured ladder
+showed channel values 1-3 clean, 6+ glowing); FPS stays within about 2 %
+(800 shapes per 2 s refresh). Live check: `maps/road_overlay_live.py`
+(`--calibrate 1,3,6,12` for the colour ladder). Test
+`tests/test_road_overlay.py`. Map guide ch. 37.
+
+### 5.22 Lane-change marks from the paint (`maps/osm_city/lane_change_jp.py`)
+
+**What (2026-11-09):** netconvert writes `<roadMark>` without `laneChange`,
+and CARLA then allows lane changes everywhere (29 247 / 29 247 OitaStation
+waypoints read Both). On Japan maps this step rewrites every roadMark from
+the BUILT marking meshes: yellow solid between lanes (進路変更禁止) = none,
+white solid / broken = both, solid kerb / centre lines = none. Run by
+`make_osm_city.sh` after `core_merge`; only `<roadMark>` lines change
+(`.xodr.prelanechange` keeps the old file; report `lane_change.json`). Test
+`tests/test_lane_change_jp.py`. **Installed for OitaStation** (xodr copy +
+cache clear, 2026-11-09); **OitaKosen is patched in its build dir, install
+pending.** Neither map paints yellow lines between lanes of one direction, so
+TM's lane-change links are unchanged there; painting 進路変更禁止 from JARTIC
+type D is a possible next step. Map guide ch. 39.
+
+### 5.23 Parked cars (`parked_cars.py`)
+
+**What (2026-11-08):** real vehicles on a map's parking spots
+(`maps/build/<Map>/parked_cars.json`; OitaStation: 440 spots made from the v8
+model's car meshes by `core_cars.py`): CARLA's cars and the user's cars (not
+the F1 car, not `npc_only`), physics off, lowered onto the ground, a smaller
+car where one does not fit (sizes cached in `data/vehicle_extents.json`). A
+ground check skips every spot whose ground does not match the loaded level
+(a build newer than the install parks nothing). Role `parked`.
+`generate_traffic.py --parked-cars auto|none --parked-max N`. Test
+`tests/test_parked_cars.py`. **Live check on the installed map: still to do.**
+
 ---
 
 ## 6. Changes to the packaged CARLA folder, and how to reproduce each one
@@ -1435,14 +1600,16 @@ plus the map-switch and Windows-card tests.
 |---|---|---|---|---|
 | `carla-venv/` | added | — | 3.2 | don't copy (venvs aren't portable across paths) |
 | `PythonAPI/hil_sim/` | added (the rig) | — | git + copy | yes |
-| `CarlaUE4/Content/Carla/Blueprints/Vehicles/VehicleFactory.uasset/.uexp` | **replaced** (lists `vehicle.delivery.pod`, `vehicle.delivery.lastmile` and the 8 own cars) | 70 KB | the last of `build_models.sh` / `build_lastmile.sh` / `build_cars.sh` | yes (the stock one is backed up in `hil_sim/delivery/assets/backup/packaged/`, md5 `7c7ce2a7...` / `8d1ab7ef...`) |
+| `CarlaUE4/Content/Carla/Blueprints/Vehicles/VehicleFactory.uasset/.uexp` | **replaced** (lists `vehicle.delivery.pod`, `vehicle.delivery.lastmile` and the 12 own vehicles, incl. `vehicle.oitabus.erga`, rebuilt 2026-11-09) | 70 KB | the last of `build_models.sh` / `build_lastmile.sh` / `build_cars.sh` | yes (the stock one is backed up in `hil_sim/delivery/assets/backup/packaged/`, md5 `7c7ce2a7...` / `8d1ab7ef...`) |
 | `CarlaUE4/Content/DeliveryModels/` | added | 25 MB | `delivery/assets/build_models.sh` | yes |
 | `CarlaUE4/Content/LastMileModels/` | added | 34 MB | `delivery/assets/build_lastmile.sh` | yes |
-| `CarlaUE4/Content/UserCars/` | added | 291 MB | `cars/build_cars.sh` | yes |
-| `CarlaUE4/Content/Japan/` (OitaStation 695 MB, OitaKosen 365 MB) | added | 3.1 GB | `prepare_oita.py` + `build_map.sh`; `make_osm_city.sh oita_kosen --lefthand` | yes |
+| `CarlaUE4/Content/UserCars/` | added (12 vehicles, installed 2026-11-09) | 520 MB | `cars/build_cars.sh` (no keys) | yes |
+| `CarlaUE4/Content/Japan/` (Maps/OitaStation 441 MB = the **extended** map imported 2026-11-09, Maps/OitaKosen 348 MB = import of 2026-11-07, shared Static 3.9 GB, plus Shingo / Sokudo / Hokousha / Gaito BPs) | added | 4.7 GB | `make_osm_city.sh oita_station --lefthand`; `make_osm_city.sh oita_kosen --lefthand` (rollback: `prepare_oita.py` + `build_map.sh oita_station_v8`) | yes |
 | `CarlaUE4/Content/Singapore/` | added | 887 MB | `make_osm_city.sh pasir_ris --lefthand` | yes |
 | `CarlaUE4/Content/Circuits/` | added | 439 MB | `make_map.sh marina_bay` / `spa_francorchamps` | yes |
-| `CarlaUE4/Content/Japan/Maps/OitaStation/TM/OitaStation.bin` | renamed `.bin.before_ring` (stale TM cache) | — | — | — |
+| `CarlaUE4/Content/Japan/Maps/OitaStation/TM/` | none since the 2026-11-09 import (the old `.bin` was a stale TM cache; the TM builds its map at start) | — | — | — |
+| `CarlaUE4/Content/Japan/Maps/OitaStation/OpenDrive/OitaStation.xodr` | replaced 2026-11-09 10:00 by the lane-change version (5.22; xodr-only install) | 11 MB | `lane_change_jp.py` | yes |
+| `AGENTS.md`, `.agents/skills/` | added 2026-11-09 (Google Antigravity, section 7.4) | — | this guide | yes |
 | `Import/Japan/` | added (OitaStation staging copy) | — | `prepare_oita.py` | optional |
 | `map_guide` | symlink → `~/.claude/skills/carla-map-generator/map_guide` | — | `ln -s` | — |
 | `.git`, `.gitignore` | added (repo `FEARLESSOP/CARLA-Delivery-Sim`) | 361 MB pack | — | — |
@@ -1492,6 +1659,13 @@ the current VehicleFactory, every `Config/*.Package.json` and this file.
   - your tuned values: `ffb_tuning.json`, `ffb_presets.json`, `vehicle_tuning.json`
 - The traffic unstick watchdog (`unstick_watchdog.py`, `watchdog_loop.sh`).
   It still lives only in a Claude scratch folder.
+- The cooked content of the 2026-11-07/09 imports (the extended OitaStation,
+  the re-imported OitaKosen, the 12-vehicle UserCars). The **code** is in the
+  repo through `5c1c7d2` (2026-11-09, "Rig code since 11-05: extended Oita
+  Station, timetabled buses, Oita Bus, road overlay, shop fronts"; earlier:
+  `10f9e2f`, `e911cb0` 11-05, `e9357e0` ... `bee4db0` 11-06). The doc updates
+  made after it (this file, the AGENTS.md files, `.agents/`) are not
+  committed yet.
 
 So **cloning the repo gives you the current code but not the current cooked
 content.** For a full copy of today's rig, copy the folders directly (8.2).
@@ -1504,7 +1678,9 @@ content.** For a full copy of today's rig, copy the folders directly (8.2).
 | `~/Downloads/unreal/unreal/LastMilePod*.fbx/.glb`, `README_Unreal.md` | LMP-4 export | rebuilding LastMileModels |
 | `hil_sim/cars/sources/<key>/` | car models | rebuilding UserCars |
 | `hil_sim/maps/sources/` | circuit glbs | rebuilding Circuits |
-| `~/Downloads/oita_station_map_v8/` | Oita Station model, OSM, buildings.csv | rebuilding OitaStation; `buildings_csv` at run time (delivery) |
+| `~/Downloads/oita_station_map_v8/` | Oita Station model, OSM, buildings.csv | rebuilding OitaStation (the core FBX) and the v8 rollback; `buildings_csv` at run time (delivery) |
+| `~/Downloads/oita_station_ext/`, `~/Downloads/oita_station_topo/` | the extended map's Overpass OSM (+ topoexport buildings) and topoexport GLB | rebuilding the extended OitaStation |
+| `hil_sim/data/oita_bus/` | bus timetable (GTFS-JP, BODIK, CC BY 4.0) + `tools/` | timetabled buses at run time (git-ignored with `data/`) |
 | `~/Downloads/map (1).osm` | Pasir Ris OSM | rebuilding PasirRis |
 | `~/Downloads/oita kosen/` | Oita Kosen OSM, topoexport GLBs, reference packs | rebuilding OitaKosen |
 | `~/Downloads/import/typeC_oita_2026_09`, `typeD_oita` | JARTIC CSVs (previous months are removed online, so keep them) | signs and signal profile |
@@ -1516,7 +1692,9 @@ content.** For a full copy of today's rig, copy the folders directly (8.2).
 ### 6.4 Hard-coded paths to change on a new PC
 
 - `maps/maps.json`: `source` / `osm` / `terrain_glb` / `buildings_csv` /
-  `jartic_d.csv` (absolute `/home/inouelab/...` or `~/...`).
+  `jartic_d.csv` / `core.fbx` (absolute `/home/inouelab/...` or `~/...`).
+- `AGENTS.md` files and `.agents/skills/*/SKILL.md`: absolute paths under
+  `/home/inouelab`.
 - `maps/prepare_oita.py`: `DEFAULT_FBX`, `DEFAULT_OSM`, and
   `netconvert_bin` / `venv_py` (`/home/inouelab/Downloads/CARLA_0.9.16/...`).
 - `cars/cars.json`: `source` paths (`~/Downloads/CARLA_0.9.16/...`).
@@ -1528,7 +1706,17 @@ content.** For a full copy of today's rig, copy the folders directly (8.2).
 
 ---
 
-## 7. Claude Code setup: skills, agents, memory
+## 7. AI assistant setup: Claude Code and Google Antigravity
+
+Two agentic tools work on this rig. **Claude Code** reads `CLAUDE.md`, its
+skills (`~/.claude/skills`), agent definitions (`~/.claude/agents`) and memory
+(`~/.claude/projects/.../memory`). **Google Antigravity** reads none of those
+by itself; it reads `AGENTS.md` files and `.agents/` folders (7.4). The
+knowledge is kept in ONE place (the skills, guides and memory, all plain
+Markdown) and the Antigravity files point into it with absolute paths, so
+both tools follow the same rules, method, gates and checks. Whoever learns a
+lesson records it in the guide chapter (and, for a user preference, in the
+memory folder), and keeps `AGENTS.md` in step when a rule or trap changes.
 
 ### 7.1 The skills repo `FEARLESSOP/carla-skills` (private)
 
@@ -1539,15 +1727,18 @@ was renamed from `carla-map-generator` on 2026-11-04. Commits:
 `c14207b` (map skill + guide + agents), `d9ffcab` (restructure as
 carla-skills), `0127536` (car importer).
 
-- **`carla-map-generator`**: `SKILL.md`, `map_guide/` (01–20), and 9 agents:
+- **`carla-map-generator`**: `SKILL.md`, `map_guide/` (01–39), and 12 agents:
   `photo-getter`, `building-builder`, `road-checker`, `agent-checker`,
   `general-builder`, `general-painter`, `road-builder`, `road-painter`,
-  `road-sign-creator`. It works in stages, with `agent-checker` as the gate
-  (APPROVED/REJECTED) between them. Landmark build order: biggest first,
-  then the others in parallel scratch copies. The user wants live updates
-  as each stage finishes.
-- **`carla-car-importer`**: `SKILL.md`, `car_guide/` (01–12), and 3 agents:
+  `road-sign-creator`, `traffic-rules-builder`, `signal-builder`,
+  `charge-station-builder`. It works in stages, with `agent-checker` as the
+  gate (APPROVED/REJECTED, checking the files themselves) between them.
+  Landmark build order: biggest first, then the others in parallel scratch
+  copies. The user wants live updates as each stage finishes.
+- **`carla-car-importer`**: `SKILL.md`, `car_guide/` (01–16), and 3 agents:
   `car-surveyor`, `car-builder`, `car-checker`.
+- Later commits (as of 2026-11-09) include `6c48e5f` "Guides: extended Oita
+  Station, timetabled buses, heavy NPC cars, road overlay, lane-change marks".
 
 **Install on the new PC** (from the repo README):
 ```bash
@@ -1563,7 +1754,8 @@ used by `photo-getter` for Street View and satellite imagery.
 ### 7.2 Project instructions
 
 - `hil_sim/CLAUDE.md`: architecture, placement, commands, EN+JA rule, the
-  tick master, the delivery notes.
+  tick master, the delivery notes (mirrored for Antigravity in
+  `hil_sim/AGENTS.md`).
 - `hil_sim/.claude/skills/grill-me`, `grilling`: project skills from the
   original zip.
 
@@ -1573,7 +1765,7 @@ Claude Code keeps notes per working directory in
 `~/.claude/projects/<path with / replaced by ->/memory/`. These were the
 sources for this file:
 
-- `-home-inouelab-Downloads-carla/memory/` (main rig history, 18 notes)
+- `-home-inouelab-Downloads-carla/memory/` (main rig history, 29 notes; index `MEMORY.md`)
 - `-home-inouelab-Downloads-CARLA-0-9-16-PythonAPI-hil-sim/memory/` (GPU,
   CPU, monitors, RL; 11 notes)
 - `-home-inouelab-Documents-Dinesh-carla-copy/memory/` (UE4 build, digital
@@ -1583,6 +1775,49 @@ To carry them over, copy those folders. If the new user name differs,
 rename the folder to match the new path (for example
 `-home-<newuser>-Downloads-carla`). The notes also mention paths with
 `inouelab`; they are history, so leave them as they are.
+
+### 7.4 Google Antigravity (added 2026-11-09)
+
+**What Antigravity loads** (from its docs, https://antigravity.google/docs/rules,
+`/docs/skills`, `/docs/subagents`, read 2026-11-09):
+- rules: `AGENTS.md` or `GEMINI.md`, `.agents/AGENTS.md`, `.agents/rules/*.md`
+  (YAML frontmatter with `trigger` required there; legacy `.agent/rules` works),
+  in the **workspace folder and every parent up to the git root**; subfolders
+  below the workspace are NOT loaded. Global: `~/.gemini/AGENTS.md` /
+  `GEMINI.md`, `~/.gemini/config/rules/*.md`. AGENTS.md needs no frontmatter and
+  is always on. Limit 24,000 bytes per file; always-on rules share 20,000 tokens.
+- skills: `<workspace or parent>/.agents/skills/<name>/SKILL.md` (frontmatter
+  `name`, `description`), global `~/.gemini/config/skills/`.
+- sub-agents: `.agents/agents/<name>.md` (frontmatter `name`, `description`,
+  `tools`, ...), started with `invoke_subagent`, or ad hoc with `define_subagent`;
+  they do not inherit the conversation.
+
+**Files made for it** (the git root is `~/Downloads/CARLA_0.9.16`, so opening
+either that folder or `hil_sim` as the workspace loads the root file):
+
+| File | Content |
+|---|---|
+| `~/Downloads/CARLA_0.9.16/AGENTS.md` (~18 KB) | what the rig is, where everything lives, the user's rules, the working method, the map and car workflows with every role and its file, the gate, the checks with pass criteria, tests and venvs, the expensive traps, the current state |
+| `PythonAPI/hil_sim/AGENTS.md` | the rig specifics, mirroring `CLAUDE.md` (placement, commands, restarts, architecture, maps, cars) |
+| `.agents/skills/carla-map-generator/SKILL.md`, `.agents/skills/carla-car-importer/SKILL.md` | stubs that send Antigravity to the Claude skills, guides and role files |
+
+No `.agents/agents/` files were made: the Claude agent files list Claude tool
+names in `tools:`, and an unknown tool name can hang an Antigravity sub-agent.
+Antigravity plays each role itself, or starts a sub-agent with the role file's
+text as its prompt. The memory notes are Claude's but plain Markdown:
+Antigravity is told to read them and may add notes in the same format.
+
+**On a new PC:** these files travel with the CARLA folder (copy or git); the
+skills and memory with section 7.1 / 7.3. If the user name differs, fix the
+absolute paths in them (6.4).
+
+**Working efficiently (both tools):** the method lives in the root
+`AGENTS.md` sections 4-8: read the guide chapter first; develop on a scratch
+copy of the build dir, then one full `make_osm_city.sh` rerun; know the CUT
+(about 90 min, keyed on lanes.json) and navmesh caches; control builds to
+attribute side effects; a preview image after every step; long runs in the
+background watched by PID; import only after asking, then relaunch through the
+launcher and live-check; record the lesson.
 
 ---
 
@@ -1705,6 +1940,8 @@ mkdir -p ~/.claude/skills ~/.claude/agents
 cp -r ~/carla-skills/carla-map-generator ~/carla-skills/carla-car-importer ~/.claude/skills/
 cp ~/.claude/skills/*/agents/*.md ~/.claude/agents/
 rsync -a $OLD:.claude/projects/-home-inouelab-Downloads-carla ~/.claude/projects/   # rename if the user differs
+# Google Antigravity: nothing to install for the rig; AGENTS.md and .agents/ come with
+# ~/Downloads/CARLA_0.9.16 (7.4). Open ~/Downloads/CARLA_0.9.16 (or hil_sim) as the workspace.
 ```
 
 ---
@@ -1740,9 +1977,35 @@ rsync -a $OLD:.claude/projects/-home-inouelab-Downloads-carla ~/.claude/projects
 | measured sim speed is nonsense | use `wait_for_tick()` timestamps, not `get_snapshot()` from a second client |
 | headless test server | `./CarlaUE4.sh -RenderOffScreen -carla-rpc-port=2010 -nosound`, then `load_world`; `-quality-level=Low` segfaulted on `load_world` there; never run it beside the pipeline |
 | AI walker velocity 0 / far TM cars velocity 0 | API quirk / hybrid teleporting; judge motion by displacement |
+| every client times out right after the map loads (big map) | old `util/config.py` 10 s map load; fixed by `load_world_map` (5.1) |
+| AI changes lanes across solid lines on an own map | netconvert writes no `laneChange`; `lane_change_jp.py` on Japan maps (5.22); see it with the overlay (5.21) |
+| a new client sees no actors / all lights "yellow" | sync world: read after `world.wait_for_tick()` |
+| no parked cars on OitaStation | `parked_cars.json` newer than the installed level (ground check), or `--parked-cars none` |
+| a UE commandlet "crashed" (segfault) | it often segfaults on exit after saving: judge by its own saved / done / OK log lines |
+| `get_xodr_crosswalks.py ... No module named 'carla'` in an import log | harmless (CARLA's Import.py helper) |
 
 ### 9.2 Known issues and open items
 
+- **OitaStation (extended map, imported 2026-11-09):**
+  - live checks not done yet: traffic, parked cars, buses, signals, walkers;
+  - `generate_traffic` hit a TM port 8000 bind error once on the first
+    OitaStation run (restarted, "No InMemoryMap cache"); then the user went
+    back to OitaKosen from the dashboard;
+  - 13 core signal poles stand in gaps of the v8 asphalt;
+  - the viaduct ends mid-air at the core edges;
+  - tactile strips end at the drive-patch edges;
+  - teardrop pads at 3 dead-end loops;
+  - `check_signal_poles`: 5 mismatches;
+  - the station canopy over the j228 area is accepted (the user keeps the
+    station as it is);
+  - core street lamps are static (gaito reads Terrain_Street only); some
+    v8 lines lie up to 1.2 m off the fitted lane edges (their marks read none).
+- **OitaKosen lane-change marks:** patched xodr in `maps/build/OitaKosen`,
+  install pending (xodr copy + cache clear, 5.22). Painting 進路変更禁止 from
+  JARTIC type D is a possible next step (neither map paints yellow lines
+  between same-direction lanes).
+- **New vehicles not checked live:** SF90, Dawn, S800, and the Oita bus
+  (overhang ray, braking from 40 km/h, off-tracking, never parked).
 - **TM cars wedge at Oita Kosen junctions.** They stray about 1.6 m (p90)
   and stick on island noses, lamps, palms, planters and a building corner.
   The TM deletes cars idle for 90 s. The workaround is the scratch watchdog
@@ -1771,8 +2034,8 @@ rsync -a $OLD:.claude/projects/-home-inouelab-Downloads-carla ~/.claude/projects
 - **Deferred:** Pasir Ris large map. Only start it on request (5.13.4).
 - Hardware: CPU stability not settled (2.4). Xid faults were reduced, not
   eliminated (2.5).
-- The repo `FEARLESSOP/CARLA-Delivery-Sim` is far behind the working copy
-  (6.2).
+- The repo `FEARLESSOP/CARLA-Delivery-Sim` has the code through
+  `5c1c7d2` (2026-11-09) but not the cooked content since 10-29 (6.2).
 
 ---
 
@@ -1796,7 +2059,11 @@ Dates are JST.
 | 2026-11-02 | Oita Kosen imported (campus, dorm, 7-Eleven; Japanese buildings, road style, road fixes); landmark build order chosen; Pasir Ris large queued |
 | 2026-11-03 | Oita Kosen walker navmesh by hand; pipeline fixes (keep_left key, hero TM port, walker retries); unattended demo with the scratch watchdog |
 | 2026-11-04 | seasonal Japanese trees + wind + dashboard card; JARTIC signs and signal timing (road-sign-creator agent); akeno area features; blinkers, mirrors, lenses on own cars; `carla-car-importer` skill; skills repo renamed `carla-skills`; Pasir Ris large deferred; this document |
-| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder; day/night cycle + dynamic weather, rain grounds the drones; street lamps; skid marks fixed for autopilot; speed limits (ring 100, real/legal elsewhere); launcher + live control + React/TypeScript dashboard |
+| 2026-11-05 | real drivetrains for all cars (car guide ch. 15); SF90 / Dawn blinker and LHD → RHD fixes (surveyed 11-04); commit `e911cb0` (drivetrains, the three new RHD cars, smoother road edges, outer guardrail); build work given priority over the live demo (CARLA reniced +5) |
+| 2026-11-05/06 | Japanese plates per NPA, one-way/no-entry fixes; Japan NPC and delivery rules; BP_JpShingo signals, BP_JpSokudo speed posts, pedestrian signals; police signal timing auto-started; keybinds page, car_prev, F5 crash fix, dashboard Windows card; `FILES.md` index; agents traffic-rules-builder and signal-builder; day/night cycle + dynamic weather, rain grounds the drones; street lamps; skid marks fixed for autopilot; speed limits (ring 100, real/legal elsewhere); launcher + live control + React/TypeScript dashboard; three-screen window and the smooth hero autopilot (P); OitaKosen road-plateau cause found, `check_drive.py`, `recovery.py` (reverse-out); commits `e9357e0` … `bee4db0`, one-script new-PC setup |
+| 2026-11-07 | OitaKosen road rework: corners rounded, elevate exact, check_drive 0/0/0/0, lights 0.5 m behind the stop line; Japanese markings audit (`check_markings.py` 81 → 0); pavement network (`pavements.py`, walkable pieces 420 → 3); OitaKosen re-imported (09:40); build_map clears `~/carlaCache` and makes its build path absolute; `surface_grid.py`; LastMile charging stations + agent `charge-station-builder`; LastMile Hub + Mini Pods and the shared parcel locker, live on OitaKosen |
+| 2026-11-08 | OitaStation extended (v8 core in a generated city to ±640 m): `topo_buildings.py`, `fit_core_widths.py`, `core_facades.py` (office / car-park styles), `core_materials.py`, `shopfront_jp.py` + `core_props.py`, `core_cars.py` + `parked_cars.py`; timetabled Oita buses (`bus_schedule.py`, BODIK GTFS-JP, CC BY 4.0, dashboard card); heavy NPC vehicle keys and `own_cars.py` (car guide ch. 16) |
+| 2026-11-09 | kept-wall gate `check_keep_walls.py` + osm_fixes, drive patch `core_patch.py`, cut 止まれ removed, `core_hard` triangle union → agent-checker APPROVED; **OitaStation extended imported**; all 12 cars rebuilt incl. the NPC-only Oita bus; `load_world_map` (120 s) replaces config.py's 10 s map load; road logic overlay (`road_overlay.py`, O key); lane-change marks from the paint (`lane_change_jp.py`, installed on OitaStation); commits `5c1c7d2` (rig) and `6c48e5f` (skills); `AGENTS.md` + `.agents/skills` for Google Antigravity; this document updated |
 
 ---
 
@@ -1827,5 +2094,13 @@ Dates are JST.
   user's brief, not from a check.
 - The memory note on folder placement still describes the old nested
   location as current. The later setup-state note confirms it was moved.
+- **OitaKosen import of 2026-11-07:** installed at 09:40 (log
+  `maps/build/OitaKosen/import_20261107b.log`, `Success - 0 error(s)`); which of
+  that day's road fixes it already contains is not recorded.
+- **Antigravity behaviour** was taken from its docs, not tested here: that the
+  `.agents/skills` stubs are discovered, that the root AGENTS.md is loaded when
+  `hil_sim` is the workspace (parent folders up to the git root), and how
+  `invoke_subagent` / `define_subagent` behave. Third-party guides mention a
+  "Load nested AGENTS.md files" setting; the official page does not.
 - The README lists `--res` default `1080p`, while the G923 script's own
   default is written as `1920x1080`. These are the same resolution.
