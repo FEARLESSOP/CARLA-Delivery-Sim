@@ -1,0 +1,26 @@
+when_jst,brain,type,change,reason,evidence
+2026-11-09 13:2x,drone_flight,world,PID baseline: corner braking (v_ref) and forward-only path projection,PID overshot corners by 6-10 m and deadlocked at hairpins,"PID calm: 29/30 reached, 1.25 m"
+2026-11-09 13:2x,all,infrastructure,OMP_NUM_THREADS=1 per env worker; one trainer per brain,two trainers + thread oversubscription made training crawl,~1.3k -> ~8k steps/s
+2026-11-09 14:3x,mission,world,"battery swap in the pod, crashed drones replaced after 15 min, drones chase a departed pod",rule baseline lost all 4 drones every episode (flat batteries),"rule: 10 deliveries/h, 4 crashes/100"
+2026-11-09 15:4x,nav,world,"2 m height map of buildings, tree trunks/canopies, poles from the map meshes",user: drones must not hit trees or buildings,ground matches CARLA roads within 0.15 m
+2026-11-09 15:5x,nav,reward,"150 m ceiling (failure), height > 60 m cost, battery running cost","nav_v1 climbed to ~1,770 m",
+2026-11-09 16:0x,mission,reward,crash -150 wherever it happens; low-battery landing cost,crashes while hovering/chasing were free; 1-in-4 crash risk still paid,"audit: 22 crashes / 10 h, 15 battery"
+2026-11-09 16:0x,nav,reward,time-out = failure (-50),nav_v2 hovered until time-out (88 %),
+2026-11-09 16:2x,nav,reward,potential-based closeness reward + circling cost; reached +100,user saw circling at the drop,
+2026-11-09 16:2x,nav,curriculum,start at 80 m trips (+60 m steps to 200),0 % reached on 200 m trips,
+2026-11-09 16:5x,nav,world,"two legs: drop, then land on the pod at a meeting point; leg flag in the observation",user: second destination like the delivery sim,scripted: 19/20 landed
+2026-11-09 17:xx,dashboard,infrastructure,CARLA helper threads skip CARLA while its port is closed,a failed connect held the GIL: every page froze 5-25 s,40 requests ~1.5 ms
+2026-11-10 09:2x,fleet,world,fleet world built from the user's flow; sites from charge_sites/boxes; 4 drones/pod,user's full delivery flow,"rule flow 41.5 deliveries/h, 15.3 crashes/100"
+2026-11-10 09:3x,fleet,bug,drone charging in the pod drew 100x too much from the pod battery,all pods stranded in the rule flow,
+2026-11-10 09:4x,drive,world,lane edges classified geometrically (netconvert: each direction its own road); routes resampled at 1 m,99 % 'kerb' edges; xodr headings off at piece ends,scripted: 31/40 reached
+2026-11-10 10:0x,fleet,reward,"delivery +20, waiting parcel -0.05/min, stranded -500",fleet_v1 idled,always-wait -2617 vs rule -715
+2026-11-10 10:0x,drive,reward,time-out -40; idle without reason -0.05/step,drive_v1 stood still,standing still -195
+2026-11-10 10:2x,nav,bug,trip picker searched 40 random nodes and fell back to a fake trip (drop inside a building),41 % of 80 m practice trips were broken,0 % fallback after the fix
+2026-11-10 10:4x,fleet,evaluation,tests and the other brain sample actions instead of argmax,deterministic test showed 'always wait' though sampled behaviour delivered 29/h,
+2026-11-10 10:4x,drive,algorithm,PPO -> SAC,PPO outputs pinned at full brake/lock,
+2026-11-10 11:4x,nav,world,landing rule 1.0/1.0/0.8 -> 1.3 m / 1.5 m/s / 1.2 m/s,0 % landed for ~2.6 M steps,56 % landed one check later
+2026-11-10 12:1x,fleet,reward,low pod battery cost below 25 %,pods never charged (3 stranded),never-charge -2587 vs rule -757
+2026-11-10 12:1x,fleet,reward,waiting with work available -3 (else -0.2); fresh pod brain,pod waited 328/359 decisions (per-decision credit made waits cheap),always-wait -3821 vs rule -774
+2026-11-10 12:2x,drive,reward,progress 0.1 -> 0.3 per metre,"crawled at 0.6-0.9 m/s, 12-19 % reached",
+2026-11-10 12:2x,research,infrastructure,"research record, automatic run configs, --algo/--seed/--tag, experiment queue, compare",user: research paper comparing algorithms and changes,
+2026-11-10 13:0x,drive,world,pedal made symmetric: +-3.0 m/s2 (was +2.5 / -6.0),SAC never got moving (0.08 m/s): random exploration braked more than it accelerated,random actions now average 1.6 m/s; scripted 19/20 reached

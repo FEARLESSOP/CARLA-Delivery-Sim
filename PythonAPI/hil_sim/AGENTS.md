@@ -119,9 +119,17 @@ with no keys (the install replaces the whole UserCars package; CARLA stopped, as
 `own_cars.py`: `npc_only` vehicles never park, never join random traffic, are never "Your car".
 Knowledge: `~/.claude/skills/carla-car-importer/car_guide/README.md`.
 
+## RL for the pods and drones (`rl_delivery/`)
+
+Handbook: `docs/RL_DELIVERY.md` (read fully first). Every behaviour is learned (no scripted
+steering or decisions, no geofence); rule/scripted code is baseline only. Trainers:
+`python3 -m rl_delivery.train --brain fleet|drive|nav`, one per brain, stop with
+`results/STOP_<brain>`, `--resume` to continue; generated `checkpoints/ results/ maps/` are
+git-ignored. Dashboard: AI training page (`/rl/state`, `/rl/train`, `/rl/watch`).
+
 ## Reference docs
 
-`docs/RL_DESIGN.md`, `docs/RESEARCH_PROTOCOL.md` (decisions change only by explicit revision),
+`docs/RL_DELIVERY.md` (pod + drone RL), `docs/DELIVERY_KPI.md`, `docs/RL_DESIGN.md`, `docs/RESEARCH_PROTOCOL.md` (decisions change only by explicit revision),
 `docs/TROUBLESHOOTING.md` (Xid GPU crash, PRIME, empty telemetry), `docs/DELIVERY.md`,
 `web/DEV.md`, `data/oita_bus/sources.md` (bus data credit line, CC BY 4.0: keep it wherever the
 buses are shown).

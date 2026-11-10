@@ -13,9 +13,9 @@ import { Badge, Button, Card, EmptyState, Grid, KV, SectionTitle, Segmented, Sel
 
 interface ProgRow { steps: number; wall_s: number; wind_level: number; reached: number; crash: number; xtrack_mean: number; xtrack_max: number; guard_steps: number; battery_used: number; ep_reward: number }
 interface TrainState { brain?: string; running?: boolean; steps?: number; wind_level?: number; deadline?: number; last?: Partial<ProgRow> }
-type Brain = 'flight' | 'mission' | 'nav'
+type Brain = 'flight' | 'mission' | 'nav' | 'fleet' | 'drive'
 interface RuleBase { deliveries: number; crashes_per_100: number; lead_mean_s: number; landing_min: number }
-interface RlState { state: TrainState; alive: boolean; progress: ProgRow[]; checkpoints: string[]; rule?: RuleBase | null }
+interface RlState { state: TrainState; alive: boolean; progress: ProgRow[]; checkpoints: string[]; drone_checkpoints?: string[]; rule?: RuleBase | null }
 interface Frame { t: number; p: number[]; c: number[]; wind: number[]; cmd: number[]; dev: number; guard: boolean }
 interface Rect { x0: number; y0: number; x1: number; y1: number }
 interface Rec {
@@ -45,7 +45,7 @@ function Trainer({ st, brain }: { st: RlState | null; brain: Brain }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Stat size="md" label={t('tr_steps')} value={fmt((s.steps ?? 0) / 1e6, 2)} unit="M" />
-        {brain !== 'mission' && <Stat size="md" label={t('tr_wind')} value={fmt((s.wind_level ?? 0) * 100, 0)} unit="%" />}
+        {(brain === 'nav' || brain === 'flight') && <Stat size="md" label={t('tr_wind')} value={fmt((s.wind_level ?? 0) * 100, 0)} unit="%" />}
       </div>
       {running && <KV k={t('tr_left')} v={fmtDur(left)} />}
       {brain === 'flight' && s.last && <>
@@ -63,6 +63,12 @@ function Learning({ rows, brain, rule }: { rows: Record<string, number>[]; brain
   const series: [string, number, string, string][] = brain === 'flight' ? [
     ['reached', 100, C.accent, t('tr_s_reached')], ['crash', 100, C.danger, t('tr_s_crash')],
     ['xtrack_mean', 10, C.s1, t('tr_s_xtrack')], ['wind_level', 100, C.warn, t('tr_s_wind')],
+  ] : brain === 'fleet' ? [
+    ['deliveries_per_h', 1, C.accent, t('tr_f_deliv')], ['crashes_per_100', 1, C.danger, t('tr_f_crash')],
+    ['stranded', 20, C.violet, t('tr_f_strand')], ['hover_s_per_h', 0.1, C.cyan, t('tr_f_hover')],
+  ] : brain === 'drive' ? [
+    ['reached', 100, C.accent, t('tr_d_reached')], ['kerb', 100, C.danger, t('tr_d_kerb')], ['collision', 100, C.violet, t('tr_d_coll')],
+    ['speed', 10, C.cyan, t('tr_d_speed')], ['route_len', 0.1, C.s1, t('tr_d_route')], ['traffic', 10, C.warn, t('tr_d_traffic')],
   ] : brain === 'nav' ? [
     ['delivered', 100, C.cyan, t('tr_n_delivered')], ['reached', 100, C.accent, t('tr_n_reached')], ['crash_obstacle', 100, C.danger, t('tr_n_obst')],
     ['crash_nofly', 100, C.violet, t('tr_n_nofly')], ['dist', 0.1, C.s1, t('tr_n_dist')], ['wind_level', 100, C.warn, t('tr_s_wind')],
@@ -70,7 +76,10 @@ function Learning({ rows, brain, rule }: { rows: Record<string, number>[]; brain
     ['deliveries', 5, C.accent, t('tr_m_deliv')], ['crashes_per_100', 5, C.danger, t('tr_m_crash')],
     ['lead_mean_s', 1 / 60, C.s1, t('tr_m_lead')], ['landing_min', 1, C.warn, t('tr_m_land')],
   ]
-  const foot = brain === 'flight' ? t('tr_pid') : brain === 'nav' ? t('tr_n_base') : rule ? t('tr_m_base', {
+  const fr = rule as unknown as Record<string, number> | null | undefined
+  const foot = brain === 'flight' ? t('tr_pid') : brain === 'nav' ? t('tr_n_base') : brain === 'drive' ? t('tr_d_base')
+    : brain === 'fleet' ? (fr ? t('tr_f_base', { d: fmt(fr.deliveries_per_h, 1), c: fmt(fr.crashes_per_100, 1), s: fmt(fr.stranded, 1), h: fmt(fr.hover_s_per_h, 0) }) : '')
+    : rule ? t('tr_m_base', {
     d: fmt(rule.deliveries, 1), c: fmt(rule.crashes_per_100, 1), l: fmt(rule.lead_mean_s / 60, 0), b: fmt(rule.landing_min, 0) }) : ''
   const ref = useCanvas((g, w, h) => {
     const L = 34, B = 20, T = 8
@@ -80,17 +89,20 @@ function Learning({ rows, brain, rule }: { rows: Record<string, number>[]; brain
       g.beginPath(); g.moveTo(L, y); g.lineTo(w, y); g.stroke(); g.fillText(String(v), 4, y + 3)
     }
     if (rows.length < 1) return
-    const mx = rows[rows.length - 1].steps || 1
-    g.fillText(`${fmt(mx / 1e6, 1)}M steps`, w - 80, h - 5)
+    // fleet rounds alternate pod / drone, so plot by round, not steps / フリートはラウンド順
+    const byRound = brain === 'fleet'
+    const xs = rows.map((r, k) => (byRound ? k + 1 : r.steps))
+    const mx = xs[xs.length - 1] || 1
+    g.fillText(byRound ? `${rows.length} rounds` : `${fmt(mx / 1e6, 1)}M steps`, w - 80, h - 5)
     for (const [k, sc, col] of series) {
       g.strokeStyle = col; g.lineWidth = 2; g.beginPath()
       rows.forEach((r, i) => {
-        const x = L + (w - L - 4) * (r.steps / mx), y = T + (h - T - B) * (1 - Math.min(100, Number(r[k] ?? 0) * sc) / 100)
+        const x = L + (w - L - 4) * (xs[i] / mx), y = T + (h - T - B) * (1 - Math.min(100, Number(r[k] ?? 0) * sc) / 100)
         if (i) g.lineTo(x, y); else g.moveTo(x, y)
       })
       g.stroke()
     }
-  }, [rows])
+  }, [rows, brain])
   return (
     <Card title={t('tr_learning')} wide footer={foot}>
       {rows.length ? <canvas ref={ref} className="h-56 w-full" aria-label={t('tr_learning')} /> : <EmptyState>{t('tr_noprog')}</EmptyState>}
@@ -512,21 +524,285 @@ function NavWatch({ ckpts }: { ckpts: string[] }) {
   )
 }
 
+// ---- fleet: 3 pods, 12 drones, standbys, lockers, stations / フリート ----
+interface FFrame { t: number; pods: (number | number[] | null)[][]; drones: (number | string | null)[][]; orders: (number | string)[][]; wind: number; rain: number }
+interface FRec {
+  pod_checkpoint: string; drone_checkpoint: string; seed: number; frames: FFrame[]
+  events: { t: number; what: string; [k: string]: unknown }[]
+  kpi: Record<string, number | null | Record<string, number>>; bounds: number[]; zones: Record<string, Rect>; nofly: Rect[]
+  stations: number[][]; lockers: number[][]; lines: number[][][]
+}
+const FSTATE: Record<string, string> = { fly: C.info, hover: C.cyan, standby: C.accent, down: C.danger }
+
+function FleetMap({ rec, i }: { rec: FRec; i: number }) {
+  const layer = useRef(new StaticLayer())
+  const ref = useCanvas((g, w, h) => {
+    const [x0, y0, x1, y1] = rec.bounds
+    const s = Math.min(w / (x1 - x0), h / (y1 - y0))
+    const ox = (w - (x1 - x0) * s) / 2, oy = (h - (y1 - y0) * s) / 2
+    const P = (x: number, y: number): [number, number] => [ox + (x - x0) * s, oy + (y - y0) * s]
+    layer.current.draw(g, w, h, rec, (g) => {
+      g.fillStyle = C.bg; g.fillRect(0, 0, w, h)
+      Object.entries(rec.zones).forEach(([k, r], n) => {
+        const [a, b] = P(r.x0, r.y0), [c, d] = P(r.x1, r.y1)
+        g.fillStyle = ZONE_COL[n % 4] + '14'; g.fillRect(a, b, c - a, d - b)
+        g.strokeStyle = ZONE_COL[n % 4] + '88'; g.lineWidth = 2; g.strokeRect(a, b, c - a, d - b)
+        g.fillStyle = ZONE_COL[n % 4]; g.font = `11px ${FONT_MONO}`; g.fillText(`ZONE ${k}`, a + 4, b + 13)
+      })
+      g.strokeStyle = C.line; g.lineWidth = 1
+      for (const l of rec.lines) { g.beginPath(); l.forEach((p, k) => { const [a, b] = P(p[0], p[1]); if (k) g.lineTo(a, b); else g.moveTo(a, b) }); g.stroke() }
+      for (const r of rec.nofly) {
+        const [a, b] = P(r.x0, r.y0), [c, d] = P(r.x1, r.y1)
+        g.fillStyle = C.danger + '22'; g.fillRect(a, b, c - a, d - b); g.strokeStyle = C.danger; g.strokeRect(a, b, c - a, d - b)
+      }
+      g.fillStyle = C.accent
+      for (const st of rec.stations) { const [a, b] = P(st[0], st[1]); g.fillRect(a - 6, b - 6, 12, 12) }
+      g.fillStyle = C.warn
+      for (const L of rec.lockers) { const [a, b] = P(L[0], L[1]); g.fillRect(a - 3, b - 3, 6, 6) }
+    })
+    const f = rec.frames[i]
+    if (!f) return
+    for (const o of f.orders) {
+      const [a, b] = P(Number(o[0]), Number(o[1]))
+      g.fillStyle = o[3] === 's' ? C.danger : o[2] === 'f' ? C.warn : C.info
+      g.beginPath(); g.arc(a, b, 2.5, 0, Math.PI * 2); g.fill()
+    }
+    f.pods.forEach((p, k) => {
+      const [a, b] = P(Number(p[0]), Number(p[1]))
+      const meet = p[5] as number[] | null
+      if (meet) { const [mx, my] = P(meet[0], meet[1]); g.strokeStyle = C.fg2; g.lineWidth = 1.5; g.beginPath(); g.arc(mx, my, 7, 0, Math.PI * 2); g.stroke() }
+      g.fillStyle = p[4] ? C.danger : C.fg; g.fillRect(a - 6, b - 6, 12, 12)
+      const bt = Number(p[2]) / 100
+      g.fillStyle = C.grid; g.fillRect(a - 8, b + 8, 16, 3); g.fillStyle = bt < 0.25 ? C.danger : C.accent; g.fillRect(a - 8, b + 8, 16 * bt, 3)
+      g.fillStyle = C.fg2; g.font = `10px ${FONT_MONO}`; g.fillText(`P${k + 1}${p[3] ? ' ⚡' : ''}`, a + 8, b - 6)
+    })
+    for (const d of f.drones) {
+      const st = String(d[2])
+      if (st === 'docked' || st === 'repair') continue
+      const [a, b] = P(Number(d[0]), Number(d[1]))
+      g.fillStyle = FSTATE[st] ?? C.mute
+      if (st === 'down') { g.strokeStyle = C.danger; g.lineWidth = 2; g.beginPath(); g.moveTo(a - 4, b - 4); g.lineTo(a + 4, b + 4); g.moveTo(a + 4, b - 4); g.lineTo(a - 4, b + 4); g.stroke() }
+      else { g.beginPath(); g.arc(a, b, 3.5, 0, Math.PI * 2); g.fill() }
+    }
+    const docked = f.drones.filter((d) => d[2] === 'docked').length
+    g.fillStyle = C.fg2; g.font = `12px ${FONT_MONO}`
+    g.fillText(`t ${fmtDur(f.t)}   in pods ${docked}   flying ${f.drones.filter((d) => d[2] === 'fly').length}   hovering ${f.drones.filter((d) => d[2] === 'hover').length}   standby ${f.drones.filter((d) => d[2] === 'standby').length}   parcels waiting ${f.orders.length}   wind ${fmt(f.wind, 1)} m/s   rain ${fmt(f.rain, 0)}`, 10, h - 10)
+  }, [rec, i])
+  return <canvas ref={ref} className="h-[560px] w-full rounded-lg" aria-label="fleet map" />
+}
+
+function ckOpts(list: string[], extra: { value: string; label: string }[]) {
+  return [...extra, ...list.slice().reverse().map((c) => ({ value: c, label: c.replace('step_', '').replace('.zip', '').replace(/^0+/, '') + ' steps' }))]
+}
+
+function FleetWatch({ pods, drones }: { pods: string[]; drones: string[] }) {
+  const t = useT()
+  const [pc, setPc] = useState('latest')
+  const [dc, setDc] = useState('latest')
+  const [seed, setSeed] = useState(7)
+  const [rec, setRec] = useState<FRec | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const r = useReplay(rec as unknown as Rec | null)
+  const record = async () => {
+    setBusy(true); setErr(null)
+    try { setRec(await postJSON<FRec>('/rl/watch', { brain: 'fleet', checkpoint: pc, drone_checkpoint: dc, seed })) }
+    catch (e) { setErr(String(e)) } finally { setBusy(false) }
+  }
+  const now = rec?.frames[r.i]?.t ?? 0
+  const recent = rec ? rec.events.filter((e) => e.t <= now).slice(-10).reverse() : []
+  const k = rec?.kpi ?? {}
+  const num = (x: unknown, d = 1) => (typeof x === 'number' ? fmt(x, d) : '–')
+  return (
+    <>
+      <Card title={t('tr_watch')} className="xl:col-span-3" footer={t('tr_f_legend')}>
+        <div className="grid gap-3 md:grid-cols-4">
+          <Select label={t('tr_f_pod')} value={pc} options={ckOpts(pods, [{ value: 'latest', label: t('tr_latest') }, { value: 'rule', label: t('tr_f_rule') }])} onChange={setPc} />
+          <Select label={t('tr_f_drone')} value={dc} options={ckOpts(drones, [{ value: 'latest', label: t('tr_latest') }, { value: 'rule', label: t('tr_f_rule') }])} onChange={setDc} />
+          <Stepper label={t('tr_seed')} value={seed} min={0} max={9999} onChange={setSeed} />
+          <div className="flex items-end"><Button variant="primary" busy={busy} onClick={record}>{busy ? t('tr_recording') : t('tr_record')}</Button></div>
+        </div>
+        {err && <Badge tone="bad">{t('tr_err_msg')}: {err.slice(0, 160)}</Badge>}
+        {rec ? <>
+          <MissionMapWrap><FleetMap rec={rec} i={r.i} /></MissionMapWrap>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="sm" onClick={() => { if (r.i >= rec.frames.length - 1) r.setI(0); r.setPlay(!r.play) }}>{r.play ? t('tr_pause') : t('tr_play')}</Button>
+            <Segmented size="sm" label={t('tr_speed')} value={r.speed} onChange={r.setSpeed}
+              options={['1', '5', '20', '100'].map((v) => ({ value: v, label: `${Number(v) * 50}×` }))} />
+            <div className="min-w-[240px] flex-1">
+              <Slider label={t('tr_time')} value={r.i} min={0} max={rec.frames.length - 1} onChange={(v) => { r.setPlay(false); r.setI(v) }}
+                format={(v) => fmtDur(rec.frames[v]?.t ?? 0)} />
+            </div>
+          </div>
+        </> : <EmptyState>{t('tr_f_none')}</EmptyState>}
+      </Card>
+      <Card title={rec ? t('tr_episode') : t('tr_f_events')}>
+        {rec && <>
+          <KV k={t('tr_f_pod')} v={rec.pod_checkpoint} />
+          <KV k={t('tr_f_drone')} v={rec.drone_checkpoint} />
+          <KV k={t('tr_f_deliv')} v={num(k.deliveries_per_h)} />
+          <KV k={t('tr_m_lead_k')} v={typeof k.lead_mean_s === 'number' ? `${fmt(k.lead_mean_s / 60, 1)} min` : '–'} />
+          <KV k={t('tr_m_c100')} v={num(k.crashes_per_100)} tone={Number(k.crashes_per_100) > 6 ? 'bad' : 'good'} />
+          <KV k={t('tr_f_strandk')} v={num(k.stranded, 0)} tone={Number(k.stranded) > 0 ? 'bad' : 'good'} />
+          <KV k={t('tr_f_swaps')} v={num(k.swaps, 0)} />
+          <KV k={t('tr_f_recov')} v={num(k.recoveries, 0)} />
+          <KV k={t('tr_f_repl')} v={num(k.replacements, 0)} />
+          <KV k={t('tr_f_charges')} v={num(k.charges, 0)} />
+          <KV k={t('tr_f_takeoff')} v={num(k.takeoff_crash, 0)} />
+          <KV k={t('tr_f_waiting')} v={num(k.waiting, 0)} />
+          <h4 className="mt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-fg-mute">{t('tr_f_events')}</h4>
+          <ul className="flex flex-col gap-1 font-mono text-xs text-fg-2">
+            {recent.map((e, n) => <li key={n}>{fmtDur(e.t)} · {e.what}{e.why ? ` (${String(e.why)})` : ''}{e.kind ? ` ${String(e.kind)}` : ''}</li>)}
+          </ul>
+        </>}
+      </Card>
+    </>
+  )
+}
+
+function MissionMapWrap({ children }: { children: React.ReactNode }) { return <>{children}</> }
+
+// ---- driving: one route, lane edges, stop lines, lights, cars / 運転 ----
+interface DFrame { t: number; p: number[]; v: number; off: number; cars: number[][]; lights: number[] }
+interface DRec {
+  checkpoint: string; seed: number; route_len: number; traffic: number; frames: DFrame[]
+  kpi: { end: string; reached: boolean; stop_violation: number; red_violation: number; centre_s: number; speeding_s: number; progress: number; time_s: number; length: number }
+  edges: number[][]; marks: { xy: number[]; yaw: number; w: number; kind: string }[]; limit: number[]
+}
+const EDGE_COL = [C.danger, C.fg2, C.warn]
+const LIGHT_COL = [C.accent, C.warn, C.danger]
+
+function DriveMap({ rec, i }: { rec: DRec; i: number }) {
+  const ref = useCanvas((g, w, h) => {
+    const f = rec.frames[i]
+    if (!f) return
+    const view = 70
+    const s = Math.min(w, h) / view
+    const P = (x: number, y: number): [number, number] => [w / 2 + (x - f.p[0]) * s, h / 2 + (y - f.p[1]) * s]
+    g.fillStyle = C.bg; g.fillRect(0, 0, w, h)
+    g.fillStyle = '#1e293b'
+    for (let k = 1; k < rec.edges.length; k++) {
+      const a = rec.edges[k - 1], b = rec.edges[k]
+      const pts = [P(a[0], a[1]), P(b[0], b[1]), P(b[3], b[4]), P(a[3], a[4])]
+      g.beginPath(); pts.forEach(([x, y], n) => (n ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fill()
+    }
+    for (let k = 1; k < rec.edges.length; k++) {
+      const a = rec.edges[k - 1], b = rec.edges[k]
+      for (const [xi, yi, ki] of [[0, 1, 2], [3, 4, 5]]) {
+        const kind = b[6] ? 1 : b[ki]
+        g.strokeStyle = EDGE_COL[kind] ?? C.mute; g.lineWidth = kind === 0 ? 3 : 1.5
+        g.setLineDash(kind === 2 ? [4, 3] : [])
+        const [x1, y1] = P(a[xi], a[yi]), [x2, y2] = P(b[xi], b[yi]); g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke()
+      }
+    }
+    g.setLineDash([])
+    rec.marks.forEach((m, n) => {
+      const nx = -Math.sin(m.yaw) * m.w / 2, ny = Math.cos(m.yaw) * m.w / 2
+      const [ax, ay] = P(m.xy[0] + nx, m.xy[1] + ny), [bx, by] = P(m.xy[0] - nx, m.xy[1] - ny)
+      const lt = f.lights[n]
+      g.strokeStyle = m.kind === 'stop' ? C.fg : (LIGHT_COL[lt] ?? C.mute); g.lineWidth = 4
+      g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke()
+      g.fillStyle = m.kind === 'stop' ? C.danger : (LIGHT_COL[lt] ?? C.mute); g.font = `11px ${FONT_MONO}`
+      g.fillText(m.kind === 'stop' ? '止まれ' : '●', bx + 4, by)
+    })
+    const box = (x: number, y: number, yaw: number, col: string) => {
+      const [cx, cy] = P(x, y)
+      g.save(); g.translate(cx, cy); g.rotate(yaw); g.fillStyle = col; g.fillRect(-1.8 * s, -0.8 * s, 3.6 * s, 1.6 * s); g.restore()
+    }
+    for (const c of f.cars) box(c[0], c[1], c[2], '#64748b')
+    box(f.p[0], f.p[1], f.p[2], C.cyan)
+    g.fillStyle = C.fg2; g.font = `12px ${FONT_MONO}`
+    g.fillText(`t ${fmt(f.t, 1)} s   ${fmt(f.v * 3.6, 0)} km/h   offset ${fmt(f.off, 2)} m`, 10, h - 10)
+  }, [rec, i])
+  return <canvas ref={ref} className="h-[460px] w-full rounded-lg" aria-label="driving view" />
+}
+
+function DriveSpeed({ rec, i }: { rec: DRec; i: number }) {
+  const t = useT()
+  const ref = useCanvas((g, w, h) => {
+    const n = rec.frames.length
+    if (n < 2) return
+    const mx = 40
+    const X = (k: number) => (k / (n - 1)) * w, Y = (v: number) => h - 4 - (v / mx) * (h - 8)
+    g.strokeStyle = C.mute; g.lineWidth = 1; g.beginPath()
+    rec.frames.forEach((_, k) => { const L = rec.limit[Math.min(rec.limit.length - 1, Math.floor((k / (n - 1)) * (rec.limit.length - 1)))] ?? 30; if (k) g.lineTo(X(k), Y(L)); else g.moveTo(X(k), Y(L)) }); g.stroke()
+    g.strokeStyle = C.cyan; g.lineWidth = 2; g.beginPath()
+    rec.frames.forEach((f, k) => { if (k) g.lineTo(X(k), Y(f.v * 3.6)); else g.moveTo(X(k), Y(f.v * 3.6)) }); g.stroke()
+    g.strokeStyle = C.fg; g.beginPath(); g.moveTo(X(i), 0); g.lineTo(X(i), h); g.stroke()
+  }, [rec, i])
+  return <Card title={t('tr_d_speedchart')} className="xl:col-span-3"><canvas ref={ref} className="h-32 w-full" aria-label={t('tr_d_speedchart')} /></Card>
+}
+
+function DriveWatch({ ckpts }: { ckpts: string[] }) {
+  const t = useT()
+  const [ck, setCk] = useState('latest')
+  const [seed, setSeed] = useState(7)
+  const [rec, setRec] = useState<DRec | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const r = useReplay(rec as unknown as Rec | null)
+  const record = async () => {
+    setBusy(true); setErr(null)
+    try { setRec(await postJSON<DRec>('/rl/watch', { brain: 'drive', checkpoint: ck, seed })) }
+    catch (e) { setErr(String(e)) } finally { setBusy(false) }
+  }
+  const k = rec?.kpi
+  return (
+    <>
+      <Card title={t('tr_watch')} className="xl:col-span-3" footer={t('tr_d_legend')}>
+        <div className="grid gap-3 md:grid-cols-3">
+          <Select label={t('tr_ckpt')} value={ck} options={ckOpts(ckpts, [{ value: 'latest', label: t('tr_latest') }, { value: 'scripted', label: t('tr_d_scripted') }])} onChange={setCk} />
+          <Stepper label={t('tr_seed')} value={seed} min={0} max={9999} onChange={setSeed} />
+          <div className="flex items-end"><Button variant="primary" busy={busy} onClick={record}>{busy ? t('tr_recording') : t('tr_record')}</Button></div>
+        </div>
+        {err && <Badge tone="bad">{t('tr_err_msg')}: {err.slice(0, 160)}</Badge>}
+        {rec ? <>
+          <DriveMap rec={rec} i={r.i} />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="sm" onClick={() => { if (r.i >= rec.frames.length - 1) r.setI(0); r.setPlay(!r.play) }}>{r.play ? t('tr_pause') : t('tr_play')}</Button>
+            <Segmented size="sm" label={t('tr_speed')} value={r.speed} onChange={r.setSpeed}
+              options={['1', '5', '20', '100'].map((v) => ({ value: v, label: `${Number(v) * 2}×` }))} />
+            <div className="min-w-[240px] flex-1">
+              <Slider label={t('tr_time')} value={r.i} min={0} max={rec.frames.length - 1} onChange={(v) => { r.setPlay(false); r.setI(v) }}
+                format={(v) => `${fmt(rec.frames[v]?.t ?? 0, 1)} s`} />
+            </div>
+          </div>
+        </> : <EmptyState>{t('tr_d_none')}</EmptyState>}
+      </Card>
+      <Card title={t('tr_episode')}>
+        {k && <>
+          <KV k={t('tr_ckpt')} v={rec.checkpoint} />
+          <KV k={t('tr_d_end')} v={k.end || '–'} tone={k.reached ? 'good' : 'bad'} />
+          <KV k={t('tr_n_distk')} v={`${fmt(k.progress, 0)} / ${fmt(k.length, 0)} m`} />
+          <KV k={t('tr_d_viol')} v={`${k.stop_violation} / ${k.red_violation}`} tone={k.stop_violation + k.red_violation ? 'bad' : 'good'} />
+          <KV k={t('tr_d_centre')} v={`${fmt(k.centre_s, 1)} s`} tone={k.centre_s > 0 ? 'warn' : 'good'} />
+          <KV k={t('tr_d_speeding')} v={`${fmt(k.speeding_s, 1)} s`} tone={k.speeding_s > 0 ? 'warn' : 'good'} />
+          <KV k={t('tr_d_speedk')} v={`${fmt(k.progress / Math.max(k.time_s, 1) * 3.6, 0)} km/h`} />
+        </>}
+      </Card>
+      {rec && <DriveSpeed rec={rec} i={r.i} />}
+    </>
+  )
+}
+
 export default function TrainingView() {
   const t = useT()
-  const [brain, setBrain] = useState<Brain>('nav')
+  const [brain, setBrain] = useState<Brain>('fleet')
   const { data } = usePoll<RlState>(`/rl/state?brain=${brain}`, 5000)
   const st = data && (data as RlState & { _b?: string }) ? data : null
   return (
     <div className="flex flex-col gap-4">
       <SectionTitle sub={t('tr_sub')}>{t('tr_title')}</SectionTitle>
       <Segmented label={t('tr_brain')} value={brain} onChange={setBrain}
-        options={[{ value: 'nav', label: t('tr_b_nav') }, { value: 'mission', label: t('tr_b_mission') },
-          { value: 'flight', label: t('tr_b_flight') }]} />
+        options={[{ value: 'fleet', label: t('tr_b_fleet') }, { value: 'drive', label: t('tr_b_drive') },
+          { value: 'nav', label: t('tr_b_nav') }, { value: 'mission', label: t('tr_b_mission') + t('tr_retired') },
+          { value: 'flight', label: t('tr_b_flight') + t('tr_retired') }]} />
       <Grid cols={4}>
         <Trainer key={`t-${brain}`} st={st} brain={brain} />
         <Learning rows={(st?.progress ?? []) as unknown as Record<string, number>[]} brain={brain} rule={st?.rule} />
-        {brain === 'flight' ? <Watch ckpts={st?.checkpoints ?? []} />
+        {brain === 'fleet' ? <FleetWatch pods={st?.checkpoints ?? []} drones={st?.drone_checkpoints ?? []} />
+          : brain === 'drive' ? <DriveWatch ckpts={st?.checkpoints ?? []} />
+          : brain === 'flight' ? <Watch ckpts={st?.checkpoints ?? []} />
           : brain === 'nav' ? <NavWatch ckpts={st?.checkpoints ?? []} /> : <MissionWatch ckpts={st?.checkpoints ?? []} />}
       </Grid>
     </div>

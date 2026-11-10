@@ -1776,6 +1776,16 @@ def _rl_trainer_alive():
         return False
 
 
+def _rl_brain_running(brain):
+    """Is a trainer process for this brain running? (ps, not the status file:
+    the fleet trainer writes it only between rounds) / 学習プロセスの有無"""
+    try:
+        out = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any("rl_delivery.train" in line and "--brain %s" % brain in line for line in out.splitlines())
+
+
 @app.route("/rl/state")
 def rl_state():
     """Trainer status, progress rows and checkpoints of one brain. / 学習の状態"""
@@ -1788,19 +1798,28 @@ def rl_state():
     rows = []
     try:
         with open(os.path.join(RL_RES, "%s_progress.csv" % brain), newline="") as f:
-            rows = [{k: (float(v) if v not in ("", None) else None) for k, v in r.items()} for r in csv.DictReader(f)]
+            def num(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None if v in ("", None) else v
+            rows = [{k: num(v) for k, v in r.items()} for r in csv.DictReader(f)]
     except OSError:
         pass
-    ck = sorted(glob.glob(os.path.join(RL_DIR, "checkpoints", brain, "step_*.zip")))
-    alive = _rl_trainer_alive() if brain == "flight" else (
-        bool(st.get("running")) and time.time() - st.get("t", 0) < 900)
+    ck = sorted(glob.glob(os.path.join(RL_DIR, "checkpoints", "fleet_pod" if brain == "fleet" else brain,
+                                       "step_*.zip")))
+    ck_drone = sorted(glob.glob(os.path.join(RL_DIR, "checkpoints", "fleet_drone", "step_*.zip"))) \
+        if brain == "fleet" else []
+    alive = _rl_brain_running(brain)
     rule = None
     try:
-        rule = json.load(open(os.path.join(RL_RES, "mission_rule_baseline.json")))
+        rule = json.load(open(os.path.join(RL_RES, "fleet_rule_baseline.json" if brain == "fleet"
+                                           else "mission_rule_baseline.json")))
     except (OSError, ValueError):
         pass
     return jsonify({"state": st, "alive": alive, "progress": rows, "rule": rule,
-                    "checkpoints": [os.path.basename(c) for c in ck]})
+                    "checkpoints": [os.path.basename(c) for c in ck],
+                    "drone_checkpoints": [os.path.basename(c) for c in ck_drone]})
 
 
 @app.route("/rl/train", methods=["POST"])
@@ -1811,7 +1830,7 @@ def rl_train():
         b = str(body.get("brain", "flight"))
         open(os.path.join(RL_RES, "STOP" if b == "flight" else "STOP_" + os.path.basename(b)), "w").close()      # the trainer saves and exits / 保存して終了
         return jsonify({"ok": True})
-    if str(body.get("brain", "flight")) == "flight" and _rl_trainer_alive():
+    if _rl_brain_running(str(body.get("brain", "flight"))):
         return jsonify({"error": "a trainer is already running"}), 409
     cmd = [RL_PY, "-W", "ignore", "-m", "rl_delivery.train", "--brain", str(body.get("brain", "flight")),
            "--hours", str(float(body.get("hours", 3)))]
@@ -1831,11 +1850,15 @@ def rl_watch():
     body = request.get_json(silent=True) or {}
     out = os.path.join(RL_RES, "watch", "_last.json")
     ck = str(body.get("checkpoint", "latest"))
+    brain = str(body.get("brain", "flight"))
     if ck not in ("latest", "pid", "rule", "scripted"):
-        ck = os.path.join(RL_DIR, "checkpoints", str(body.get("brain", "flight")), os.path.basename(ck))
+        ck = os.path.join(RL_DIR, "checkpoints", "fleet_pod" if brain == "fleet" else brain, os.path.basename(ck))
+    dck = str(body.get("drone_checkpoint", "latest"))
+    if dck not in ("latest", "rule"):
+        dck = os.path.join(RL_DIR, "checkpoints", "fleet_drone", os.path.basename(dck))
     cmd = [RL_PY, "-W", "ignore", "-m", "rl_delivery.watch", "--brain", str(body.get("brain", "flight")),
            "--checkpoint", ck, "--wind", str(float(body.get("wind", 1.0))),
-           "--seed", str(int(body.get("seed", 7))), "--out", out]
+           "--seed", str(int(body.get("seed", 7))), "--out", out, "--drone-checkpoint", dck]
     try:
         r = subprocess.run(cmd, cwd=os.path.dirname(RL_DIR), capture_output=True, text=True, timeout=180)
     except subprocess.TimeoutExpired:

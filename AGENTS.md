@@ -232,3 +232,20 @@ More: map guide ch. 35 (embedded core), ch. 7 (import), ch. 8 (live traps), and 
 OitaStation extended map imported 2026-11-09 (v8 core inside a generated city to ±640 m); all
 12 own cars rebuilt incl. the NPC-only Oita bus `vehicle.oitabus.erga`. Open items and the
 timeline: `CARLA_RIG_SETUP_FROM_SCRATCH.md` sections 9.2 and 10.
+
+## 10. RL for the pods and drones (`hil_sim/rl_delivery/`)
+
+Read `PythonAPI/hil_sim/docs/RL_DELIVERY.md` fully before touching it (skill stub:
+`.agents/skills/rl-delivery`). Essentials:
+- Brains: pod + drone decision brains (fleet world `env_fleet.py`, trained in turns), pod
+  driving (`env_drive.py`, SAC), drone navigation (`env_nav.py`, RecurrentPPO). Mission and
+  flight brains are retired.
+- User rules: **nothing hardcoded** (every behaviour learned; rule/scripted/PID code only as
+  baselines), **pure RL, no geofence / emergency stop**, pretend world first, agents may fail,
+  hidden realistic wind, OitaKosen first, check the trainings every 30 min and fix stuck or
+  exploiting brains with world rules / rewards (never steering).
+- One trainer per brain (`ps -eo pid,etime,args | grep "[r]l_delivery.train"`); stop with
+  `touch rl_delivery/results/STOP_<brain>`, carry on with `--resume`; trainers die with the
+  agent session. Dashboard AI training page = status, charts, watch-mode replays.
+- No CARLA bridge yet (plan: `PythonAPI/hil_sim/docs/RL_CARLA_BRIDGE.md`); CARLA tests need the demo stopped:
+  ask the user.

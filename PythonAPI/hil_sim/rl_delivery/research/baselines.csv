@@ -1,0 +1,7 @@
+baseline,what,result,file
+carla_rule_fleet,"today's rule fleet in CARLA, OitaKosen, 5 seeds x 30 min, 3 pods, 9 cars, 20 walkers","pods 23.6 deliveries/h, lead 10.3 min; drones 23.6/h, 5.2 crashes/100, lowest landing 66 %",baseline_OitaKosen.json
+fleet_rule_flow,fleet_rules.py in the fleet world (4 x 3 h),"41.5 deliveries/h, 15.3 crashes/100, 0 stranded, 831 s/h hovering",fleet_rule_baseline.json
+mission_rule,RuleMission in env_mission (6 x 1 h),"11.5 deliveries/h, 4.2 crashes/100, 15.5 min lead, lowest landing 47 %",mission_rule_baseline.json
+flight_pid,PidPilot in env_flight (30 flights per wind level),calm 97 % / 1.25 m; full wind 90 % / 1.38 m / 10 % crash,
+nav_scripted,"ScriptedPilot in env_nav (climb 45 m, straight, descend; no avoidance)","one leg: 65 % reached, 30 % obstacle, 5 % no-fly; two legs <= 200 m: 19/20 landed",
+drive_scripted,"ScriptedDriver in env_drive (40 routes, 400 m)","31/40 reached, 0 stop/red violations, 3 kerb, 2.4 m/s",

@@ -131,38 +131,49 @@ class NavEnv(gym.Env):
     # -- episodes / エピソード
     def _pick(self):
         """Take-off spot on a road in a pod zone, a drop in the same zone and
-        the meeting point (where the pod waits) on another road in that zone,
-        all clear of no-fly zones and under open sky. / 離陸地点・投下点・合流地点"""
+        the meeting point (where the pod waits) on another road of that zone near
+        the drop, all clear of no-fly zones and under open sky. Never falls back
+        to a made-up trip: if none fits, the distance cap widens a little.
+        / 離陸地点・投下点・合流地点（作り物の代替はしない）"""
         keep = self.m["keep"]
-        for _ in range(200):
-            n = self.m["nodes"][keep[int(self.rng.integers(len(keep)))]]
-            start = np.array(n[:2], float)
-            z = self._zone_of(start)
-            if z is None or self._in_nofly(start, 20.0) or not self._open_sky(start, 3.0):
+        if not hasattr(self, "_zone_nodes"):
+            self._zone_nodes = {}
+            for i in keep:
+                q = np.array(self.m["nodes"][i][:2], float)
+                z = self._zone_of(q)
+                if z is not None and not self._in_nofly(q, 20.0):
+                    self._zone_nodes.setdefault(z, []).append(q)
+            self._zone_nodes = {z: np.array(v) for z, v in self._zone_nodes.items()}
+        cap = self.max_dist
+        for attempt in range(2000):
+            if attempt and attempt % 200 == 0:
+                cap *= 1.2
+            z = list(self._zone_nodes)[int(self.rng.integers(len(self._zone_nodes)))]
+            Z = self._zone_nodes[z]
+            start = Z[int(self.rng.integers(len(Z)))]
+            if not self._open_sky(start, 3.0):
                 continue
             r = self.zones[z]
             cand = [b for b in self.drops if r["x0"] <= b["x"] <= r["x1"] and r["y0"] <= b["y"] <= r["y1"]
                     and not self._in_nofly((b["x"], b["y"]), 15.0)
-                    and 30.0 < math.dist((b["x"], b["y"]), start) < self.max_dist]
-            if cand:
-                b = cand[int(self.rng.integers(len(cand)))]
-                # the drop: just outside the building, on the side facing the start / 建物の手前
-                v = start - np.array([b["x"], b["y"]])
-                v /= np.linalg.norm(v) + 1e-9
-                drop = np.array([b["x"], b["y"]]) + v * (max(b["len"], b["wid"]) / 2.0 + 3.0)
-                if not self._open_sky(drop, 2.0):
-                    continue
-                meets = []
-                for _k in range(40):
-                    q = np.array(self.m["nodes"][keep[int(self.rng.integers(len(keep)))]][:2], float)
-                    if (r["x0"] <= q[0] <= r["x1"] and r["y0"] <= q[1] <= r["y1"] and not self._in_nofly(q, 20.0)
-                            and 30.0 < math.dist(q, drop) < self.max_dist and self._open_sky(q, 3.0)):
-                        meets.append(q)
-                        break
-                if not meets:
-                    continue
-                return start, drop, meets[0], z
-        return start, start + np.array([80.0, 0.0]), start.copy(), z
+                    and 30.0 < math.dist((b["x"], b["y"]), start) < cap]
+            if not cand:
+                continue
+            b = cand[int(self.rng.integers(len(cand)))]
+            # the drop: just outside the building, on the side facing the start / 建物の手前
+            v = start - np.array([b["x"], b["y"]])
+            v /= np.linalg.norm(v) + 1e-9
+            drop = np.array([b["x"], b["y"]]) + v * (max(b["len"], b["wid"]) / 2.0 + 3.0)
+            if not self._open_sky(drop, 2.0) or math.dist(drop, start) < 20.0:
+                continue
+            d = np.linalg.norm(Z - drop, axis=1)
+            near = np.nonzero((d > 30.0) & (d < cap))[0]
+            self.rng.shuffle(near)
+            for j in near[:25]:
+                meet = Z[j]
+                if self._open_sky(meet, 3.0):
+                    return start.copy(), drop, meet.copy(), z
+        raise RuntimeError("no trip found / 経路が見つからない")
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -247,8 +258,10 @@ class NavEnv(gym.Env):
         term = trunc = False
         top = float(self.H.top_at(dr.p[0], dr.p[1]))
         hd_goal = float(np.linalg.norm(self.goal[:2] - dr.p[:2]))
-        landed = (self.phase == 1 and hd_goal < 1.0 and dr.p[2] - self.goal[2] < 0.4
-                  and dr.v[2] > -1.0 and float(np.linalg.norm(dr.v[:2])) < 0.8)
+        # touchdown on the pod roof: within 1.3 m of its centre, sinking < 1.5 m/s,
+        # drifting < 1.2 m/s (was 1.0 / 1.0 / 0.8: never learnt) / ポッドへの着陸条件
+        landed = (self.phase == 1 and hd_goal < 1.3 and dr.p[2] - self.goal[2] < 0.6
+                  and dr.v[2] > -1.5 and float(np.linalg.norm(dr.v[:2])) < 1.2)
         if landed:
             pass
         elif self.phase == 1 and hd_goal < 1.6 and dr.p[2] < self.goal[2] + 0.2:

@@ -12,6 +12,7 @@ and same wind, so checkpoints can be compared on one flight.
 """
 import argparse
 import json
+import math
 import os
 
 import numpy as np
@@ -151,16 +152,112 @@ def record_nav(checkpoint, wind, seed, map_name="OitaKosen", dist=900.0):
             "ground": np.round(gnd, 1).ravel().tolist()}
 
 
+def record_fleet(pod_ck, drone_ck, seed, map_name="OitaKosen", hours=1.0):
+    """One hour of the whole fleet: 3 pods, every drone (standbys too), orders,
+    stations, lockers, every 5 s, plus the event log. / フリート全体の 1 時間"""
+    from sb3_contrib import MaskablePPO
+    from rl_delivery.env_fleet import PodView
+    from rl_delivery.fleet_rules import rule_pod
+
+    def load(ck, brain):
+        if ck == "rule":
+            return None, "rule"
+        path = latest(brain) if ck in ("latest", "", None) else ck
+        if not path:
+            return None, "rule (no %s checkpoint yet)" % brain
+        return MaskablePPO.load(path, device="cpu"), os.path.basename(path)
+    pm, pname = load(pod_ck, "fleet_pod")
+    dm, dname = load(drone_ck, "fleet_drone")
+    other = (lambda o, m: int(dm.predict(o, action_masks=m, deterministic=False)[0])) if dm else None
+    env = PodView(map_name, seed=seed, other=other)
+    obs, _ = env.reset(seed=seed)
+    W = env.W
+    W.log, W.events = [], []
+    while W.t < hours * 3600.0:
+        if pm is not None:
+            a = int(pm.predict(obs, action_masks=env.action_masks(), deterministic=False)[0])
+        else:
+            a = rule_pod(W, env.cur[1])
+        obs, _r, te, tr, info = env.step(a)
+        if te or tr:
+            break
+    m = W.m
+    return {"brain": "fleet", "pod_checkpoint": pname, "drone_checkpoint": dname, "seed": seed,
+            "frames": W.log, "events": W.events[-2000:], "kpi": W.kpi(), "bounds": m["bounds"],
+            "zones": m["zones"]["pods"], "nofly": m["zones"]["nofly"],
+            "stations": [[round(float(st["xy"][0]), 1), round(float(st["xy"][1]), 1)] for st in W.stations],
+            "lockers": [[round(float(L["xy"][0]), 1), round(float(L["xy"][1]), 1)] for L in W.lockers],
+            "lines": [[[round(x), round(y)] for x, y in l[::3] + [l[-1]]] for l in m["lines"]],
+            "checkpoint": pname}
+
+
+def record_drive(checkpoint, seed, map_name="OitaKosen"):
+    """One driving run: the route with its lane edges (kerb / lane / centre line),
+    stop lines and lights, the other cars and the pod, every 0.2 s.
+    運転 1 回：経路・縁の種類・停止線と信号・他車・ポッド"""
+    from rl_delivery.env_drive import DriveEnv, ScriptedDriver
+    env = DriveEnv(map_name, seed=seed)
+    model = None
+    if checkpoint == "scripted":
+        name = "scripted"
+    else:
+        from stable_baselines3 import SAC
+        path = latest("drive") if checkpoint in ("latest", "", None) else checkpoint
+        if not path:
+            raise SystemExit("no drive checkpoint yet")
+        model = SAC.load(path, device="cpu")
+        name = os.path.basename(path)
+        meta = path[:-4] + ".json"
+        if os.path.exists(meta):
+            with open(meta) as f:
+                j = json.load(f)
+            env.route_len, env.traffic = float(j.get("route_len", 150.0)), int(j.get("traffic", 0))
+    obs, _ = env.reset(seed=seed)
+    env.log = []
+    pol = ScriptedDriver(env) if model is None else None
+    while True:
+        act = pol.act(obs) if model is None else model.predict(obs, deterministic=True)[0]
+        obs, _r, te, tr, info = env.step(act)
+        if te or tr:
+            break
+    P = env.P
+    edges = []
+    for q in P[::2]:
+        h, half = q[2], q[3] / 2.0
+        nx_, ny_ = -math.sin(h), math.cos(h)
+        edges.append([round(q[0] + nx_ * half, 2), round(q[1] + ny_ * half, 2), int(q[4]),
+                      round(q[0] - nx_ * half, 2), round(q[1] - ny_ * half, 2), int(q[5]), int(q[7])])
+    marks = []
+    for m in env.marks:
+        q = env._at(m[0])
+        marks.append({"xy": [round(float(q[0]), 2), round(float(q[1]), 2)], "yaw": round(float(q[2]), 3),
+                      "w": round(float(q[3]), 2), "kind": m[1]})
+    frames = []
+    for f in env.log:
+        f = dict(f)
+        f["cars"] = [[round(float(env._at(cs)[0]), 2), round(float(env._at(cs)[1]), 2),
+                      round(float(env._at(cs)[2]), 3)] for cs in f["cars"]]
+        frames.append(f)
+    return {"brain": "drive", "checkpoint": name, "seed": seed, "route_len": env.route_len,
+            "traffic": env.traffic, "frames": frames, "kpi": info["kpi"], "edges": edges, "marks": marks,
+            "limit": [round(float(q[6]), 0) for q in P[::5]]}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--brain", default="flight", choices=["flight", "mission", "nav"])
+    ap.add_argument("--brain", default="flight", choices=["flight", "mission", "nav", "fleet", "drive"])
+    ap.add_argument("--drone-checkpoint", default="latest")
     ap.add_argument("--checkpoint", default="latest")
     ap.add_argument("--wind", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--map", default="OitaKosen")
     ap.add_argument("--out", default="")
     a = ap.parse_args()
-    if a.brain == "mission":
+    if a.brain == "fleet":
+        rec = record_fleet(a.checkpoint, a.drone_checkpoint, a.seed, a.map)
+    elif a.brain == "drive":
+        rec = record_drive(a.checkpoint, a.seed, a.map)
+    elif a.brain == "mission":
         rec = record_mission(a.checkpoint, a.seed, a.map)
     elif a.brain == "nav":
         rec = record_nav(a.checkpoint, a.wind, a.seed, a.map)

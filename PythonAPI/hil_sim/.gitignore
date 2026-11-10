@@ -81,3 +81,7 @@ rl_delivery/checkpoints/
 rl_delivery/results/
 rl_delivery/maps/
 rl_delivery/__pycache__/
+# experiment runs: keep configs + progress in git, not the models / 実験のモデルは追跡しない
+rl_delivery/research/exp/*/*/checkpoints/
+rl_delivery/research/queue_state.json
+rl_delivery/research/queue_logs/

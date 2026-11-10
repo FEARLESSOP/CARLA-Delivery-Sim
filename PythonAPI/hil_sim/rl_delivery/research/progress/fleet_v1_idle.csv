@@ -1,0 +1,2 @@
+round,brain,steps,wall_s,deliveries_per_h,f2f_per_h,drone_per_h,lead_mean_s,crashes_per_100,landing_min,hover_s_per_h,swaps,recoveries,replacements,stranded,charges,takeoff_crash,waiting
+0,pod,202752,785,0.0,0.0,0.0,,0.0,,0.0,0.0,0.0,0.0,3.0,0.0,0.0,218.5

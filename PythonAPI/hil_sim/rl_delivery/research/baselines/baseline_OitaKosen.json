@@ -1,0 +1,377 @@
+{
+ "map": "OitaKosen",
+ "duration_s": 1800.0,
+ "vans": 3,
+ "runs": [
+  {
+   "seed": 1,
+   "rc": 0,
+   "wall_s": 391,
+   "dir": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/data/delivery/20261109_143831",
+   "kpi": {
+    "sim_hours": 0.5,
+    "pod": {
+     "deliveries": 10,
+     "per_hour": 20.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 702.9,
+     "lead_time_p95_s": 1657.7,
+     "stranded": 0,
+     "out_of_zone_working_s": 6.0,
+     "per_pod": [
+      {
+       "pod": 1,
+       "deliveries": 5,
+       "utilisation": 0.999,
+       "charging_share": 0.0,
+       "stops": 15,
+       "mean_stop_s": 7.8,
+       "kwh_used": 8.161,
+       "kwh_per_delivery": 1.632,
+       "km_per_delivery": 1.223,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 0.0
+      },
+      {
+       "pod": 2,
+       "deliveries": 2,
+       "utilisation": 1.0,
+       "charging_share": 0.403,
+       "stops": 9,
+       "mean_stop_s": 4.7,
+       "kwh_used": 5.173,
+       "kwh_per_delivery": 2.586,
+       "km_per_delivery": 2.656,
+       "out_of_zone_working_s": 6.0,
+       "transit_other_zone_s": 964.0
+      },
+      {
+       "pod": 3,
+       "deliveries": 3,
+       "utilisation": 0.997,
+       "charging_share": 0.394,
+       "stops": 10,
+       "mean_stop_s": 6.4,
+       "kwh_used": 4.915,
+       "kwh_per_delivery": 1.638,
+       "km_per_delivery": 1.607,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 426.0
+      }
+     ]
+    },
+    "drone": {
+     "deliveries": 16,
+     "per_hour": 32.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 373.0,
+     "lead_time_p95_s": 560.0,
+     "flight_time_mean_s": 84.7,
+     "landing_battery_min": 61.5,
+     "landing_battery_mean": 75.4,
+     "crashes_per_100_trips": 0.0,
+     "weather_hold_s": 19.0,
+     "fleet_ready_share": 0.946,
+     "nofly_breach_samples": 0,
+     "drops_outside_zone": 0
+    }
+   }
+  },
+  {
+   "seed": 2,
+   "rc": 0,
+   "wall_s": 666,
+   "dir": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/data/delivery/20261109_144456",
+   "kpi": {
+    "sim_hours": 0.5,
+    "pod": {
+     "deliveries": 11,
+     "per_hour": 22.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 668.5,
+     "lead_time_p95_s": 1565.7,
+     "stranded": 0,
+     "out_of_zone_working_s": 7.0,
+     "per_pod": [
+      {
+       "pod": 1,
+       "deliveries": 3,
+       "utilisation": 0.999,
+       "charging_share": 0.336,
+       "stops": 14,
+       "mean_stop_s": 6.7,
+       "kwh_used": 5.228,
+       "kwh_per_delivery": 1.743,
+       "km_per_delivery": 1.629,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 0.0
+      },
+      {
+       "pod": 2,
+       "deliveries": 4,
+       "utilisation": 0.999,
+       "charging_share": 0.374,
+       "stops": 13,
+       "mean_stop_s": 6.1,
+       "kwh_used": 5.097,
+       "kwh_per_delivery": 1.274,
+       "km_per_delivery": 1.28,
+       "out_of_zone_working_s": 5.0,
+       "transit_other_zone_s": 935.0
+      },
+      {
+       "pod": 3,
+       "deliveries": 4,
+       "utilisation": 0.997,
+       "charging_share": 0.397,
+       "stops": 13,
+       "mean_stop_s": 6.3,
+       "kwh_used": 4.57,
+       "kwh_per_delivery": 1.143,
+       "km_per_delivery": 1.121,
+       "out_of_zone_working_s": 2.0,
+       "transit_other_zone_s": 994.0
+      }
+     ]
+    },
+    "drone": {
+     "deliveries": 9,
+     "per_hour": 18.0,
+     "success_rate": 0.9,
+     "lead_time_mean_s": 462.3,
+     "lead_time_p95_s": 1077.4,
+     "flight_time_mean_s": 64.2,
+     "landing_battery_min": 71.6,
+     "landing_battery_mean": 80.8,
+     "crashes_per_100_trips": 10.0,
+     "weather_hold_s": 25.0,
+     "fleet_ready_share": 0.972,
+     "nofly_breach_samples": 0,
+     "drops_outside_zone": 0
+    }
+   }
+  },
+  {
+   "seed": 3,
+   "rc": 0,
+   "wall_s": 505,
+   "dir": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/data/delivery/20261109_145601",
+   "kpi": {
+    "sim_hours": 0.5,
+    "pod": {
+     "deliveries": 10,
+     "per_hour": 20.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 414.8,
+     "lead_time_p95_s": 719.0,
+     "stranded": 0,
+     "out_of_zone_working_s": 6.0,
+     "per_pod": [
+      {
+       "pod": 1,
+       "deliveries": 3,
+       "utilisation": 1.0,
+       "charging_share": 0.41,
+       "stops": 10,
+       "mean_stop_s": 5.7,
+       "kwh_used": 4.4,
+       "kwh_per_delivery": 1.467,
+       "km_per_delivery": 1.374,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 0.0
+      },
+      {
+       "pod": 2,
+       "deliveries": 2,
+       "utilisation": 0.998,
+       "charging_share": 0.425,
+       "stops": 10,
+       "mean_stop_s": 5.8,
+       "kwh_used": 4.769,
+       "kwh_per_delivery": 2.385,
+       "km_per_delivery": 2.19,
+       "out_of_zone_working_s": 4.0,
+       "transit_other_zone_s": 931.0
+      },
+      {
+       "pod": 3,
+       "deliveries": 5,
+       "utilisation": 0.997,
+       "charging_share": 0.207,
+       "stops": 13,
+       "mean_stop_s": 7.5,
+       "kwh_used": 6.163,
+       "kwh_per_delivery": 1.233,
+       "km_per_delivery": 1.254,
+       "out_of_zone_working_s": 2.0,
+       "transit_other_zone_s": 1018.0
+      }
+     ]
+    },
+    "drone": {
+     "deliveries": 8,
+     "per_hour": 16.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 487.1,
+     "lead_time_p95_s": 722.2,
+     "flight_time_mean_s": 59.9,
+     "landing_battery_min": 69.8,
+     "landing_battery_mean": 81.9,
+     "crashes_per_100_trips": 0.0,
+     "weather_hold_s": 43.0,
+     "fleet_ready_share": 0.981,
+     "nofly_breach_samples": 0,
+     "drops_outside_zone": 0
+    }
+   }
+  },
+  {
+   "seed": 4,
+   "rc": 0,
+   "wall_s": 525,
+   "dir": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/data/delivery/20261109_150424",
+   "kpi": {
+    "sim_hours": 0.5,
+    "pod": {
+     "deliveries": 14,
+     "per_hour": 28.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 760.3,
+     "lead_time_p95_s": 1193.3,
+     "stranded": 0,
+     "out_of_zone_working_s": 7.0,
+     "per_pod": [
+      {
+       "pod": 1,
+       "deliveries": 4,
+       "utilisation": 0.998,
+       "charging_share": 0.352,
+       "stops": 15,
+       "mean_stop_s": 4.3,
+       "kwh_used": 4.765,
+       "kwh_per_delivery": 1.191,
+       "km_per_delivery": 1.173,
+       "out_of_zone_working_s": 5.0,
+       "transit_other_zone_s": 804.0
+      },
+      {
+       "pod": 2,
+       "deliveries": 3,
+       "utilisation": 0.999,
+       "charging_share": 0.262,
+       "stops": 11,
+       "mean_stop_s": 4.9,
+       "kwh_used": 5.986,
+       "kwh_per_delivery": 1.995,
+       "km_per_delivery": 1.864,
+       "out_of_zone_working_s": 2.0,
+       "transit_other_zone_s": 756.0
+      },
+      {
+       "pod": 3,
+       "deliveries": 7,
+       "utilisation": 0.999,
+       "charging_share": 0.0,
+       "stops": 20,
+       "mean_stop_s": 7.5,
+       "kwh_used": 7.18,
+       "kwh_per_delivery": 1.026,
+       "km_per_delivery": 0.79,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 358.0
+      }
+     ]
+    },
+    "drone": {
+     "deliveries": 15,
+     "per_hour": 30.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 748.2,
+     "lead_time_p95_s": 1652.3,
+     "flight_time_mean_s": 74.5,
+     "landing_battery_min": 56.2,
+     "landing_battery_mean": 77.2,
+     "crashes_per_100_trips": 6.67,
+     "weather_hold_s": 38.0,
+     "fleet_ready_share": 0.952,
+     "nofly_breach_samples": 0,
+     "drops_outside_zone": 0
+    }
+   }
+  },
+  {
+   "seed": 5,
+   "rc": 0,
+   "wall_s": 534,
+   "dir": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/data/delivery/20261109_151309",
+   "kpi": {
+    "sim_hours": 0.5,
+    "pod": {
+     "deliveries": 14,
+     "per_hour": 28.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 539.1,
+     "lead_time_p95_s": 1378.1,
+     "stranded": 0,
+     "out_of_zone_working_s": 2.0,
+     "per_pod": [
+      {
+       "pod": 1,
+       "deliveries": 6,
+       "utilisation": 0.998,
+       "charging_share": 0.356,
+       "stops": 18,
+       "mean_stop_s": 7.1,
+       "kwh_used": 4.845,
+       "kwh_per_delivery": 0.808,
+       "km_per_delivery": 0.752,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 0.0
+      },
+      {
+       "pod": 2,
+       "deliveries": 4,
+       "utilisation": 1.0,
+       "charging_share": 0.254,
+       "stops": 13,
+       "mean_stop_s": 7.0,
+       "kwh_used": 5.438,
+       "kwh_per_delivery": 1.359,
+       "km_per_delivery": 1.112,
+       "out_of_zone_working_s": 2.0,
+       "transit_other_zone_s": 689.0
+      },
+      {
+       "pod": 3,
+       "deliveries": 4,
+       "utilisation": 0.999,
+       "charging_share": 0.401,
+       "stops": 12,
+       "mean_stop_s": 7.8,
+       "kwh_used": 4.503,
+       "kwh_per_delivery": 1.126,
+       "km_per_delivery": 1.076,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 403.0
+      }
+     ]
+    },
+    "drone": {
+     "deliveries": 11,
+     "per_hour": 22.0,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 622.5,
+     "lead_time_p95_s": 843.4,
+     "flight_time_mean_s": 51.4,
+     "landing_battery_min": 71.5,
+     "landing_battery_mean": 84.3,
+     "crashes_per_100_trips": 9.09,
+     "weather_hold_s": 21.0,
+     "fleet_ready_share": 0.974,
+     "nofly_breach_samples": 0,
+     "drops_outside_zone": 0
+    }
+   }
+  }
+ ]
+}

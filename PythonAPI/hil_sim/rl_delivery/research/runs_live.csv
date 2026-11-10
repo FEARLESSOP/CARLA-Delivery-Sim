@@ -1,0 +1,8 @@
+run_id,brain,resume,hours,envs,started,ended,wall_h,config
+nav_ppo_s1_20261110_122908,nav,False,0.03,2,2026-11-10 12:29:08,2026-11-10 12:31:09,0.03,runs/nav_ppo_s1_20261110_122908/config.json
+drive_td3_s1_20261110_123110,drive,False,0.03,2,2026-11-10 12:31:10,2026-11-10 12:33:01,0.03,runs/drive_td3_s1_20261110_123110/config.json
+drive_sac_s1_20261110_123400,drive,False,0.02,2,2026-11-10 12:34:00,2026-11-10 12:35:15,0.02,runs/drive_sac_s1_20261110_123400/config.json
+drive_td3_s1_20261110_123400,drive,False,0.02,2,2026-11-10 12:34:00,2026-11-10 12:35:15,0.02,runs/drive_td3_s1_20261110_123400/config.json
+drive_ppo_s2_20261110_123532,drive,False,0.03,2,2026-11-10 12:35:32,2026-11-10 12:37:23,0.03,runs/drive_ppo_s2_20261110_123532/config.json
+drive_ppo_s1_20261110_123532,drive,False,0.03,2,2026-11-10 12:35:32,2026-11-10 12:37:34,0.03,runs/drive_ppo_s1_20261110_123532/config.json
+drive_td3_s1_20261110_123732,drive,False,0.03,2,2026-11-10 12:37:32,2026-11-10 12:39:24,0.03,runs/drive_td3_s1_20261110_123732/config.json

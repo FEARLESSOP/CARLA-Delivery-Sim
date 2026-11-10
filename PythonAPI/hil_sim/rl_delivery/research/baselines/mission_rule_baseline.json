@@ -1,0 +1,12 @@
+{
+ "deliveries": 10.166666666666666,
+ "lead_mean_s": 899.2423844571985,
+ "crashes_per_100": 5.357142857142858,
+ "landing_min": 42.2905761159108,
+ "hold_s": 4337.5,
+ "meet_wait_mean_s": 14.968378063659358,
+ "queue_end": 16.666666666666668,
+ "crash_why": {
+  "battery_chase": 2
+ }
+}
