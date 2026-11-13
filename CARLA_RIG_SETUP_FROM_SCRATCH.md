@@ -10,6 +10,8 @@ written from the actual files on this machine: the rig code, its docs, the
 Claude Code memory notes, the git diffs, the skill guides and the system
 itself. Anything that could not be checked is marked **(unverified)**.
 
+> **All rig documents by topic:** `PythonAPI/hil_sim/docs/README.md`.
+
 > **Machine-specific values.** This machine's user is `inouelab`, and most
 > paths are under `/home/inouelab/...` (`~`). Absolute paths are hard-coded in
 > a few places (listed in [section 6.4](#64-hard-coded-paths-to-change-on-a-new-pc)).
@@ -2064,6 +2066,8 @@ Dates are JST.
 | 2026-11-07 | OitaKosen road rework: corners rounded, elevate exact, check_drive 0/0/0/0, lights 0.5 m behind the stop line; Japanese markings audit (`check_markings.py` 81 → 0); pavement network (`pavements.py`, walkable pieces 420 → 3); OitaKosen re-imported (09:40); build_map clears `~/carlaCache` and makes its build path absolute; `surface_grid.py`; LastMile charging stations + agent `charge-station-builder`; LastMile Hub + Mini Pods and the shared parcel locker, live on OitaKosen |
 | 2026-11-08 | OitaStation extended (v8 core in a generated city to ±640 m): `topo_buildings.py`, `fit_core_widths.py`, `core_facades.py` (office / car-park styles), `core_materials.py`, `shopfront_jp.py` + `core_props.py`, `core_cars.py` + `parked_cars.py`; timetabled Oita buses (`bus_schedule.py`, BODIK GTFS-JP, CC BY 4.0, dashboard card); heavy NPC vehicle keys and `own_cars.py` (car guide ch. 16) |
 | 2026-11-09 | kept-wall gate `check_keep_walls.py` + osm_fixes, drive patch `core_patch.py`, cut 止まれ removed, `core_hard` triangle union → agent-checker APPROVED; **OitaStation extended imported**; all 12 cars rebuilt incl. the NPC-only Oita bus; `load_world_map` (120 s) replaces config.py's 10 s map load; road logic overlay (`road_overlay.py`, O key); lane-change marks from the paint (`lane_change_jp.py`, installed on OitaStation); commits `5c1c7d2` (rig) and `6c48e5f` (skills); `AGENTS.md` + `.agents/skills` for Google Antigravity; this document updated |
+| 2026-11-09..13 | Google Antigravity ran the RL work (pod/drone brains, FA-RAMPPO recovery planner, CARLA bridge, hero autopilot cornering, Q/E camera); its write-ups are archived in `PythonAPI/hil_sim/docs/archive/antigravity_2026-11/` with the claims that do not match the logs |
+| 2026-11-13 | drone judder fixed: delivery loop 4 Hz → 27-30 Hz (data-returning CARLA calls wait ~30 ms when first in a tick; cached boxes, `RayWorker`, torch 1 thread; `docs/TROUBLESHOOTING.md`), `[loop]` timing lines, smoother follow camera; docs organised: index `PythonAPI/hil_sim/docs/README.md` |
 
 ---
 

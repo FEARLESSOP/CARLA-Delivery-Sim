@@ -1,0 +1,45 @@
+\begin{table*}[t]
+\centering
+\caption{Performance Comparison of FA-RAMPPO (B4) against Matched Baselines (B0--B5) across Operational Scenarios S1--S5.}
+\label{tab:paper1_benchmark}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Scenario} & \textbf{Method} & \textbf{Return ($r_k$)} & \textbf{Feasibility (\%)} & \textbf{Latency (ms)} \\
+\midrule
+\multirow{6}{*}{S1 Normal} & B0: Heuristic & 5.980 $\pm$ 0.044 & 100.0\% & 0.03 \\
+ & B1: Std PPO & 5.990 $\pm$ 0.036 & 100.0\% & 0.03 \\
+ & B2: Maskable PPO & 5.990 $\pm$ 0.036 & 100.0\% & 0.03 \\
+ & B3: Forecast PPO & 5.990 $\pm$ 0.036 & 100.0\% & 0.02 \\
+ & \textbf{B4: FA-RAMPPO (Ours)} & \textbf{5.990 $\pm$ 0.036} & 100.0\% & 1.86 \\
+ & B5: Rollout Heur & 5.991 $\pm$ 0.034 & 100.0\% & 1.83 \\
+\midrule
+\multirow{6}{*}{S2 Surge} & B0: Heuristic & 5.891 $\pm$ 0.056 & 100.0\% & 0.02 \\
+ & B1: Std PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B2: Maskable PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B3: Forecast PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & \textbf{B4: FA-RAMPPO (Ours)} & \textbf{5.881 $\pm$ 0.077} & 100.0\% & 1.76 \\
+ & B5: Rollout Heur & 5.898 $\pm$ 0.049 & 100.0\% & 1.75 \\
+\midrule
+\multirow{6}{*}{S3 Traffic} & B0: Heuristic & 5.891 $\pm$ 0.056 & 100.0\% & 0.02 \\
+ & B1: Std PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B2: Maskable PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B3: Forecast PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & \textbf{B4: FA-RAMPPO (Ours)} & \textbf{5.881 $\pm$ 0.077} & 100.0\% & 1.75 \\
+ & B5: Rollout Heur & 5.898 $\pm$ 0.049 & 100.0\% & 1.93 \\
+\midrule
+\multirow{6}{*}{S4 Weather} & B0: Heuristic & 5.891 $\pm$ 0.056 & 100.0\% & 0.02 \\
+ & B1: Std PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B2: Maskable PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B3: Forecast PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & \textbf{B4: FA-RAMPPO (Ours)} & \textbf{5.881 $\pm$ 0.077} & 100.0\% & 1.76 \\
+ & B5: Rollout Heur & 5.898 $\pm$ 0.049 & 100.0\% & 1.77 \\
+\midrule
+\multirow{6}{*}{S5 HeldOut} & B0: Heuristic & 5.891 $\pm$ 0.056 & 100.0\% & 0.02 \\
+ & B1: Std PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B2: Maskable PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & B3: Forecast PPO & 5.881 $\pm$ 0.077 & 100.0\% & 0.02 \\
+ & \textbf{B4: FA-RAMPPO (Ours)} & \textbf{5.881 $\pm$ 0.077} & 100.0\% & 1.76 \\
+ & B5: Rollout Heur & 5.898 $\pm$ 0.049 & 100.0\% & 1.76 \\
+\bottomrule
+\end{tabular}
+\end{table*}

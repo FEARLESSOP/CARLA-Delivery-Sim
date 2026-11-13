@@ -19,6 +19,7 @@ helper are fakes that record every draw call.
 道路ロジック表示のオフラインテスト（サーバー不要）。
 """
 
+import json
 import math
 import os
 import signal
@@ -513,6 +514,37 @@ for n in ("OitaStation", "OitaKosen"):
     print("     %s: %d lanes, %d lines, %d arrows; precompute %.2f s, with map load %.2f s"
           % (n, g.n_lanes, len(g.lines), len(g.arrow_a), g.seconds, tot))
     check("%s precompute under 15 s" % n, g.seconds < 15.0, round(g.seconds, 2))
+
+# ---------------------------------------------------------------------------
+print("9. delivery & no-fly zones / 配送ゾーン・飛行禁止区域")
+w_z = FakeWorld()
+ov_z = ro.Overlay(w_z, carla.Map("OitaKosen", open(XODR["OitaKosen"]).read()))
+none_z = {k: False for k in ro.LAYERS}
+ctl_z = ro.clean_control({"on": True, "layers": dict(none_z, zones=True), "radius": 400})
+st_z = ov_z.refresh(ctl_z, (0, 0, 0), life=1.3)
+calls_z = w_z.debug.calls
+check("zones layer draws colored 3D boxes", any(c[0] == "box" for c in calls_z) and st_z["by_layer"].get("zones", 0) > 0,
+      st_z["by_layer"].get("zones"))
+nofly_calls = [c for c in calls_z if c[0] == "box" and c[4] == (3, 0, 0)]
+check("no-fly zone drawn in red", len(nofly_calls) > 0, len(nofly_calls))
+pod_calls = [c for c in calls_z if c[0] == "box" and c[4] != (3, 0, 0)]
+check("pod zones drawn in pod palette colors", len(pod_calls) > 0, len(pod_calls))
+
+# dynamic update test
+tmp_z = tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False)
+json.dump({"maps": {"OitaKosen": {"pods": {"1": {"x0": 0, "y0": 0, "x1": 50, "y1": 50}}, "nofly": []}}}, tmp_z)
+tmp_z.close()
+old_zp = ro.ZONES_PATH
+try:
+    ro.ZONES_PATH = tmp_z.name
+    w_z.debug.calls = []
+    st_u = ov_z.refresh(ctl_z, (0, 0, 0), life=1.3)
+    check("dynamic update: reflects modified zones file on next refresh",
+          st_u["by_layer"].get("zones") == 1 and len(w_z.debug.calls) == 1,
+          st_u["by_layer"].get("zones"))
+finally:
+    ro.ZONES_PATH = old_zp
+    os.unlink(tmp_z.name)
 
 print("\n%s" % ("ALL PASS / 全て合格" if not FAILS else "FAILED: %s" % ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

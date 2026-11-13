@@ -10,6 +10,7 @@ A map of the important files, by topic. Paths are relative to
 |---|---|
 | `README.md` | how to run the rig, every feature, options |
 | `FILES.md` | this map |
+| `docs/README.md` | index of every document, by topic (2026-11-13) |
 | `../../CARLA_RIG_SETUP_FROM_SCRATCH.md` | every change and how to rebuild the rig on a new PC |
 | `../../map_guide/` | map building guide, numbered chapters (lives in the carla-map-generator skill) |
 | `docs/TROUBLESHOOTING.md` | known problems and fixes |
@@ -60,6 +61,10 @@ A map of the important files, by topic. Paths are relative to
 | `delivery/` | its modules; `delivery/rules.py` = Japan rules for the vans |
 | `docs/DELIVERY.md` | how it works |
 | `delivery/station.py` | drone fleet: charging, standby, wind and rain grounding |
+| `delivery/loop_prof.py` | main-loop timing: the `[loop]` lines in the pipeline log every 20 s (Hz, ms per phase, blocking CARLA calls with file:line) |
+| `delivery/backends.py` | drones in CARLA (`DroneUnit`), sensor probe thread, `RayWorker` (collision rays off the main loop) |
+| `delivery/rl_bridge.py` | trained brains in CARLA: `RLNavFlight`, `DriveBridge`, `FleetRecoveryBridge` (`docs/RL_CARLA_BRIDGE.md`) |
+| `delivery/feasibility_engine.py`, `delivery/compact_simulator.py`, `delivery/reservations.py`, `delivery/ledger.py`, `rl_delivery/ramppo.py` | Antigravity's FA-RAMPPO recovery planner (hard-coded rules; benchmark not valid: `docs/archive/antigravity_2026-11/README.md`) |
 | `triple_screen.py` | the driving window across three monitors (monitor detection, cameras, fullscreen span) |
 | `recovery.py` | stuck NPC cars / pods / the hero reverse out of a wedge; still walkers get a new route |
 | `hero_autopilot.py` | the smooth autopilot behind P in the driving window (lane limits, bends, lights, pedals) |

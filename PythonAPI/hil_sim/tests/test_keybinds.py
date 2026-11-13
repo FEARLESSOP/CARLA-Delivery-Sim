@@ -59,6 +59,8 @@ OLD_KEYS = {
     "eye_right": ["ctrl+l"], "eye_down": ["ctrl+u"], "eye_up": ["ctrl+o"],
     "signal_left": [], "signal_right": [], "hazard": ["e"],
     "road_overlay": ["o"],          # added 2026-11-09 (road_overlay.py) / 追加
+    "pod_cam_prev": ["q"],          # CARLA spectator pod / drone camera (delivery_sim.py)
+    "pod_cam_next": ["e"],
 }
 OLD_KEYS.update({"sensor_%d" % n: [str(n)] for n in range(1, 10)})
 bad = [a for a, k in OLD_KEYS.items() if d[a]["keys"] != k]
@@ -132,6 +134,14 @@ check("different modifiers on press actions do not clash", kb.conflicts(b)["keys
 b["hazard"]["wheel"] = ["button:3"]                 # Triangle = next weather already
 check("same wheel button on two actions is a conflict",
       set(kb.conflicts(b)["wheel"].get("button:3", [])) == {"weather_next", "hazard"})
+b = kb.defaults()
+b["pod_cam_next"]["keys"] = ["q"]                      # same window (carla) clash
+check("same key in same window is a conflict",
+      set(kb.conflicts(b)["keys"].get("q", [])) == {"pod_cam_prev", "pod_cam_next"})
+b = kb.defaults()
+b["pod_cam_prev"]["wheel"] = ["button:6"]              # wheel clash with reverse
+check("wheel clash across different action windows",
+      set(kb.conflicts(b)["wheel"].get("button:6", [])) == {"reverse", "pod_cam_prev"})
 
 print("\n=== 4. G923 button names ===")
 lab = kb.load_labels()

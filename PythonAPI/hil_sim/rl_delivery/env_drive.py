@@ -192,8 +192,10 @@ class DriveEnv(gym.Env):
             if all(abs(s0 - c["s"]) > 15 for c in self.cars):
                 self.cars.append({"s": s0, "v": float(self.rng.uniform(3, 8)), "v0": float(self.rng.uniform(6, 11))})
         self.last = np.zeros(2)
+        self.clear_speeds = []
         self.k_stats = {"kerb": 0, "stop_violation": 0, "red_violation": 0, "centre_s": 0.0, "speeding_s": 0.0,
-                        "collision": 0, "reached": False, "end": ""}
+                        "collision": 0, "reached": False, "end": "", "stalls": 0, "p10_speed": 0.0}
+        self.stopped_unprompted_t = 0.0
         self.limit_t = self.S[-1] / 2.0 + 90.0
         return self._obs(), {}
 
@@ -240,28 +242,52 @@ class DriveEnv(gym.Env):
         if self.s > self.s_best:
             r += 0.3 * (self.s - self.s_best)                       # progress (0.1 let it crawl) / 前進
             self.s_best = self.s
-        r -= 0.01
+        r -= 0.06                                                   # time step penalty (strictly > max r_vel +0.05 to kill micro-crawls)
         r -= 0.02 * abs(self.off) + 0.01 * float(np.sum(np.square(a - self.last)))
         self.last = a
         limit = q[6] / 3.6
         if self.v > limit + 0.5:
             r -= 0.05 * (self.v - limit)
             self.k_stats["speeding_s"] += DT
-        # standing still with no reason to (no stop line, red light or car close
-        # ahead) costs; lawful stops stay free / 理由のない停止にコスト
-        if self.v < 0.5:
-            m = self._next_mark()
-            must = m is not None and m[0] - self.s < 12.0 and (
-                (m[1] == "stop" and not m[3]) or (m[1] == "signal" and self._signal(*m[2]) > 0))
-            lead = min([c["s"] - self.s - LENGTH for c in self.cars if c["s"] > self.s] or [99.0])
-            if not must and lead > 10.0:
-                r -= 0.05
+        # Road context requirements (stop lines, signals, lead vehicles) / 道路状況の確認
+        m = self._next_mark()
+        # Must only holds if within legal stopping window (0..4m for stop sign, 0..12m for red/yellow signal)
+        must = m is not None and (
+            (m[1] == "stop" and 0.0 <= m[0] - self.s <= 4.0 and not m[3]) or
+            (m[1] == "signal" and 0.0 <= m[0] - self.s <= 12.0 and self._signal(*m[2]) > 0)
+        )
+        lead = min([c["s"] - self.s - LENGTH for c in self.cars if c["s"] > self.s] or [99.0])
+
+        # Positive forward velocity reward when road is clear (tied to projected lane tangent velocity) / 前進方向の速度報酬
+        target_v = min(limit, POD_MAX)
+        dpsi = wrap(self.yaw - q[2])
+        proj_v = self.v * math.cos(dpsi)
+        if not must and lead > 10.0 and proj_v > 0.1:
+            r += 0.05 * min(proj_v / max(target_v, 1.0), 1.0)
+            self.clear_speeds.append(self.v)
+
+        # Unprompted standstill handling: penalty & early abort to break brake-lock local minimum
+        # 理由のない停止のペナルティとタイムアウト（膠着ローカルミニマムの解消）
         term = False
+        if self.v < 0.3:
+            if not must and lead > 10.0:
+                self.stopped_unprompted_t += DT
+                r -= 0.25                                             # substantial penalty (-2.5 / s)
+                if self.stopped_unprompted_t > 5.0:
+                    self.k_stats["stalls"] = self.k_stats.get("stalls", 0) + 1
+                    self.k_stats["end"] = "stalled"
+                    r -= 35.0
+                    term = True
+            else:
+                self.stopped_unprompted_t = max(0.0, self.stopped_unprompted_t - DT)
+        else:
+            self.stopped_unprompted_t = max(0.0, self.stopped_unprompted_t - DT)
+
         half = q[3] / 2.0
         # which edge the pod's side is past / どちらの縁を越えたか
         over_a = self.off + HALF_W - half
         over_b = -self.off + HALF_W - half
-        if not q[7]:
+        if not term and not q[7]:
             if (over_a > 0.25 and int(q[4]) == 0) or (over_b > 0.25 and int(q[5]) == 0):
                 self.k_stats["kerb"] += 1
                 self.k_stats["end"] = "kerb"
@@ -287,7 +313,9 @@ class DriveEnv(gym.Env):
                     r -= 25.0
                 elif m[1] == "signal" and self._signal(*m[2]) == 2:
                     self.k_stats["red_violation"] += 1
+                    self.k_stats["end"] = "red_violation"
                     r -= 40.0
+                    term = True
         for c in self.cars:
             if abs(c["s"] - self.s) < LENGTH and abs(self.off) < 1.5:
                 self.k_stats["collision"] += 1
@@ -311,6 +339,10 @@ class DriveEnv(gym.Env):
                              "lights": [self._signal(*m[2]) if m[1] == "signal" else -1 for m in self.marks]})
         info = {}
         if term:
+            if self.clear_speeds:
+                self.k_stats["p10_speed"] = float(np.percentile(self.clear_speeds, 10))
+            else:
+                self.k_stats["p10_speed"] = float(self.v)
             info = {"kpi": dict(self.k_stats, length=float(self.S[-1]), progress=float(self.s_best),
                                 time_s=self.t)}
         return self._obs(), float(r), term, False, info

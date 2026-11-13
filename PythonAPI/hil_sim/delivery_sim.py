@@ -54,8 +54,9 @@ sys.path.append('../carla')
 
 import carla  # noqa: E402
 from lane_spawns import lane_spawn_points  # noqa: E402
-from agents.navigation.basic_agent import BasicAgent  # noqa: E402
+from agents.navigation.basic_agent import BasicAgent as _CarlaBasicAgent  # noqa: E402
 from delivery.route import SafeRoutePlanner  # noqa: E402  (bounded on imported maps)
+from agents.tools.misc import get_speed  # noqa: E402
 
 from delivery import planning  # noqa: E402
 from delivery.kpi import KpiTracker  # noqa: E402
@@ -296,15 +297,27 @@ def make_surface_fn(world, step=20.0):
     障害物リストに無い丘を検出する。``step`` m ごとに下向きのレイを 1 本飛ばし、
     最初に当たった点をその地点の最上面とする。
     """
+    # The top surface does not move: keep each ray's answer on a CELL grid.
+    # A server ray waits ~30 ms when it is the first call in a tick, and the
+    # drone planner asked ~10 per second, which made the drones judder.
+    # 最上面は動かないので CELL 格子で結果を保存（初回の待ち ~30 ms を繰り返さない）。
+    CELL = 2.0
+    tops = {}
+
+    def top_at(x, y):
+        key = (int(round(x / CELL)), int(round(y / CELL)))
+        if key not in tops:
+            hits = world.cast_ray(carla.Location(x, y, 600.0), carla.Location(x, y, -100.0))
+            tops[key] = hits[0].location.z if hits else None
+        return tops[key]
+
     def surface(a, b):
         n = max(1, int(planning.dist2d(a, b) // step))
         top = None
         for i in range(n + 1):
             u = i / float(n)
-            x, y = a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1])
-            hits = world.cast_ray(carla.Location(x, y, 600.0), carla.Location(x, y, -100.0))
-            if hits:
-                z = hits[0].location.z
+            z = top_at(a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1]))
+            if z is not None:
                 top = z if top is None else max(top, z)
         return top
     return surface
@@ -695,7 +708,7 @@ class Van(LmpVanMixin):
     """
 
     def __init__(self, vid, args, world, car, hubs, grp, log, obstacles, gen, sky,
-                 pod=None):
+                 pod=None, drive_bridge=None):
         self.vid, self.args, self.world, self.car = vid, args, world, car
         self.hubs, self._log, self.obstacles, self.gen = hubs, log, obstacles, gen
         self.sky = sky           # wind, battery model, drone pool, raycast checks
@@ -705,6 +718,7 @@ class Van(LmpVanMixin):
         self.color = VAN_COLORS[(vid - 1) % len(VAN_COLORS)]
         self.wmap = world.get_map()
         self.road_dist = make_road_dist(grp)
+        self.drive_bridge = drive_bridge
         # in the car frame: the roof spot (the pod's hatch) and where the drone
         # parks (inside the pod; on the roof of a stock van)
         # 車座標：屋根の位置（ポッドのハッチ）と機体の格納位置（ポッド内、標準の車は屋根）
@@ -997,9 +1011,12 @@ class Van(LmpVanMixin):
         # route from where the van really is, not the planner's last target
         # 前回の目標点ではなく、車の実際の位置から経路を引く
         self.agent.set_destination(loc(s.location), start_location=self.car.get_location())
+        if self.drive_bridge is not None:
+            plan = self.agent.get_local_planner().get_plan() if hasattr(self.agent, "get_local_planner") else []
+            self.drive_bridge.build_from_waypoints(list(plan))
         self.state = DRIVING
         self.log(t, "drive", batch=s.batch, pos=s.location,
-                 detail="to %s stop" % s.kind)
+                 detail="to %s stop%s" % (s.kind, " (RL-Drive)" if self.drive_bridge else ""))
 
     def _detour_to(self, target):
         """Route to ``target`` by way of a point further along the road. The
@@ -1649,7 +1666,10 @@ class Van(LmpVanMixin):
                     if not self._detour_to(s.location):
                         self.agent.set_destination(carla.Location(*s.location),
                                                    start_location=self.car.get_location())
-            elif near or self.agent.done():
+                    if getattr(self, "drive_bridge", None) is not None:
+                        plan = self.agent.get_local_planner().get_plan() if hasattr(self.agent, "get_local_planner") else []
+                        self.drive_bridge.build_from_waypoints(list(plan))
+            elif near or (self.agent.done() if getattr(self, "drive_bridge", None) is None else self.drive_bridge.done):
                 self.arrive(t)
             elif getattr(self, "_reverse", None) is not None:
                 # backing out of a wedge, then the route is re-planned / 後退して再計画
@@ -1660,14 +1680,24 @@ class Van(LmpVanMixin):
                     self._reverse = None
                     self.agent.set_destination(carla.Location(*self.stops[0].location),
                                                start_location=self.car.get_location())
+                    if getattr(self, "drive_bridge", None) is not None:
+                        plan = self.agent.get_local_planner().get_plan() if hasattr(self.agent, "get_local_planner") else []
+                        self.drive_bridge.build_from_waypoints(list(plan))
                 else:
                     thr, brk, st, rev = out
                     self.car.apply_control(carla.VehicleControl(throttle=thr, brake=brk, steer=st, reverse=rev))
             else:
-                control = self.agent.run_step()
-                if self.rules is not None:
-                    # 止まれ / walkers / lane speed (Japan profile) / 日本の交通ルール
-                    control = self.rules.apply(self.car.id, self.agent, self.args.speed, control)
+                if getattr(self, "drive_bridge", None) is not None:
+                    control = self.drive_bridge.run_step(self.car, self.world)
+                else:
+                    t0 = time.perf_counter()
+                    control = self.agent.run_step()
+                    LOOP_PROF.add(" (agent)", time.perf_counter() - t0)
+                    if self.rules is not None:
+                        # 止まれ / walkers / lane speed (Japan profile) / 日本の交通ルール
+                        t0 = time.perf_counter()
+                        control = self.rules.apply(self.car.id, self.agent, self.args.speed, control)
+                        LOOP_PROF.add(" (rules)", time.perf_counter() - t0)
                 self.car.apply_control(control)
                 self.guard(t, dt, control)
         elif self.state == DOCKING:
@@ -1944,6 +1974,7 @@ class Fleet(object):
         self.geo = self._georef()
         self.suites = {}
         self.probe = backends.SensorProbe(world)
+        backends.RAYS.start(getattr(args, "host", "127.0.0.1"), getattr(args, "port", 2000))
         self.probe.start(getattr(args, "host", "127.0.0.1"), getattr(args, "port", 2000),
                          lambda: self.sky.drones.units)
         self.sensor_ms = 0.0
@@ -2209,7 +2240,9 @@ class Fleet(object):
             if not by_id[vid].assign(b, t):
                 self.dispatcher.push_front(b)
                 by_id[vid].go_charge(t, "not enough for batch %d" % b[0].batch)
+        t0 = time.perf_counter()
         self.rules_step()
+        LOOP_PROF.add(" (rules_step)", time.perf_counter() - t0)
         sc = self.showcase
         for v in self.vans:
             if sc is not None and v is sc["van"]:
@@ -2219,10 +2252,13 @@ class Fleet(object):
                 v.showcase_pose(sc["t"])
             else:
                 v.step(t, dt)
+        LOOP_PROF.mark("vans")
         self.sky.drones.step(t, dt, wind)
+        LOOP_PROF.mark("drones")
         self.draw(t)
         self.weather(t)
         self.publish(t)
+        LOOP_PROF.mark("draw+publish")
 
     # -- wind / 風
     def commands(self, t):
@@ -2259,6 +2295,10 @@ class Fleet(object):
             elif cmd == "tooltips":
                 backends.OVERLAYS["on"] = bool(c.get("on"))
                 self.log(t, "view", detail="tooltips %s" % ("on" if backends.OVERLAYS["on"] else "off"))
+            elif cmd == "cam_cycle":
+                step = int(c.get("step", 1))
+                if getattr(self, "camera", None) is not None:
+                    self.camera._cycle(step, time.monotonic())
 
     def set_shell(self, mode):
         if mode in lmp_pod.SHELL_MODES:
@@ -2439,7 +2479,7 @@ class Fleet(object):
         mine = {v.car.id for v in self.vans}
         cars = [[r1(a.get_transform().location.x), r1(a.get_transform().location.y),
                  r1(a.get_transform().rotation.yaw)]
-                for a in self.world.get_actors().filter("vehicle.*") if a.id not in mine]
+                for a in VEHICLES.get(self.world) if a.id not in mine]   # shared list: no server wait / 共有リスト
         events = [{"t": e["sim_t"], "van": e["van"], "event": e["event"],
                    "order": e["order"], "detail": e["detail"]}
                   for e in self.log.rows[-300:] if e["event"] in self.EVENTS_SHOWN][-30:]
@@ -2615,6 +2655,13 @@ class CameraControl(object):
 
     MOVED_M, MOVED_DEG = 1.0, 4.0   # further than this from where we put it: you moved it
     GRACE_S = 0.6       # CARLA's own camera also moves on Q / E: ignore that bit
+    # Smoothing time constants (s): the camera eases toward the ideal view
+    # instead of snapping to it every tick, so a wobbling heading or a gusty
+    # drone no longer shakes the picture. Bigger = smoother but laggier.
+    # 平滑化の時定数（秒）：毎 tick 目標視点へ跳ばず滑らかに近づけ、
+    # 向きの揺れや突風によるカメラのぶれを抑える。大きいほど滑らかで遅れる。
+    SMOOTH_POS_S, SMOOTH_ROT_S = 0.35, 0.6
+    SNAP_M = 60.0       # target further than this (new target, teleport): jump / 遠すぎれば即移動
 
     def __init__(self, world, args, vans, drones):
         self.world, self.vans, self.drones = world, vans, drones
@@ -2622,18 +2669,49 @@ class CameraControl(object):
         self.mode = args.follow             # free | auto | none
         self.target = ("van", vans[args.follow_van - 1]) if args.follow_van else None
         self.followed = None                # the van --follow auto is on
-        self.hotkeys = Hotkeys(keys=("q", "e", "x")) if self.mode != "none" else None
+        self._keybinds_mtime = None
+        self._last_bind_check = 0.0
+        self.prev_keys = ["q"]
+        self.next_keys = ["e"]
+        self._load_keybinds()
+        self.hotkeys = Hotkeys(keys=tuple(set(self.prev_keys + self.next_keys + ["x"]))) if self.mode != "none" else None
         self.on_x = None                    # X: next shell view (set by main) / X: 外殻表示
         self._set = collections.deque(maxlen=3)    # transforms we put the camera at
         self._grace = 0.0
+        self._smooth = None                 # [x, y, z, pitch, yaw] eased view / 平滑化中の視点
         if self.hotkeys is not None and not self.hotkeys.ok:
             print("  camera: Q / E need an X11 session; the camera is free / "
                   "Q・E には X11 が必要", flush=True)
         elif self.hotkeys is not None:
-            print("  camera: free. In the CARLA window press Q / E to lock onto the "
+            print("  camera: free. In the CARLA window press %s / %s to lock onto the "
                   "previous / next pod or drone; move the camera to unlock / "
-                  "CARLA ウィンドウで Q・E: ポッドとドローンを順に追従、動かすと解除",
+                  "CARLA ウィンドウで %s・%s: ポッドとドローンを順に追従、動かすと解除" % (
+                      "/".join(self.prev_keys).upper(), "/".join(self.next_keys).upper(),
+                      "/".join(self.prev_keys).upper(), "/".join(self.next_keys).upper()),
                   flush=True)
+
+    def _load_keybinds(self):
+        """Read pod_cam_prev / pod_cam_next from keybinds.json if available.
+        / keybinds.json からポッド追従カメラのキー割り当てを読み込む。"""
+        try:
+            import keybinds
+            if not os.path.isfile(keybinds.KEYBINDS_PATH):
+                return
+            mtime = os.path.getmtime(keybinds.KEYBINDS_PATH)
+            if mtime == self._keybinds_mtime:
+                return
+            self._keybinds_mtime = mtime
+            binds = keybinds.load()
+            prev_k = binds.get("pod_cam_prev", {}).get("keys", ["q"]) or ["q"]
+            next_k = binds.get("pod_cam_next", {}).get("keys", ["e"]) or ["e"]
+            if prev_k != self.prev_keys or next_k != self.next_keys:
+                self.prev_keys = list(prev_k)
+                self.next_keys = list(next_k)
+                all_keys = tuple(set(self.prev_keys + self.next_keys + ["x"]))
+                if self.mode != "none":
+                    self.hotkeys = Hotkeys(keys=all_keys)
+        except Exception:
+            pass
 
     def targets(self):
         """Pods, then drones in the air, then crashed drones. / 追従対象の順番。"""
@@ -2646,16 +2724,23 @@ class CameraControl(object):
         kind, o = tg
         return "pod V%d" % o.vid if kind == "van" else "D%d (%s)" % (o.id, o.status)
 
-    def step(self):
+    def step(self, dt=0.05):
         if self.mode == "none":
             return
         now = time.monotonic()
+        if now - self._last_bind_check > 1.0:
+            self._last_bind_check = now
+            self._load_keybinds()
         keys = self.hotkeys.poll() if self.hotkeys is not None else []
         if "x" in keys and self.on_x is not None:
             self.on_x()
-        keys = [k for k in keys if k in ("q", "e")]
-        if keys:
-            self._cycle(1 if keys[-1] == "e" else -1, now)
+        for k in keys:
+            if k in self.next_keys:
+                self._cycle(1, now)
+                break
+            elif k in self.prev_keys:
+                self._cycle(-1, now)
+                break
         self._follow_through()
         if self.target is None and self.mode != "auto":
             return
@@ -2664,9 +2749,11 @@ class CameraControl(object):
                 print("camera: free (you moved it) / カメラ自由", flush=True)
             self.target, self.mode = None, "free"
             self._set.clear()
+            self._smooth = None
             return
         tf = self._view()
         if tf is not None:
+            tf = self._ease(tf, dt)
             self.spectator.set_transform(tf)
             self._set.append(tf)
             if self.target is not None and backends.OVERLAYS["on"]:
@@ -2682,6 +2769,7 @@ class CameraControl(object):
         self.target = ("van", van)
         self._grace = time.monotonic() + self.GRACE_S
         self._set.clear()
+        self._smooth = None
 
     def _cycle(self, step, now):
         tgs = self.targets()
@@ -2693,6 +2781,7 @@ class CameraControl(object):
         self.target = tgs[i]
         self._grace = now + self.GRACE_S
         self._set.clear()
+        self._smooth = None
         print("camera: locked on %s [%d/%d] / カメラ固定" % (self.label(self.target), i + 1,
                                                            len(tgs)), flush=True)
 
@@ -2709,6 +2798,27 @@ class CameraControl(object):
         else:
             self.target = None
             print("camera: free (D%d is %s) / カメラ自由" % (u.id, u.status), flush=True)
+
+    def _ease(self, tf, dt):
+        """Move the eased view toward ``tf`` with first-order lag (frame-rate
+        independent); snap on a new target or a jump. / 一次遅れで目標視点へ
+        近づける（フレームレート非依存）。対象切替・瞬間移動時は即移動。"""
+        l, r = tf.location, tf.rotation
+        goal = [l.x, l.y, l.z, r.pitch, r.yaw]
+        s = self._smooth
+        if s is None or math.dist(s[:3], goal[:3]) > self.SNAP_M:
+            self._smooth = goal
+            return tf
+        dt = min(max(dt, 0.0), 0.5)
+        kp = 1.0 - math.exp(-dt / self.SMOOTH_POS_S)
+        kr = 1.0 - math.exp(-dt / self.SMOOTH_ROT_S)
+        for i in range(3):
+            s[i] += (goal[i] - s[i]) * kp
+        s[3] += (goal[3] - s[3]) * kr
+        s[4] += ((goal[4] - s[4] + 180.0) % 360.0 - 180.0) * kr   # shortest way round
+        s[4] = (s[4] + 180.0) % 360.0 - 180.0
+        return carla.Transform(carla.Location(s[0], s[1], s[2]),
+                               carla.Rotation(pitch=s[3], yaw=s[4]))
 
     def _ours(self, cur):
         """``cur`` is (nearly) where we last put the camera."""
@@ -3139,6 +3249,18 @@ def parse_args(argv=None):
                    help="a crashed pod is brought back to its bay after this")
     p.add_argument("--minipod-fail-timeout", type=float, default=120.0,
                    help="a crashed pod's order fails if no pod takes it over within this")
+    # reinforcement learning policies / 強化学習ポリシー
+    p.add_argument("--policy-nav", default="",
+                   help="drone navigation policy (.zip checkpoint or 'latest') / 航法ブレイン")
+    p.add_argument("--policy-drive", default="",
+                   help="pod driving policy (.zip checkpoint or 'latest') / 運転ブレイン")
+    p.add_argument("--policy-fleet-pod", default="",
+                   help="fleet pod dispatcher policy (.zip checkpoint or 'latest') / 配車ポッド")
+    p.add_argument("--policy-fleet-drone", default="",
+                   help="fleet drone dispatcher policy (.zip checkpoint or 'latest') / 配車ドローン")
+    p.add_argument("--policy-recovery", default="",
+                   choices=("", "auto", "b0", "b1", "b2", "b3", "b4", "b5", "ramppo", "heuristic", "maskable", "standard", "forecast", "rollout"),
+                   help="recovery reservation baseline (e.g. 'ramppo' / 'b4', 'heuristic' / 'b0') / 回収予約ブレイン")
     a = p.parse_args(argv)
     if not 1 <= a.min_orders <= a.max_orders:
         p.error("need 1 <= --min-orders <= --max-orders")
@@ -3173,6 +3295,78 @@ def pick_followed(vans, current):
     flying = [v for v in vans if v.drone is not None and v.drone.flying]
     busy = [v for v in vans if v.state != IDLE]
     return (flying or busy or [current or vans[0]])[0]
+
+
+from delivery.loop_prof import LOOP_PROF, SLOW  # noqa: E402  (shared with delivery/*)
+import threading  # noqa: E402
+SLOW.install(carla, threading.main_thread())
+
+
+class _BoxedCar(object):
+    """An actor whose ``bounding_box`` is read once and kept (it never changes);
+    everything else goes to the real actor. / bounding_box を 1 回だけ読む Actor 代理。"""
+    __slots__ = ("_a", "bounding_box", "id")
+
+    def __init__(self, actor):
+        self._a, self.id = actor, actor.id
+        self.bounding_box = actor.bounding_box
+
+    def __getattr__(self, name):
+        return getattr(self._a, name)
+
+
+class _VehicleCache(object):
+    """One shared vehicle list for every van's BasicAgent, with each
+    vehicle's bounding box read once. In CARLA 0.9.16 the first
+    ``.bounding_box`` read in each tick waits for the server (~30 ms) and
+    BasicAgent reads it every step, which slowed this loop -- and so the
+    drones it poses -- to ~6 Hz. Vehicles are re-listed every ``REFRESH_S``.
+    全バンの BasicAgent で車両リストを共有し、各車の bounding_box は 1 回だけ読む。
+    0.9.16 では tick ごとの最初の bounding_box 読み出しがサーバ待ち（約 30 ms）で、
+    毎ステップ読むとループ（＝ドローン）が ~6 Hz に落ちていた。"""
+    REFRESH_S = 1.0
+
+    def __init__(self):
+        self.actors, self.t = {}, -1e9
+
+    def get(self, world):
+        now = time.monotonic()
+        if now - self.t >= self.REFRESH_S:
+            self.t = now
+            fresh = {a.id: a for a in world.get_actors().filter("*vehicle*")}
+            self.actors = {i: self.actors.get(i) or _BoxedCar(a) for i, a in fresh.items()}
+        return list(self.actors.values())
+
+    def boxed(self, actor):
+        """The cached wrapper of ``actor`` (added if new). / actor の代理。"""
+        car = self.actors.get(actor.id)
+        if car is None:
+            car = self.actors[actor.id] = _BoxedCar(actor)
+        return car
+
+
+VEHICLES = _VehicleCache()
+
+
+class BasicAgent(_CarlaBasicAgent):
+    """CARLA's BasicAgent with the shared vehicle list (``_VehicleCache``);
+    otherwise the same run_step. / 共有車両リストを使う BasicAgent（他は同じ）。"""
+
+    def run_step(self):
+        vehicle_list = VEHICLES.get(self._world)
+        speed = get_speed(self._vehicle) / 3.6
+        real = self._vehicle
+        self._vehicle = VEHICLES.boxed(real)     # only for the obstacle check / 障害物判定の間だけ
+        try:
+            by_car = self._vehicle_obstacle_detected(
+                vehicle_list, self._base_vehicle_threshold + self._speed_ratio * speed)[0]
+        finally:
+            self._vehicle = real
+        by_light = self._affected_by_traffic_light(       # always run: it tracks the light
+            self._lights_list, self._base_tlight_threshold + self._speed_ratio * speed)[0]
+        hazard = by_car or by_light
+        control = self._local_planner.run_step()
+        return self.add_emergency_stop(control) if hazard else control
 
 
 def wait_tick(world, sync, timeout=10.0, patience=120.0):
@@ -3418,15 +3612,32 @@ def main(argv=None):
                   "ポッド用 EV 充電器" % len(spots), flush=True)
         hz = Hazards(random=not args.no_random_failures, motor_per_hour=args.motor_fail_rate,
                      parcel_wind=args.parcel_wind, lost_drift=args.lost_drift)
+        nav_bridge = None
+        if getattr(args, "policy_nav", ""):
+            from delivery.rl_bridge import NavBridge
+            map_name = args.map or (wmap.name.split("/")[-1] if wmap else "OitaKosen")
+            nav_bridge = NavBridge(args.policy_nav, map_name=map_name, wind_level=args.wind)
+        recovery_bridge = None
+        if getattr(args, "policy_recovery", "") or getattr(args, "policy_fleet_drone", ""):
+            from delivery.rl_bridge import FleetRecoveryBridge
+            map_name = args.map or (wmap.name.split("/")[-1] if wmap else "OitaKosen")
+            rec_base = getattr(args, "policy_recovery", "") or "b4"
+            recovery_bridge = FleetRecoveryBridge(
+                checkpoint_path=getattr(args, "policy_fleet_drone", ""),
+                baseline=rec_base,
+                map_name=map_name,
+            )
         units = [DroneUnit(i + 1, world, client, random.Random(args.seed + 100 + i), sky.bm, hz,
                            max_wind=args.drone_max_wind, h_speed=args.drone_speed,
                            v_speed=args.climb_speed, hover_s=args.hover_s,
-                           model=not args.stock_models, kind="lmp" if use_lmp else "pod")
+                           model=not args.stock_models, kind="lmp" if use_lmp else "pod",
+                           nav_bridge=nav_bridge, recovery_bridge=recovery_bridge)
                  for i in range(n_units)]
         drones = units
         sky.drones = DroneFleet(units, station, sky.bm, sky.check.flight_z, log,
                                 recover_s=args.recover_s, wind_hold=args.wind_hold,
                                 pod_draw=sky.pem.drone_ratio, rain_ground=args.rain_ground)
+        sky.drones.recovery_bridge = recovery_bridge
         print("  %d drones (%d in vans + %d standby): %s"
               % (n_units, per_van * len(cars), n_units - per_van * len(cars),
                  units[0].blueprint_id if units else "-"))
@@ -3467,8 +3678,13 @@ def main(argv=None):
             max_gap=args.max_gap, min_batch=args.min_orders, max_batch=args.max_orders,
             drone_prob=args.drone_prob, drone_radius=args.drone_radius,
             fleet_size=len(cars) + len(lmh_cars), boxes=box_targets)
+        drive_bridge = None
+        if getattr(args, "policy_drive", ""):
+            from delivery.rl_bridge import DriveBridge
+            map_name = args.map or (wmap.name.split("/")[-1] if wmap else "OitaKosen")
+            drive_bridge = DriveBridge(args.policy_drive, map_name=map_name)
         vans = [Van(i + 1, args, world, car, hubs, grp, log, obstacles, gen, sky,
-                    pod=pod) for i, (car, pod) in enumerate(zip(cars, pods))]
+                    pod=pod, drive_bridge=drive_bridge) for i, (car, pod) in enumerate(zip(cars, pods))]
         sky.drones.start(vans)          # drones only for the drone pods / ドローンはポッドのみ
         lmh_shared = None
         if lmh_cars:
@@ -3530,7 +3746,10 @@ def main(argv=None):
         last = 0.0
         wall0 = time.monotonic()
         while not stop["now"]:
+            LOOP_PROF.loop_done()
+            LOOP_PROF.mark("other")
             new = wait_tick(world, args.sync)
+            LOOP_PROF.mark("wait_tick")
             if not args.sync and new > frame + 1:
                 missed += new - frame - 1     # we fell behind the tick master
             frame = new
@@ -3544,9 +3763,12 @@ def main(argv=None):
                 ahead = t / args.speedup - (time.monotonic() - wall0)
                 if ahead > 0:
                     time.sleep(ahead)
+            LOOP_PROF.mark("other")
             fleet.step(t, dt)
             kpi.sample(t)
-            camera.step()
+            LOOP_PROF.mark("kpi")
+            camera.step(dt)
+            LOOP_PROF.mark("camera")
             if args.duration and t >= args.duration:
                 break
             if args.max_batches and fleet.batches >= args.max_batches:

@@ -65,13 +65,14 @@ CONTROL_PATH = os.path.join(HERE, "data", "road_overlay.json")
 STATUS_PATH = os.path.join(HERE, "data", "road_overlay_status.json")
 MAPS_JSON = os.path.join(HERE, "maps", "maps.json")
 BUILD_DIR = os.path.join(HERE, "maps", "build")
+ZONES_PATH = os.path.join(HERE, "data", "delivery_zones.json")
 
 # --------------------------------------------------------------------------
 # control file / 設定ファイル
 # --------------------------------------------------------------------------
-LAYERS = ("road", "direction", "junctions", "lanes", "rules", "lane_change", "ids", "osm")
+LAYERS = ("road", "direction", "junctions", "lanes", "rules", "lane_change", "ids", "osm", "zones")
 LAYER_DEFAULTS = {"road": True, "direction": True, "junctions": True, "lanes": True,
-                  "rules": True, "lane_change": False, "ids": False, "osm": False}
+                  "rules": True, "lane_change": False, "ids": False, "osm": False, "zones": True}
 LAYER_LABELS = {
     "road": ("Road edges", "道路の端"),
     "direction": ("Driving direction", "走行方向"),
@@ -81,6 +82,7 @@ LAYER_LABELS = {
     "lane_change": ("Lane change", "車線変更"),
     "ids": ("Road / lane ids", "道路・車線 ID"),
     "osm": ("Raw OSM ways", "元の OSM 道路"),
+    "zones": ("Delivery & no-fly zones", "配送ゾーン・飛行禁止区域"),
 }
 # Server cost (measured live 2026-11-09, OitaKosen): 2000 shapes a second took
 # the server from 20 to 13 frames/s. So: a 2 s refresh, at most 800 shapes,
@@ -214,6 +216,8 @@ STYLE_LIST = [
     ("stop_bar", (1, 0, 0), 0.12),
     ("yield_bar", (1, 1, 1), 0.12),
     ("osm", (0, 1, 0), 0.04),
+    ("nofly_zone", (1, 0, 0), 0.10),
+    ("pod_zone", (0, 1, 1), 0.08),
 ]
 SID = {n: i for i, (n, _, _) in enumerate(STYLE_LIST)}
 OTHER_TYPES = ("Sidewalk", "Shoulder", "Parking", "Bus", "Biking", "Bidirectional", "Median")
@@ -230,6 +234,108 @@ LIGHT_HUE = {"Red": (1, 0, 0), "Yellow": (1, 1, 0), "Green": (0, 1, 0)}
 LIGHT_OFF = (T3, T3, T3)
 STOP_HUE, YIELD_HUE, SPEED_SIGN_HUE = (1, 0, 0), (1, 1, 1), (1, T3, T3)
 NIGHT_DIM = 0.4               # sun below the horizon: brighter exposure, dimmer lines / 夜は暗く
+
+# pod palette for in-world boxes (matching dashboard delivery palette)
+# ポッドごとの色（ダッシュボードのパレットと統一）
+POD_HUES = [
+    (0.0, 1.0, 1.0),          # Pod 1: Cyan
+    (1.0, 1.0, 0.0),          # Pod 2: Yellow
+    (1.0, 0.0, 1.0),          # Pod 3: Magenta
+    (2.0 / 3, 1.0, 0.0),      # Pod 4: Lime (LMH Hub)
+    (1.0, 2.0 / 3, 0.0),      # Pod 5: Orange
+    (1.0 / 3, 2.0 / 3, 1.0),  # Pod 6: Sky blue
+    (0.0, 1.0, 2.0 / 3),      # Pod 7: Mint
+    (2.0 / 3, 1.0 / 3, 1.0),  # Pod 8: Violet
+]
+
+
+# see-through faces of the zone boxes: panels from maps/build_zone_faces.sh
+# (1 m x k m, k = 1..32), spawned as static.prop.mesh, tiled per face
+# ゾーン箱の半透明の面（maps/build_zone_faces.sh のパネルを並べる）
+FACE_COLOURS = dict(zip([(1.0, 0.0, 0.0)] + POD_HUES,
+                        ["Red", "Cyan", "Yellow", "Magenta", "Lime", "Orange", "Sky", "Mint", "Violet"]))
+FACE_ASPECTS = (32, 16, 8, 4, 2, 1)
+FACE_ROLE = "zone_face"
+
+
+def face_tiles(w, h, min_side=0.3, limit=40):
+    """Cover a w x h rectangle with k x 1 panels (k a power of two), no overlap.
+    Returns (cu, cv, k, side, long_on_u) per panel. / 矩形をパネルで埋める"""
+    out, u0, v0 = [], 0.0, 0.0
+    while w >= min_side and h >= min_side and len(out) < limit:
+        if w >= h:
+            n = int(w / h + 1e-6)
+            for k in FACE_ASPECTS:
+                while n >= k and len(out) < limit:
+                    out.append((u0 + k * h / 2.0, v0 + h / 2.0, k, h, True))
+                    u0, w, n = u0 + k * h, w - k * h, n - k
+        else:
+            n = int(h / w + 1e-6)
+            for k in FACE_ASPECTS:
+                while n >= k and len(out) < limit:
+                    out.append((u0 + w / 2.0, v0 + k * w / 2.0, k, w, False))
+                    v0, h, n = v0 + k * w, h - k * w, n - k
+    return out
+
+
+class ZoneFaces(object):
+    """Keeps one set of translucent panels on every zone box. / ゾーン箱の面"""
+
+    def __init__(self, world, log=print):
+        self.world, self.log = world, log
+        self.key, self.actors, self.bp = None, [], None
+        try:
+            self.bp = world.get_blueprint_library().find("static.prop.mesh")
+            for a in world.get_actors().filter("static.prop.mesh"):
+                if a.attributes.get("role_name") == FACE_ROLE:   # left by a crashed run / 前回の残り
+                    a.destroy()
+        except (AttributeError, IndexError, RuntimeError):
+            self.bp = None
+
+    def clear(self):
+        for a in self.actors:
+            try:
+                a.destroy()
+            except RuntimeError:
+                pass
+        self.actors, self.key = [], None
+
+    def _panel(self, colour, k, side, loc, rot):
+        bp = self.bp
+        path = "/Game/ZoneTint/ZoneTint_%s_%d.ZoneTint_%s_%d" % (colour, k, colour, k)
+        bp.set_attribute("mesh_path", path)
+        bp.set_attribute("scale", "%.3f" % side)
+        bp.set_attribute("role_name", FACE_ROLE)
+        a = self.world.try_spawn_actor(bp, carla.Transform(loc, rot))
+        if a is not None:
+            self.actors.append(a)
+
+    def sync(self, boxes):
+        if self.bp is None or carla is None:
+            return
+        key = tuple((zb["kind"], zb["hue"]) + tuple(round(zb[k], 1) for k in ("x0", "y0", "x1", "y1", "cz", "hz"))
+                    for zb in boxes)
+        if key == self.key and (not self.actors or self.actors[0].is_alive):
+            return
+        self.clear()
+        self.key = key
+        R = carla.Rotation
+        for zb in boxes:
+            colour = FACE_COLOURS.get(tuple(zb["hue"]), "Red")
+            x0, x1 = sorted((zb["x0"], zb["x1"]))
+            y0, y1 = sorted((zb["y0"], zb["y1"]))
+            zb_, zt = zb["cz"] - zb["hz"], zb["cz"] + zb["hz"]
+            for cu, cv, k, s, lu in face_tiles(x1 - x0, y1 - y0):            # roof / 屋根
+                self._panel(colour, k, s, carla.Location(x0 + cu, y0 + cv, zt), R(yaw=0 if lu else 90))
+            for y in (y0, y1):                                               # walls along x / x 方向の壁
+                for cu, cv, k, s, lu in face_tiles(x1 - x0, zt - zb_):
+                    self._panel(colour, k, s, carla.Location(x0 + cu, y, zb_ + cv),
+                                R(roll=90) if lu else R(pitch=90, yaw=90))
+            for x in (x0, x1):                                               # walls along y / y 方向の壁
+                for cu, cv, k, s, lu in face_tiles(y1 - y0, zt - zb_):
+                    self._panel(colour, k, s, carla.Location(x, y0 + cu, zb_ + cv),
+                                R(yaw=90, roll=90) if lu else R(pitch=90))
+        self.log("[road_overlay] zone faces: %d panels on %d boxes" % (len(self.actors), len(boxes)))
 
 
 def channel(hue, level):
@@ -264,6 +370,8 @@ LEGEND = [
     ("lane_change", "lc_none", "AI may not change lanes", "AI は車線変更不可"),
     ("ids", "ids", "Road / lane / junction id", "道路・車線・交差点 ID"),
     ("osm", "osm", "Raw OSM way", "元の OSM 道路"),
+    ("zones", "nofly_zone", "No-fly zone (airspace box)", "飛行禁止区域（赤色の直方体）"),
+    ("zones", "pod_zone", "Pod delivery zone (ground box)", "配送ゾーン（ポッド別の色付き直方体）"),
 ]
 
 
@@ -968,6 +1076,35 @@ class Overlay(object):
         self.osm_table, self.osm_state = None, "off"
         self._osm_thread = None
         self._colors = None
+        self._zones_mtime = None
+        self._zones_data = {"pods": {}, "nofly": []}
+        self.faces = ZoneFaces(world, log=log)
+
+    def _ground_z(self, x, y):
+        pts = self.geo.centre_pts
+        if len(pts) == 0:
+            return 0.0
+        d2 = (pts[:, 0] - x) ** 2 + (pts[:, 1] - y) ** 2
+        near = np.nonzero(d2 < 120.0 * 120.0)[0]
+        if not len(near):
+            return float(pts[np.argmin(d2), 2])
+        w = 1.0 / np.maximum(1.0, np.sqrt(d2[near]))
+        return float(np.sum(pts[near, 2] * w) / np.sum(w))
+
+    def _load_zones(self):
+        try:
+            mtime = os.path.getmtime(ZONES_PATH)
+        except OSError:
+            mtime = 0
+        if self._zones_mtime != mtime:
+            self._zones_mtime = mtime
+            try:
+                from delivery import zones as delivery_zones
+                self._zones_data = delivery_zones.load(self.geo.name, ZONES_PATH)
+            except Exception as exc:                   # noqa: BLE001
+                self.log("[road_overlay] zones load: %s" % exc)
+                self._zones_data = {"pods": {}, "nofly": []}
+        return self._zones_data
 
     # -- static lights / 信号機
     def _lights(self):
@@ -1175,6 +1312,49 @@ class Overlay(object):
                         break
             cand.append((102, np.arange(len(ed)), np.array(ed), np.zeros(len(ed), np.int16)))
             cand.append((103, np.arange(len(eb)), np.array(eb), np.zeros(len(eb), np.int16)))
+        zone_boxes = []
+        if L.get("zones", True):
+            zd = self._load_zones()
+            for nf in zd.get("nofly") or []:
+                x0, y0, x1, y1 = nf["x0"], nf["y0"], nf["x1"], nf["y1"]
+                cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+                hx, hy = abs(x1 - x0) / 2.0, abs(y1 - y0) / 2.0
+                zg = self._ground_z(cx, cy)
+                cz, hz = zg + 30.5, 30.0
+                name = nf.get("name") or "NO-FLY"
+                zone_boxes.append({"kind": "nofly", "cx": cx, "cy": cy, "cz": cz,
+                                   "hx": hx, "hy": hy, "hz": hz,
+                                   "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                                   "hue": (1.0, 0.0, 0.0), "name": name, "top_z": zg + 60.5})
+            for pid_str, pz in (zd.get("pods") or {}).items():
+                x0, y0, x1, y1 = pz["x0"], pz["y0"], pz["x1"], pz["y1"]
+                cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+                hx, hy = abs(x1 - x0) / 2.0, abs(y1 - y0) / 2.0
+                zg = self._ground_z(cx, cy)
+                cz, hz = zg + 13.0, 12.5
+                try:
+                    pid = int(pid_str)
+                except (ValueError, TypeError):
+                    pid = 1
+                hue = POD_HUES[(pid - 1) % len(POD_HUES)]
+                name = "HUB %s" % pid if pid == 4 else "POD %s" % pid
+                zone_boxes.append({"kind": "pod", "pid": pid, "cx": cx, "cy": cy, "cz": cz,
+                                   "hx": hx, "hy": hy, "hz": hz,
+                                   "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+                                   "hue": hue, "name": name, "top_z": zg + 25.5})
+            if zone_boxes:
+                parts = []
+                for ai, (ax, ay, ar_, _ad, _th, _st) in enumerate(areas):
+                    d_list = []
+                    for zb in zone_boxes:
+                        dx = max(0.0, max(zb["x0"] - ax, ax - zb["x1"]))
+                        dy = max(0.0, max(zb["y0"] - ay, ay - zb["y1"]))
+                        d_list.append(math.hypot(dx, dy))
+                    d_arr = np.array(d_list)
+                    idx = np.nonzero(d_arr <= ar_ + 50.0)[0]
+                    if len(idx):
+                        parts.append((idx, d_arr[idx] / ar_, ai))
+                cand.append((105,) + best(parts))
 
         D = np.concatenate([c[2] for c in cand]) if cand else np.zeros(0)
         K = np.concatenate([np.full(len(c[1]), c[0], np.int16) for c in cand]) if cand else np.zeros(0, np.int16)
@@ -1255,6 +1435,28 @@ class Overlay(object):
         if len(sel4):
             by["labels"] = len(sel4)
             n += len(sel4)
+        m5 = K == 105
+        for k, ai in zip(I[m5].tolist(), A_[m5].tolist()):
+            zb = zone_boxes[k]
+            st_key = "nofly_zone" if zb["kind"] == "nofly" else "pod_zone"
+            th_val = STYLE_LIST[SID[st_key]][2] * thick[ai]
+            if carla is not None:
+                bb = carla.BoundingBox(Loc(zb["cx"], zb["cy"], zb["cz"]),
+                                       carla.Vector3D(zb["hx"], zb["hy"], zb["hz"]))
+                rot = carla.Rotation()
+            else:
+                bb = type("_B", (), {
+                    "location": type("_L", (), {"x": zb["cx"], "y": zb["cy"], "z": zb["cz"]})(),
+                    "extent": type("_L", (), {"x": zb["hx"], "y": zb["hy"], "z": zb["hz"]})(),
+                    "rotation": None,
+                })()
+                rot = None
+            dbg.draw_box(bb, rot, thickness=th_val, color=self.color(zb["hue"], level),
+                         life_time=life, persistent_lines=False)
+        self.faces.sync(zone_boxes)
+        if m5.any():
+            by["zones"] = int(m5.sum())
+            n += int(m5.sum())
         t_all = time.time() - t0
         return {"shapes": n, "candidates": candidates, "capped": candidates > cap, "by_layer": by,
                 "select_ms": round(t_sel * 1000, 2), "draw_ms": round((t_all - t_sel) * 1000, 2),
@@ -1353,6 +1555,7 @@ def run(args):
                         lights_retry = now + 30.0
                 ctl = load_control(args.control)
                 if not ctl["on"]:
+                    ov.faces.clear()
                     if now - last_status > 2.0:
                         write_status(dict(base, on=False, shapes=0), args.status)
                         last_status = now
@@ -1402,6 +1605,8 @@ def run(args):
                 if stop["flag"]:
                     break
                 time.sleep(0.1)
+    if ov is not None:
+        ov.faces.clear()
     write_status({"ready": False, "stopped": True}, args.status)
     print("[road_overlay] stopped / 終了")
 

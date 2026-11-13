@@ -99,7 +99,10 @@ function OptionField({ o, value, onChange, info }: {
       return (
         <div className="py-1">
           <div className="mb-1.5 text-sm text-fg">{L}</div>
-          <Segmented value={String(value)} onChange={onChange} options={(o.choices ?? []).map((c) => ({ value: c, label: c }))} />
+          <Segmented value={String(value)} onChange={onChange} options={(o.choices ?? []).map((c) => {
+            const k = `opt_${o.key}_${c}`; const s = t(k)
+            return { value: c, label: s !== k ? s : c === 'off' ? 'Off' : c === 'latest' ? 'Latest RL' : c }
+          })} />
           <div className="mt-1 text-xs text-fg-mute">{help(t, o)}</div>
         </div>
       )

@@ -471,3 +471,41 @@ CarlaUE4 をそのマップで再起動する（先に終了してから起動�
 - **A web change does not appear**: rebuild `web/` (`npm run build`), then
   reload the page. / web/ を再ビルドして再読込。
 
+
+## Drones (or anything delivery_sim moves) judder / ドローンがカクつく
+
+### Signature / 兆候
+
+Pods drive smoothly but flying drones jump: a few metres in one frame, then
+still for several frames. `data/pipeline.log` has a `[loop]` line every 20 s
+(`delivery/loop_prof.py`); the loop rate there is well under the server's
+~30 fps, and a second `[loop] blocking CARLA calls` line names the slow calls
+with their `file:line`.
+ポッドは滑らかだが飛行中のドローンが飛び飛びに動く。pipeline.log の `[loop]`
+行でループ周波数がサーバの約 30 fps を大きく下回り、待ちの出る呼び出しが表示される。
+
+### Cause / 原因
+
+delivery_sim poses the drones itself (one `ApplyTransform` per drone per loop),
+so they move only as often as its loop runs. In CARLA 0.9.16 a call that
+**returns data** from the server (`cast_ray`, `get_weather`, a `bounding_box`
+read, a first `get_actors` with new actors) waits ~30 ms when it is the first
+such call in a tick; later ones in the same tick take ~0.1 ms. Fire-and-forget
+calls (`apply_batch`, `set_transform`, debug drawing) and cached reads
+(`get_transform`, `get_velocity`, the snapshot) do not wait. A few such calls
+per tick kept the loop at 4-6 Hz (2026-11-13). Torch's default thread pool
+(one per core) also made the RL brains ~3x slower per call.
+ドローンは delivery_sim のループで動かすため、ループが遅いとカクつく。0.9.16 では
+データを返す呼び出しが tick の最初だと約 30 ms 待つ（2026-11-13、ループ 4〜6 Hz）。
+
+### Fix / 対処
+
+Keep data-returning calls out of the per-tick path: read static things once
+(`_BoxedCar` / `VEHICLES` in `delivery_sim.py` for BasicAgent's vehicle boxes,
+the surface-ray grid in `make_surface_fn`, the half-length cache in
+`traffic_profile.py`), or run them on a thread with its own client
+(`RayWorker` in `delivery/backends.py`; the wait releases the GIL). Torch is set
+to one thread in `delivery/rl_bridge.py`. After these the loop runs at 27-30 Hz
+with drones flying. Use the `[loop]` lines to find the next culprit.
+データを返す呼び出しを毎 tick の処理から外す（一度だけ読む・専用クライアントの
+スレッドで投げる）。torch は 1 スレッド。修正後は飛行中でも 27〜30 Hz。

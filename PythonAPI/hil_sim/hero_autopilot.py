@@ -61,7 +61,10 @@ def curve_speeds(points, lat_accel=3.6, decel=3.0, window=6.0):
         k = math.radians(dyaw) / ds                  # curvature 1/m / 曲率
         if k < 2e-3:
             continue
-        v_bend = math.sqrt(lat_accel / k)
+        # Tight bends (intersections, R < 15 m) scale down lateral accel to prevent
+        # tyre scrub and kerb clipping / 狭い交差点の曲がり角は横加速度を抑えて縁石乗り上げを防ぐ
+        a = max(2.4, lat_accel - max(0.0, k - 0.04) * 15.0) if lat_accel > 2.5 else lat_accel
+        v_bend = math.sqrt(a / k)
         best = min(best, stop_speed(s0, decel, v_bend))
     return best
 
@@ -161,14 +164,46 @@ class Lateral(object):
 
     @staticmethod
     def look(v):
-        return max(5.0, min(28.0, 4.0 + 0.3 * v))
+        return max(4.0, min(22.0, 3.5 + 0.35 * v))
 
     def step(self, dt, x, y, yaw_deg, v, path, ratio=1.0):
         """``path`` = [(s, px, py, ...)] ahead of the car, s along the route
         from the point nearest it; ``ratio`` = how much of the commanded angle
         CARLA really gives at this speed. Sets ``self.k`` (the curvature the
         car is steering for)."""
-        ld = self.look(v)
+        ld_base = self.look(v)
+
+        # Scan ahead for turns along path (heading difference relative to current yaw)
+        # 経路の前方にある旋回・カーブを検知
+        s_turn = None
+        turn_dir = 0.0
+        max_diff = 0.0
+        for i, p in enumerate(path):
+            pyaw = p[3] if len(p) > 3 else (
+                math.degrees(math.atan2(path[i + 1][2] - p[2], path[i + 1][1] - p[1]))
+                if i + 1 < len(path) else yaw_deg
+            )
+            diff = (pyaw - yaw_deg + 180.0) % 360.0 - 180.0
+            adiff = abs(diff)
+            if adiff > max_diff:
+                max_diff = adiff
+                turn_dir = 1.0 if diff > 0 else -1.0
+            if adiff > 12.0 and s_turn is None:
+                s_turn = p[0]
+
+        # Adaptive lookahead:
+        # 1) Approaching a turn: do not look past the turn entrance so the car
+        #    stays centered in the approach lane and does not turn early onto the kerb
+        #    旋回進入前は手前で曲がり始めて縁石に乗らないよう注視点を制限
+        # 2) In the turn: tight lookahead (2.5-3.2m) to follow the arc without cutting the inside apex
+        #    旋回中は短い注視点でインカットを防ぐ
+        if s_turn is not None and s_turn > 2.0:
+            ld = min(ld_base, max(2.5, s_turn))
+        elif max_diff > 15.0 or (s_turn is not None and s_turn <= 2.0):
+            ld = max(2.5, min(3.2, 2.2 + 0.15 * v))
+        else:
+            ld = ld_base
+
         tgt = None
         for p in path:
             if p[0] >= ld:
@@ -179,8 +214,22 @@ class Lateral(object):
         want = self.steer
         self.k = 0.0
         if tgt is not None:
+            tx, ty = tgt[1], tgt[2]
+            # Off-tracking compensation in tight turns:
+            # Shift target slightly outward (away from inside kerb)
+            # 内輪差・インカット対策: 旋回中は注視点をわずかに外側にオフセット
+            if max_diff > 15.0 and (s_turn is None or s_turn <= 2.5):
+                tyaw = tgt[3] if len(tgt) > 3 else (
+                    math.degrees(math.atan2(ty - y, tx - x)) if math.hypot(tx - x, ty - y) > 0.1 else yaw_deg
+                )
+                mag = min(0.25, max(0.0, (max_diff - 15.0) / 60.0 * 0.25))
+                sign = 1.0 if turn_dir > 0 else -1.0
+                rad = math.radians(tyaw)
+                tx += mag * sign * math.sin(rad)
+                ty -= mag * sign * math.cos(rad)
+
             yaw = math.radians(yaw_deg)
-            dx, dy = tgt[1] - x, tgt[2] - y
+            dx, dy = tx - x, ty - y
             a = math.atan2(dy, dx) - yaw
             a = (a + math.pi) % (2 * math.pi) - math.pi
             dist = max(math.hypot(dx, dy), 1.0)
@@ -233,6 +282,13 @@ class Pilot(object):
 
             def _compute_next_waypoints(self, k=1):
                 q = self._waypoints_queue
+                if not q:
+                    loc = self._vehicle.get_location()
+                    wp = self._map.get_waypoint(loc, project_to_road=True,
+                                                lane_type=carla.LaneType.Driving)
+                    if wp is None:
+                        return
+                    q.append((wp, RoadOption.LANEFOLLOW))
                 for _ in range(min(q.maxlen - len(q), k)):
                     last = q[-1][0]
                     nxt = list(last.next(self._sampling_radius))
@@ -276,7 +332,7 @@ class Pilot(object):
             self._curve = sorted((p.x, p.y) for p in pc.steering_curve)
         except (RuntimeError, AttributeError, IndexError):
             pass
-        self.lat = Lateral(wheelbase=wb, max_angle_deg=ang)
+        self.lat = Lateral(wheelbase=wb, max_angle_deg=ang, max_steer=0.85, tau=0.08, rate=2.4)
         self._road_kmh = None
         # 止まれ: the map's 206 stop lines (traffic_profile.StopLines) / 一時停止
         self.stops = None
@@ -341,27 +397,46 @@ class Pilot(object):
             self._limit_cache[key] = self.speed_fn(wp)
         return self._limit_cache[key]
 
-    def _path(self, loc, look):
+    def _replan(self, loc):
+        """Reset the LocalPlanner queue from the nearest driving lane waypoint."""
+        try:
+            wp = self.wmap.get_waypoint(loc, project_to_road=True,
+                                        lane_type=self.carla.LaneType.Driving)
+            if wp is not None:
+                self.lp._waypoints_queue.clear()
+                self.lp.target_waypoint = wp
+                self.lp._waypoints_queue.append((wp, self.carla.RoadOption.LANEFOLLOW))
+                self.lp._compute_next_waypoints(k=self.lp._min_waypoint_queue_length)
+        except Exception:
+            pass
+
+    def _path(self, loc, look, fwd=None):
         """[(s, x, y, yaw, wp)] along the planned route, s from the route point
         nearest the car. Route points the car has already passed are dropped
-        (else a missed turn leaves them in the plan and the car circles back).
-        計画経路（通過済みの点は捨てる）。"""
+        in sequential order. / 計画経路（通過済みの点は順に捨てる）。"""
         q = self.lp.get_plan()
-        best, bi = 1e18, 0
-        for i, (wp, _) in enumerate(q):
-            if i > 60:
-                break
+        if not q or (len(q) > 0 and loc.distance(q[0][0].transform.location) > 20.0):
+            self._replan(loc)
+            q = self.lp.get_plan()
+
+        # Pop waypoints that the vehicle has already passed in sequence
+        while len(q) > 10:
+            wp = q[0][0]
             L = wp.transform.location
-            d = (L.x - loc.x) ** 2 + (L.y - loc.y) ** 2
-            if d < best:
-                best, bi = d, i
-        for _ in range(min(bi, len(q) - 2)):
-            q.popleft()
-        out, s, px, py = [], 0.0, None, None
+            dx = L.x - loc.x
+            dy = L.y - loc.y
+            dist_sq = dx * dx + dy * dy
+            # If a forward vector is given, test if the waypoint lies behind the car:
+            behind = (dx * fwd.x + dy * fwd.y < -0.5) if fwd is not None else False
+            if behind or dist_sq < 3.5:
+                q.popleft()
+            else:
+                break
+
+        out, s, px, py = [], 0.0, loc.x, loc.y
         for wp, _ in q:
             L = wp.transform.location
-            if px is not None:
-                s += math.hypot(L.x - px, L.y - py)
+            s += math.hypot(L.x - px, L.y - py)
             px, py = L.x, L.y
             out.append((s, L.x, L.y, wp.transform.rotation.yaw, wp))
             if s > look:
@@ -390,9 +465,9 @@ class Pilot(object):
         a_long = acc.x * fwd.x + acc.y * fwd.y
         self.lp.run_step()                        # keeps the route ahead / 経路を更新
         look = max(self.LOOK_MIN, v * v / (2.0 * self.COMFORT) + 25.0)
-        path = self._path(loc, look)
+        path = self._path(loc, look, fwd)
         steer = self.lat.step(dt, loc.x, loc.y, tf.rotation.yaw, v, path, self._ratio(v * 3.6))
-        here = self.wmap.get_waypoint(loc)
+        here = self.wmap.get_waypoint(loc, project_to_road=True, lane_type=self.carla.LaneType.Driving)
         # inside a junction the road's limit carries on (the turning lanes'
         # own low limits are not used: the bend decides) / 交差点内は道路の制限を継続
         if here is not None and not here.is_junction:
@@ -414,7 +489,8 @@ class Pilot(object):
         if vt < target:
             target, reason = vt, "bend"
         if self.lat.k > 0.02:            # turning now: as fast as grip allows / 旋回中の上限
-            vt = math.sqrt(3.6 / self.lat.k)
+            a_lat = max(2.4, 3.6 - max(0.0, self.lat.k - 0.04) * 15.0)
+            vt = math.sqrt(a_lat / self.lat.k)
             if vt < target:
                 target, reason = vt, "turn"
         front = self.half_len
@@ -491,17 +567,23 @@ class Pilot(object):
             self._reverse = None
             self.lon.reset()
             self.lat.steer = 0.0
-        if target > 1.0 and v < 0.15 and self.lon.throttle > 0.25:
+            self._replan(loc)
+        if target > 1.0 and v < 0.20 and self.lon.throttle > 0.20:
             self._no_progress += dt
         else:
             self._no_progress = 0.0
-        self._reverses = [t for t in self._reverses if self._t - t < 120.0]
-        if self._no_progress > 6.0 and len(self._reverses) < 3:
+        self._reverses = [t for t in self._reverses if self._t - t < 60.0]
+        if self._no_progress > 2.0:
             self._reverses.append(self._t)
             self._no_progress = 0.0
-            self._reverse = self._rec.ReverseOut(loc.x, loc.y, back_m=3.0)
+            back_dist = 5.0 if len(self._reverses) > 1 else 3.5
+            self._reverse = self._rec.ReverseOut(loc.x, loc.y, back_m=back_dist)
         self.target_kmh, self.reason = target * 3.6, reason
         thr, brk = self.lon.step(dt, v, target, a_long, urgent)
+        # Traction control: prevent wheelspin / snap-oversteer when turning from low speed
+        if v < 4.0 and abs(steer) > 0.12 and self._no_progress < 0.5:
+            max_thr = max(0.28, 0.55 - 0.25 * abs(steer))
+            thr = min(thr, max_thr)
         out = self.carla.VehicleControl()
         out.steer = steer
         out.throttle, out.brake = thr, brk

@@ -78,9 +78,10 @@ GROUPS = [
 _A = []
 
 
-def _act(aid, group, kind, en, ja, keys=(), wheel=(), axis=False):
+def _act(aid, group, kind, en, ja, keys=(), wheel=(), axis=False, window="driving"):
     _A.append({"id": aid, "group": group, "kind": kind, "en": en, "ja": ja,
-               "keys": list(keys), "wheel": list(wheel), "axis": axis})
+               "keys": list(keys), "wheel": list(wheel), "axis": axis,
+               "window": window})
 
 
 _act("throttle", "drive", "hold", "Throttle", "アクセル", ["w", "up"], axis=True)
@@ -110,6 +111,12 @@ _act("recording", "camera", "press", "Camera recording", "カメラ録画切替"
 # 道路ロジック表示（road_overlay.py）。ホイールの既定は無し
 _act("road_overlay", "camera", "press", "Road logic overlay (what the AI drives on)",
      "道路ロジック表示（AI が使う道路情報）", ["o"])
+# CARLA spectator window pod / drone tracking camera (cycled with Q / E, delivery_sim.py)
+# CARLA 観戦ウィンドウのポッド・ドローン追従カメラ（Q / E で巡回、delivery_sim.py）
+_act("pod_cam_prev", "camera", "press", "Previous pod / drone camera (CARLA window)",
+     "前のポッド・ドローンカメラ（CARLA 観戦）", ["q"], window="carla")
+_act("pod_cam_next", "camera", "press", "Next pod / drone camera (CARLA window)",
+     "次のポッド・ドローンカメラ（CARLA 観戦）", ["e"], window="carla")
 
 _act("eye_fwd", "eye", "press", "Eye forward", "視点を前へ", ["ctrl+i"])
 _act("eye_back", "eye", "press", "Eye back", "視点を後ろへ", ["ctrl+k"])
@@ -400,24 +407,26 @@ def conflicts(bindings):
     """{"keys": {spec: [action, ...]}, "wheel": {spec: [action, ...]}} for every
     input used by more than one action. A hold action reacts to its key with
     any modifier, so it clashes with every binding on the same base key.
-    / 複数の操作に割り当てられた入力。"""
+    Actions targeting different windows (driving vs carla) do not clash for keys.
+    / 複数の操作に割り当てられた入力。別ウィンドウのキー割り当ては衝突しない。"""
     key_users, wheel_users = {}, {}
     for a in ACTIONS:
+        win = a.get("window", "driving")
         cell = bindings.get(a["id"], {})
         for k in cell.get("keys", []):
             p = parse_key(k)
             if p is None:
                 continue
-            key_users.setdefault(p[1], []).append((a["id"], p[0], a["kind"] == "hold", k))
+            key_users.setdefault(p[1], []).append((a["id"], p[0], a["kind"] == "hold", k, win))
         for w in cell.get("wheel", []):
             n = norm_wheel(w)
             if n:
                 wheel_users.setdefault(n, []).append(a["id"])
     out_keys = {}
     for base_key, users in key_users.items():
-        for i, (aid, mods, hold, spec) in enumerate(users):
-            for aid2, mods2, hold2, spec2 in users[i + 1:]:
-                if aid2 == aid:
+        for i, (aid, mods, hold, spec, win) in enumerate(users):
+            for aid2, mods2, hold2, spec2, win2 in users[i + 1:]:
+                if aid2 == aid or win != win2:
                     continue
                 if hold or hold2 or mods == mods2:
                     for s in (spec, spec2):

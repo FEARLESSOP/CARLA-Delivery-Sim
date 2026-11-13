@@ -26,6 +26,7 @@ import time
 import carla
 
 from delivery import lmp_rig, rig
+from delivery.loop_prof import LOOP_PROF
 from delivery.battery import Battery
 from delivery.drone import (Sortie, Transfer, Mission, TAKEOFF, ASCEND, LAND, DESCEND, DROP)
 from delivery.wind import Drift
@@ -165,6 +166,65 @@ class Hazards(object):
         self.lost_drift = lost_drift            # >0: pushed this far off = lost [m]; 0 = no limit
 
 
+class RayWorker(object):
+    """Casts the drones' per-tick collision rays on a thread with its own
+    client. In CARLA 0.9.16 the first blocking call in each tick waits ~30 ms
+    for the server, so one ray per flying drone in the main loop held the
+    loop below the server's frame rate and the drones (posed by that loop)
+    juddered. The answer arrives one tick later (≤ ~1 m of flight): the crash
+    is reported then. The wait releases the GIL, so the loop runs on.
+    ドローンの衝突レイを専用クライアントのスレッドで投げる。0.9.16 では tick ごとの
+    最初の同期呼び出しが約 30 ms 待つため、メインループで投げるとループ（＝ドローン
+    表示）が遅れカクついた。結果は 1 tick 後に届き、その時点で墜落とする。"""
+
+    def __init__(self):
+        self.ok = False
+        self._jobs, self._hits = {}, {}
+        self._lock, self._wake = threading.Lock(), threading.Event()
+
+    def start(self, host, port):
+        def loop():
+            try:
+                c = carla.Client(host, port)
+                c.set_timeout(10.0)
+                world = c.get_world()
+            except RuntimeError as e:
+                print("[delivery] ray worker: no client (%s); rays in the loop / "
+                      "レイはループ内で投げる" % e, flush=True)
+                return
+            self.ok = True
+            while True:
+                self._wake.wait(1.0)
+                self._wake.clear()
+                with self._lock:
+                    jobs, self._jobs = self._jobs, {}
+                for key, segs in jobs.items():
+                    for a, b, solid, state in segs:     # every segment, in order / 全区間を順に
+                        try:
+                            hits = world.cast_ray(carla.Location(*a), carla.Location(*b))
+                        except RuntimeError:
+                            continue
+                        h = next((h for h in hits if h.label in solid), None)
+                        if h is not None:
+                            with self._lock:
+                                self._hits.setdefault(key, (h.label, h.location.z, state))
+                            break
+        threading.Thread(target=loop, name="drone-ray-worker", daemon=True).start()
+
+    def submit(self, key, a, b, solid, state):
+        with self._lock:
+            self._jobs.setdefault(key, []).append((a, b, solid, state))
+        self._wake.set()
+
+    def take(self, key):
+        """A hit found for ``key`` since the last call, or None. / 衝突結果。"""
+        with self._lock:
+            return self._hits.pop(key, None)
+
+
+RAYS = RayWorker()
+
+
 class DroneUnit(object):
     """One physical drone: battery, flight, wind drift, failures and its props.
 
@@ -179,12 +239,14 @@ class DroneUnit(object):
 
     def __init__(self, uid, world, client, rng, battery_model, hazards, max_wind=11.0,
                  h_speed=12.0, v_speed=4.0, hover_s=4.0, drop_height=3.0, model=True,
-                 kind="pod"):
+                 kind="pod", nav_bridge=None, recovery_bridge=None):
         self.id = uid
         self.world, self.client, self.rng = world, client, rng
         self.bm, self.hz = battery_model, hazards
         self.h_speed, self.v_speed = h_speed, v_speed
         self.hover_s, self.drop_height = hover_s, drop_height
+        self.nav_bridge = nav_bridge
+        self.recovery_bridge = recovery_bridge
         self.battery = Battery(100.0)
         self.drift = Drift(max_wind)
         self.status = STANDBY
@@ -339,6 +401,17 @@ class DroneUnit(object):
     def start_trip(self, van, order, hover_point, cruise_z):
         """One delivery round trip from ``van`` (parked, hatch open)."""
         self.order, self.parcel_lost = order, False
+        if self.nav_bridge is not None:
+            self.flight = self.nav_bridge.create_flight(van, hover_point, drop_height=self.drop_height)
+            self.pos = self._start = self.flight.pos
+            self._start_z = self.pos[2]
+            self.yaw = self.flight.yaw_deg
+            self._free_here()
+            self._hang()
+            self.status, self.note = DELIVERING, "order #%d (RL-Nav)" % order.id
+            self.trips += 1
+            self.drift.reset()
+            return
         self.flight = Sortie(van.dock_pos, [hover_point], drop_height=self.drop_height,
                              h_speed=self.h_speed, v_speed=self.v_speed,
                              hover_s=self.hover_s, reload_s=0.0, leg_z=[cruise_z])
@@ -403,7 +476,10 @@ class DroneUnit(object):
         f = self.flight
         events = []
         self.air_s += dt
-        for ev, _ in f.update(dt):
+        t0 = time.perf_counter()
+        evs = f.update(dt)
+        LOOP_PROF.add(" (fly)", time.perf_counter() - t0)
+        for ev, _ in evs:
             if ev == "delivered":
                 if self.parcel_lost:
                     events.append(("parcel_lost", self.order))
@@ -414,6 +490,30 @@ class DroneUnit(object):
                     h, d = f.drops[0], self.order.drop
                     self._drop_parcel_at(h[0], h[1], d[2], t)
                     events.append(("delivered", self.order))
+                    if self.recovery_bridge is not None and self.van is not None:
+                        sky_st = getattr(self.van, "sky", None)
+                        st_pads = sky_st.drones.station.pads if sky_st and hasattr(sky_st, "drones") and hasattr(sky_st.drones, "station") else []
+                        w_vec = (float(wind[0]), float(wind[1])) if len(wind) >= 2 else (0.0, 0.0)
+                        chosen, decision = self.recovery_bridge.evaluate_recovery(
+                            drone_unit=self,
+                            van=self.van,
+                            station_pads=st_pads,
+                            current_wind=w_vec,
+                            current_t=t,
+                        )
+                        if chosen is not None and chosen.target_type == "station":
+                            pad_idx = int(chosen.target_id.split("_")[-1]) if "_" in chosen.target_id else 0
+                            self.pad_target = pad_idx
+                            self.status = TO_STATION
+                            self.note = "divert to pad %d (FA-RAMPPO)" % (pad_idx + 1)
+                            if getattr(f, "is_rl", False) and hasattr(f, "set_recovery_target"):
+                                f.set_recovery_target(lambda: chosen.position)
+                            elif sky_st and hasattr(sky_st.drones, "send_to_station"):
+                                sky_st.drones.send_to_station(self, t)
+                        elif chosen is not None:
+                            self.note = "recovering to pod %d (FA-RAMPPO)" % self.van.vid
+                            if getattr(f, "is_rl", False) and hasattr(f, "set_recovery_target"):
+                                f.set_recovery_target(self.van.dock_pos if hasattr(self.van, "dock_pos") else self.van.roof)
             elif ev == "landed":
                 events.append(("trip_done", self.order))
             elif ev == "arrived":
@@ -423,12 +523,19 @@ class DroneUnit(object):
         if getattr(f, "holding", False) and self.van is not None:
             self.note = "waiting for pod %d" % self.van.vid
         wspeed = math.hypot(*wind)
-        assist = f.state == LAND or f.done or (f.state == TAKEOFF and
-                                               f.pos[2] - self._start_z < 2.5)
-        d = self.drift.step(dt, wind, assist=assist)
-        actual = (f.pos[0] + d[0], f.pos[1] + d[1], f.pos[2])
-        self.battery.drain(dt, self.bm.rate(f.loaded, f.state in (TAKEOFF, ASCEND), wspeed))
+        if getattr(f, "is_rl", False):
+            actual = tuple(f.pos)
+            self.battery.level = float(f.drone.battery)
+            self.yaw = float(f.yaw_deg)
+        else:
+            assist = f.state == LAND or f.done or (f.state == TAKEOFF and
+                                                   f.pos[2] - self._start_z < 2.5)
+            d = self.drift.step(dt, wind, assist=assist)
+            actual = (f.pos[0] + d[0], f.pos[1] + d[1], f.pos[2])
+            self.battery.drain(dt, self.bm.rate(f.loaded, f.state in (TAKEOFF, ASCEND), wspeed))
+        t0 = time.perf_counter()
         crash = self._hazard(dt, f, actual)
+        LOOP_PROF.add(" (hazard ray)", time.perf_counter() - t0)
         self.km += math.dist(actual, self.pos) / 1000.0
         self.pos = actual
         h = f.heading()
@@ -450,7 +557,9 @@ class DroneUnit(object):
         if f.done and self.status == DELIVERING:
             self.status, self.note, self.flight = DOCKED, "", None
             self.drift.reset()
+        t0 = time.perf_counter()
         self._render(f)
+        LOOP_PROF.add(" (pose)", time.perf_counter() - t0)
         self._draw_trail(f)
         return events
 
@@ -470,11 +579,23 @@ class DroneUnit(object):
             solid = self._solid
             if f.state not in (TAKEOFF, LAND, DESCEND):
                 solid = solid | self._ground
+            if RAYS.ok:
+                key = (self.id, id(f))          # a new flight never gets an old hit / 別飛行の結果は無視
+                hit = RAYS.take(key)
+                RAYS.submit(key, (a.x, a.y, a.z), (b.x, b.y, b.z), solid, f.state)
+                if hit is not None:
+                    self.crash_detail = "%s at z %.1f, during %s" % (hit[0], hit[1], hit[2])
+                    return "collision:%s" % str(hit[0])
+                return self._other_hazard(dt)
             for h in self.world.cast_ray(a, b):
                 if h.label in solid:
                     self.crash_detail = "%s at z %.1f, during %s" % (
                         h.label, h.location.z, f.state)
                     return "collision:%s" % str(h.label)
+        return self._other_hazard(dt)
+
+    def _other_hazard(self, dt):
+        """Drift and motor failure. / 流され・モーター故障。"""
         if self.hz.lost_drift > 0 and self.drift.offset > self.hz.lost_drift:
             return "blown_off_course"
         if (self.hz.random and
@@ -533,7 +654,10 @@ class DroneUnit(object):
             else:
                 tf = _tf(rig.to_parent(*(self._frame + (self.pos, self.yaw))))
         else:
-            tf = carla.Transform(carla.Location(*self.pos), carla.Rotation(yaw=self.yaw))
+            rot = carla.Rotation(pitch=float(getattr(f, "pitch_deg", 0.0)),
+                                 yaw=float(self.yaw),
+                                 roll=float(getattr(f, "roll_deg", 0.0)))
+            tf = carla.Transform(carla.Location(*self.pos), rot)
         cmds = [carla.command.ApplyTransform(self.body.id, tf)]
         if not f.done:      # rotors idle once landed / 着地後は停止
             self._spin += rig.ROTOR_STEP_DEG

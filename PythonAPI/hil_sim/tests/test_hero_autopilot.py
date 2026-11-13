@@ -153,6 +153,54 @@ check("steering rate limited (<= 0.9/s)",
       max(abs(steers[i + 1] - steers[i]) for i in range(len(steers) - 1)) <= 0.9 * 0.05 + 1e-9)
 check("steering stays within the wheel's 0.5", max(abs(s) for s in steers) <= 0.5)
 
+# 90-degree corner: no premature turn-in, tracks arc without mounting kerb
+# 90度交差点: 手前で曲がり始めて縁石に乗らない、内輪差考慮でインカット抑制
+corner_pts = []
+for x_pt in range(0, 31, 2):
+    corner_pts.append((float(x_pt), float(x_pt), 0.0, 0.0))
+R_corner = 8.0
+s_corner_start = 30.0
+for k in range(1, 16):
+    ang = (math.pi / 2.0) * (k / 15.0)
+    wx = s_corner_start + R_corner * math.sin(ang)
+    wy = R_corner * (1.0 - math.cos(ang))
+    corner_pts.append((s_corner_start + R_corner * ang, wx, wy, math.degrees(ang)))
+for y_pt in range(9, 30, 2):
+    corner_pts.append((s_corner_start + R_corner * (math.pi / 2.0) + (y_pt - 8.0), s_corner_start + R_corner, float(y_pt), 90.0))
+
+lat_c = ha.Lateral(wheelbase=2.7, max_angle_deg=70.0, max_steer=0.85, tau=0.08, rate=2.4)
+c_x, c_y, c_yaw, c_v = 0.0, 0.0, 0.0, 4.2
+corner_log = []
+for _ in range(250):
+    q = [p for p in corner_pts if (p[1] - c_x) * math.cos(math.radians(c_yaw)) + (p[2] - c_y) * math.sin(math.radians(c_yaw)) >= -0.5
+         and (p[1] - c_x) ** 2 + (p[2] - c_y) ** 2 >= 3.5]
+    if not q:
+        break
+    ahead = []
+    px_c, py_c = c_x, c_y
+    s_c = 0.0
+    for p in q:
+        s_c += math.hypot(p[1] - px_c, p[2] - py_c)
+        px_c, py_c = p[1], p[2]
+        ahead.append((s_c, p[1], p[2], p[3]))
+        if s_c > 30.0:
+            break
+    st = lat_c.step(0.05, c_x, c_y, c_yaw, c_v, ahead)
+    delta = st * math.radians(70.0)
+    c_yaw += math.degrees(c_v / 2.7 * math.tan(delta) * 0.05)
+    c_x += c_v * math.cos(math.radians(c_yaw)) * 0.05
+    c_y += c_v * math.sin(math.radians(c_yaw)) * 0.05
+    corner_log.append((c_x, c_y, c_yaw, st))
+
+entry_pts = [p for p in corner_log if 28.5 <= p[0] <= 30.5]
+y_at_entry = entry_pts[-1][1] if entry_pts else 0.0
+check("corner approach: stays in lane prior to entry (<= 0.20 m offset)",
+      abs(y_at_entry) <= 0.20, round(y_at_entry, 3))
+in_turn = [p for p in corner_log if p[0] >= 30.0 and p[1] <= 8.5]
+max_cut = max(8.0 - math.hypot(p[0] - 30.0, p[1] - 8.0) for p in in_turn) if in_turn else 0.0
+check("inside 8m turn: tracks arc without apex cutting (<= 0.25 m cut)",
+      max_cut <= 0.25, round(max_cut, 3))
+
 import random  # noqa: E402
 rng = random.Random(1)
 picks = [ha.pick_branch([0.0, -90.0, 178.0], rng) for _ in range(2000)]

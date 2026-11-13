@@ -55,6 +55,12 @@ SCHEMA = [
      "help": "how many the sim places (0 = off: the road-side chargers)", "live": "live"},
     {"key": "drone_cams", "flag": "--drone-cams", "type": "bool", "default": True, "group": "delivery",
      "label": "Drone camera wall", "help": "a window with one camera per flying drone", "live": "live"},
+    {"key": "policy_nav", "flag": "--policy-nav", "type": "choice", "default": "off",
+     "choices": ["off", "latest"], "group": "delivery", "label": "Drone RL flight",
+     "help": "fly delivery drones with the trained RecurrentPPO brain (off: rule-based)", "live": "live"},
+    {"key": "policy_drive", "flag": "--policy-drive", "type": "choice", "default": "off",
+     "choices": ["off", "latest"], "group": "delivery", "label": "Pod RL driving",
+     "help": "drive LastMile pods with the trained SAC brain (off: BasicAgent)", "live": "live"},
     # driving / 運転
     {"key": "start_vehicle", "flag": "--start-vehicle", "type": "vehicle", "default": "vehicle.mazda.rx7",
      "group": "driving", "label": "Your car", "help": "the car you start in (Backspace cycles in game)",
@@ -157,6 +163,8 @@ def to_argv(opts):
                 argv.append(s["flag"])
         elif t in ("str", "map", "vehicle") and v == "":
             continue
+        elif s["key"] in ("policy_nav", "policy_drive") and v == "off":
+            continue
         else:
             argv += [s["flag"], str(v)]
     return argv
@@ -222,6 +230,11 @@ def self_test():
     c = clean({"charge_mode": "everywhere", "charge_stations": 40})
     assert c["charge_mode"] == "random" and c["charge_stations"] == 12
     assert d["charge_mode"] == "random" and d["charge_stations"] == 0
+    assert "--policy-nav" not in a and "--policy-drive" not in a
+    cn = clean({"policy_nav": "latest", "policy_drive": "latest"})
+    an = to_argv(cn)
+    assert "--policy-nav" in an and an[an.index("--policy-nav") + 1] == "latest"
+    assert "--policy-drive" in an and an[an.index("--policy-drive") + 1] == "latest"
     print("launch_options self-test OK")
 
 

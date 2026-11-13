@@ -681,10 +681,15 @@ class RuleKeeper(object):
             self.tm.set_desired_speed(self._actor(vid), self._lane_target(vid))
 
     def _half_length(self, vid):
-        try:
-            return float(self._actor(vid).bounding_box.extent.x)
-        except AttributeError:
-            return 2.3
+        """Half the car's length, read once per car (a bounding_box read can
+        wait ~30 ms for the server). / 車長の半分（1 台 1 回だけ読む）。"""
+        cache = self.__dict__.setdefault('_half_len', {})
+        if vid not in cache:
+            try:
+                cache[vid] = float(self._actor(vid).bounding_box.extent.x)
+            except AttributeError:
+                return 2.3
+        return cache[vid]
 
     def _may_go(self, vid, st, now, snapshot):
         """First come first served among the cars waiting at this junction,

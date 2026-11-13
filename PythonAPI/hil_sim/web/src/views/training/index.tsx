@@ -12,7 +12,7 @@ import { fmt, fmtDur } from '@/lib/fmt'
 import { Badge, Button, Card, EmptyState, Grid, KV, SectionTitle, Segmented, Select, Slider, Stat, Stepper } from '@/components/ui'
 
 interface ProgRow { steps: number; wall_s: number; wind_level: number; reached: number; crash: number; xtrack_mean: number; xtrack_max: number; guard_steps: number; battery_used: number; ep_reward: number }
-interface TrainState { brain?: string; running?: boolean; steps?: number; wind_level?: number; deadline?: number; last?: Partial<ProgRow> }
+interface TrainState { brain?: string; running?: boolean; steps?: number; wind_level?: number; deadline?: number; last?: Partial<ProgRow>; round?: number; training?: string }
 type Brain = 'flight' | 'mission' | 'nav' | 'fleet' | 'drive'
 interface RuleBase { deliveries: number; crashes_per_100: number; lead_mean_s: number; landing_min: number }
 interface RlState { state: TrainState; alive: boolean; progress: ProgRow[]; checkpoints: string[]; drone_checkpoints?: string[]; rule?: RuleBase | null }
@@ -47,7 +47,8 @@ function Trainer({ st, brain }: { st: RlState | null; brain: Brain }) {
         <Stat size="md" label={t('tr_steps')} value={fmt((s.steps ?? 0) / 1e6, 2)} unit="M" />
         {(brain === 'nav' || brain === 'flight') && <Stat size="md" label={t('tr_wind')} value={fmt((s.wind_level ?? 0) * 100, 0)} unit="%" />}
       </div>
-      {running && <KV k={t('tr_left')} v={fmtDur(left)} />}
+      {running && <KV k={t('tr_left')} v={left > 0 ? fmtDur(left) : '–'} />}
+      {brain === 'fleet' && s.round != null && <KV k={t('tr_f_round')} v={`${s.round} · ${s.training === 'drone' ? t('tr_f_drone') : t('tr_f_pod')}`} />}
       {brain === 'flight' && s.last && <>
         <KV k={t('tr_reached')} v={`${fmt((s.last.reached ?? 0) * 100, 0)} %`} tone={(s.last.reached ?? 0) >= 0.8 ? 'good' : 'warn'} />
         <KV k={t('tr_xtrack')} v={`${fmt(s.last.xtrack_mean ?? 0, 2)} m`} />

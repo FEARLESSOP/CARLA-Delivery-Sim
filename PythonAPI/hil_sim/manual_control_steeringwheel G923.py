@@ -717,15 +717,16 @@ class DualControl(object):
         self._wheel_press, self._wheel_hold = {}, {}
         for a in keybinds.ACTIONS:
             cell = binds[a['id']]
-            for spec in cell['keys']:
-                parsed = keybinds.parse_key(spec)
-                code = key_code(parsed[1]) if parsed else None
-                if code is None:
-                    continue
-                if a['kind'] == 'hold':
-                    self._key_hold.setdefault(a['id'], []).append(code)
-                else:
-                    self._key_press.setdefault(code, []).append((parsed[0], a['id']))
+            if a.get('window', 'driving') == 'driving':
+                for spec in cell['keys']:
+                    parsed = keybinds.parse_key(spec)
+                    code = key_code(parsed[1]) if parsed else None
+                    if code is None:
+                        continue
+                    if a['kind'] == 'hold':
+                        self._key_hold.setdefault(a['id'], []).append(code)
+                    else:
+                        self._key_press.setdefault(code, []).append((parsed[0], a['id']))
             for spec in cell['wheel']:
                 if a['kind'] == 'hold':
                     self._wheel_hold.setdefault(a['id'], []).append(
@@ -847,6 +848,10 @@ class DualControl(object):
             cam.toggle_recording()
         elif aid == 'road_overlay':
             self._toggle_road_overlay(world)
+        elif aid == 'pod_cam_prev':
+            self._cycle_pod_cam(world, -1)
+        elif aid == 'pod_cam_next':
+            self._cycle_pod_cam(world, 1)
         elif aid == 'map_next':
             # True under run_pipeline.py: close for the switch / 切替のため終了
             return world.change_map(1) is True
@@ -906,6 +911,18 @@ class DualControl(object):
         if on and not alive:
             msg += ' (road_overlay.py not running / 未起動)'
         world.hud.notification(msg, seconds=3.0)
+
+    @staticmethod
+    def _cycle_pod_cam(world, step):
+        """Cycle spectator camera between pods / drones via delivery_live.
+        / delivery_live 経由でポッド・ドローン追従カメラを切り替え。"""
+        try:
+            from delivery import live as delivery_live
+            delivery_live.send_command(delivery_live.DEFAULT_DIR, {"cmd": "cam_cycle", "step": step})
+            world.hud.notification("Pod camera: %s / ポッド追従カメラ: %s" % (
+                "next" if step > 0 else "prev", "次" if step > 0 else "前"))
+        except Exception as exc:
+            world.hud.notification("Pod camera: %s" % exc)
 
     def _toggle_transmission(self, world):
         """Automatic <-> manual. Manual starts in the gear the car is in, or
@@ -1048,6 +1065,7 @@ class DualControl(object):
             else (1.0 if (self._held('glance_right', keys)
                           or self._wheel_held('glance_right')) else 0.0))
 
+        self._check_autopilot_cmd(world)
         if not self._autopilot_enabled:
             if isinstance(self._control, carla.VehicleControl):
                 if self._joystick is not None:
@@ -1099,6 +1117,28 @@ class DualControl(object):
 
     AUTOPILOT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
                                   'autopilot_state.json')
+    AUTOPILOT_CMD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                      'autopilot_cmd.json')
+
+    def _check_autopilot_cmd(self, world):
+        if not os.path.exists(self.AUTOPILOT_CMD_PATH):
+            return
+        try:
+            with open(self.AUTOPILOT_CMD_PATH, 'r') as fh:
+                data = json.load(fh)
+            os.remove(self.AUTOPILOT_CMD_PATH)
+            if 'enabled' in data and data['enabled'] != self._autopilot_enabled:
+                self._autopilot_enabled = bool(data['enabled'])
+                if self._tm_autopilot:
+                    world.player.set_autopilot(self._autopilot_enabled, self._tm_port)
+                else:
+                    self._pilot = None
+                    if not self._autopilot_enabled:
+                        world.player.apply_control(carla.VehicleControl())
+                        self._autopilot_flag(False)
+                world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
+        except Exception:
+            pass
 
     def _autopilot_flag(self, on, wheel=0.0):
         """Tell carla_ffb.py the autopilot is driving and where the wheel

@@ -92,7 +92,7 @@ def new_model(algo, venv, seed, gamma):
 
 def latest(brain):
     files = glob.glob(os.path.join(CKPT, brain, "step_*.zip"))
-    return max(files, key=lambda p: int(os.path.basename(p)[5:-4])) if files else None
+    return max(files, key=os.path.getmtime) if files else None
 
 
 def write_state(**kw):
@@ -245,6 +245,10 @@ def train_nav(a):
             level, dist = j.get("wind_level", 0.0), j.get("dist", 200.0)
     else:
         model = new_model(algo, venv, a.seed, gamma=0.995)
+    if getattr(a, "dist", 0.0) > 0.0:
+        dist = float(a.dist)
+    if getattr(a, "wind_level", None) is not None:
+        level = float(a.wind_level)
 
     def setc():
         venv.env_method("__setattr__", "wind_level", level)
@@ -318,7 +322,7 @@ def make_drive(map_name, seed):
 
 
 DRIVE_COLS = ["steps", "wall_s", "route_len", "traffic", "reached", "kerb", "collision", "stop_violations",
-              "red_violations", "centre_s", "speeding_s", "speed", "ep_reward"]
+              "red_violations", "centre_s", "speeding_s", "speed", "p10_speed", "ep_reward"]
 
 
 def evaluate_drive(model, map_name, route_len, traffic, n=16, seed=8080):
@@ -338,11 +342,13 @@ def evaluate_drive(model, map_name, route_len, traffic, n=16, seed=8080):
             "reached": float(np.mean([r["reached"] for r in res])),
             "kerb": float(np.mean([r["end"] == "kerb" for r in res])),
             "collision": float(np.mean([r["end"] == "collision" for r in res])),
+            "stalls": float(np.mean([r.get("stalls", 0) > 0 for r in res])),
             "stop_violations": float(np.mean([r["stop_violation"] for r in res])),
             "red_violations": float(np.mean([r["red_violation"] for r in res])),
             "centre_s": float(np.mean([r["centre_s"] for r in res])),
             "speeding_s": float(np.mean([r["speeding_s"] for r in res])),
-            "speed": float(np.mean([r["progress"] / max(r["time_s"], 1.0) for r in res]))}
+            "speed": float(np.mean([r["progress"] / max(r["time_s"], 1.0) for r in res])),
+            "p10_speed": float(np.mean([r.get("p10_speed", r["progress"] / max(r["time_s"], 1.0)) for r in res]))}
 
 
 def train_drive(a):
@@ -404,8 +410,11 @@ def train_drive(a):
                 self.model.save(path)
                 with open(path[:-4] + ".json", "w") as f:
                     json.dump(dict(k, steps=self.num_timesteps), f)
-                # curriculum: longer routes, then more traffic, only when lawful / 合法なら難しく
-                if k["reached"] >= 0.75 and k["stop_violations"] + k["red_violations"] < 0.1:
+                # curriculum: longer routes, then more traffic, only when lawful and safe / 合法かつ安全なら難しく
+                clean_runs = k["reached"] >= 0.75
+                safe_runs = (k.get("kerb", 0.0) + k.get("collision", 0.0) + k.get("stalls", 0.0)) <= 0.10
+                lawful_runs = (k["stop_violations"] + k["red_violations"]) < 0.10
+                if clean_runs and safe_runs and lawful_runs:
                     if route_len < 800.0:
                         route_len = min(800.0, route_len + 100.0)
                     elif traffic < 6:
@@ -447,11 +456,13 @@ def make_fleet(me, map_name, seed):
 
 FLEET_KEYS = ("deliveries_per_h", "f2f_per_h", "drone_per_h", "lead_mean_s", "crashes_per_100", "landing_min",
               "hover_s_per_h", "swaps", "recoveries", "replacements", "stranded", "charges", "takeoff_crash",
-              "waiting")
+              "waiting", "deliveries_at_30", "waiting_at_30", "stranded_at_30", "deliveries_at_72", "waiting_at_72",
+              "stranded_at_72")
 
 
-def evaluate_fleet(pod_path=None, drone_path=None, map_name="OitaKosen", n=4, seed=555):
-    """Whole-fleet KPIs with given brains (None = rules) over n 3-hour episodes."""
+def evaluate_fleet(pod_path=None, drone_path=None, map_name="OitaKosen", n=4, seed=555, rate=47.0):
+    """Whole-fleet KPIs with given brains (None = rules) over n 3-hour episodes at a
+    fixed order rate (47/h = the CARLA delivery sim). / 固定の注文数で評価"""
     from sb3_contrib import MaskablePPO
     from rl_delivery.env_fleet import PodView
     from rl_delivery.fleet_rules import rule_pod
@@ -463,6 +474,7 @@ def evaluate_fleet(pod_path=None, drone_path=None, map_name="OitaKosen", n=4, se
     res = []
     for k in range(n):
         env = PodView(map_name, seed=seed + k, other=other)
+        env.W.rate_fixed = rate
         obs, _ = env.reset(seed=seed + k)
         while True:
             if pm is not None:
@@ -503,44 +515,87 @@ def train_fleet(a):
         pf.flush()
     sfile = os.path.join(RES, "train_state_fleet.json")
     rnd = 0
+    retries = 0
     try:
         while time.time() < deadline and not os.path.exists(os.path.join(RES, "STOP_fleet")):
             me = "pod" if rnd % 2 == 0 else "drone"
             d = os.path.join(CKPT, "fleet_" + me)
             os.makedirs(d, exist_ok=True)
-            venv = VecMonitor(SubprocVecEnv([make_fleet(me, a.map, 5000 + 1000 * a.seed + 100 * rnd + i)
-                                             for i in range(a.envs)]))
-            last = latest("fleet_" + me)
-            if last:
-                model = MaskablePPO.load(last, env=venv, device="cpu")
-            else:
-                model = MaskablePPO("MlpPolicy", venv, n_steps=512, batch_size=1024, n_epochs=6, seed=a.seed,
-                                    learning_rate=3e-4, gamma=0.995, gae_lambda=0.95, ent_coef=0.01,
-                                    device="cpu", verbose=0, policy_kwargs={"net_arch": [256, 256]})
-            from stable_baselines3.common.callbacks import BaseCallback
+            venv = None
+            try:
+                venv = VecMonitor(SubprocVecEnv([make_fleet(me, a.map, 5000 + 1000 * a.seed + 100 * rnd + i)
+                                                 for i in range(a.envs)]))
+                last = latest("fleet_" + me)
+                if last:
+                    model = MaskablePPO.load(last, env=venv, device="cpu")
+                else:
+                    model = MaskablePPO("MlpPolicy", venv, n_steps=512, batch_size=1024, n_epochs=6, seed=a.seed,
+                                        learning_rate=3e-4, gamma=0.995, gae_lambda=0.95, ent_coef=0.01,
+                                        device="cpu", verbose=0, policy_kwargs={"net_arch": [256, 256]})
+                # status at the start of every round too (the dashboard showed "stopped",
+                # 0 steps and no time left until the first round ended) / ラウンド開始時も状態を書く
+                with open(sfile, "w") as f:
+                    json.dump({"brain": "fleet", "running": True, "round": rnd, "training": me,
+                               "steps": model.num_timesteps, "started": t0, "deadline": deadline, "t": time.time()}, f)
+                from stable_baselines3.common.callbacks import BaseCallback
 
-            class Stop(BaseCallback):
-                def _on_step(self):
-                    return time.time() < deadline and not os.path.exists(os.path.join(RES, "STOP_fleet"))
-            model.learn(total_timesteps=a.round_steps, reset_num_timesteps=False, callback=Stop())
-            path = os.path.join(d, "step_%09d.zip" % model.num_timesteps)
-            model.save(path)
-            venv.close()
-            k = evaluate_fleet(latest("fleet_pod"), latest("fleet_drone"), a.map)
-            pw.writerow([rnd, me, model.num_timesteps, round(time.time() - t0)]
-                        + [None if k[x] is None else round(k[x], 2) for x in FLEET_KEYS])
-            pf.flush()
-            with open(sfile, "w") as f:
-                json.dump({"brain": "fleet", "running": True, "round": rnd, "training": me, "steps": model.num_timesteps,
-                           "last": k, "started": t0, "deadline": deadline, "t": time.time()}, f)
-            print("[fleet] round %d (%s, %d steps): %.1f deliveries/h, crashes %.1f/100, lead %.0f s, "
-                  "stranded %.1f, hover %.0f s/h" % (rnd, me, model.num_timesteps, k["deliveries_per_h"] or 0,
-                                                    k["crashes_per_100"] or 0, k["lead_mean_s"] or 0,
-                                                    k["stranded"] or 0, k["hover_s_per_h"] or 0), flush=True)
-            rnd += 1
+                class Stop(BaseCallback):
+                    """Stops on the deadline / STOP_fleet; updates the status file about every
+                    20k steps so the dashboard's step count moves during a round.
+                    期限・停止ファイルで停止、約 2 万ステップごとに状態を更新"""
+                    next_w = 0
+
+                    def _on_step(self):
+                        if self.num_timesteps >= self.next_w:
+                            self.next_w = self.num_timesteps + 20000
+                            with open(sfile, "w") as f:
+                                json.dump({"brain": "fleet", "running": True, "round": rnd, "training": me,
+                                           "steps": self.num_timesteps, "started": t0, "deadline": deadline,
+                                           "t": time.time()}, f)
+                        return time.time() < deadline and not os.path.exists(os.path.join(RES, "STOP_fleet"))
+                model.learn(total_timesteps=a.round_steps, reset_num_timesteps=False, callback=Stop())
+                path = os.path.join(d, "step_%09d.zip" % model.num_timesteps)
+                model.save(path)
+                venv.close()
+                venv = None
+                k = evaluate_fleet(latest("fleet_pod"), latest("fleet_drone"), a.map)
+                for rr in (30.0, 72.0):
+                    kk = evaluate_fleet(latest("fleet_pod"), latest("fleet_drone"), a.map, n=2, rate=rr)
+                    k["deliveries_at_%d" % rr] = kk["deliveries_per_h"]
+                    k["waiting_at_%d" % rr] = kk["waiting"]
+                    k["stranded_at_%d" % rr] = kk["stranded"]
+                pw.writerow([rnd, me, model.num_timesteps, round(time.time() - t0)]
+                            + [None if k.get(x) is None else round(k[x], 2) for x in FLEET_KEYS])
+                pf.flush()
+                with open(sfile, "w") as f:
+                    json.dump({"brain": "fleet", "running": True, "round": rnd, "training": me, "steps": model.num_timesteps,
+                               "last": k, "started": t0, "deadline": deadline, "t": time.time()}, f)
+                print("[fleet] round %d (%s, %d steps): %.1f deliveries/h, crashes %.1f/100, lead %.0f s, "
+                      "stranded %.1f, hover %.0f s/h" % (rnd, me, model.num_timesteps, k["deliveries_per_h"] or 0,
+                                                        k["crashes_per_100"] or 0, k["lead_mean_s"] or 0,
+                                                        k["stranded"] or 0, k["hover_s_per_h"] or 0), flush=True)
+                rnd += 1
+                retries = 0
+            except Exception as exc:
+                retries += 1
+                print("[fleet] worker/round error in round %d (%s): %s (retry %d/3) / ワーカのエラー"
+                      % (rnd, me, exc, retries), flush=True)
+                if venv is not None:
+                    try:
+                        venv.close()
+                    except Exception:
+                        pass
+                if retries >= 3:
+                    print("[fleet] exceeded 3 retries, stopping / リトライ上限に達したため停止", flush=True)
+                    raise
+                time.sleep(2.0)
     finally:
+        reason = "deadline" if time.time() >= deadline else (
+            "stop_file" if os.path.exists(os.path.join(RES, "STOP_fleet")) else "interrupted"
+        )
+        print("[fleet] stopped (reason: %s, round: %d) / 停止" % (reason, rnd), flush=True)
         with open(sfile, "w") as f:
-            json.dump({"brain": "fleet", "running": False, "round": rnd, "t": time.time()}, f)
+            json.dump({"brain": "fleet", "running": False, "round": rnd, "reason": reason, "t": time.time()}, f)
         pf.close()
 
 
@@ -715,6 +770,8 @@ def main():
     ap.add_argument("--algo", default="", help="nav: %s; drive: %s; fleet: maskable_ppo" % (
         "/".join(NAV_ALGOS), "/".join(DRIVE_ALGOS)))
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--dist", type=float, default=0.0, help="Override curriculum distance (m)")
+    ap.add_argument("--wind-level", type=float, default=None, help="Override wind level (0.0-1.0)")
     ap.add_argument("--tag", default="", help="experiment name: the run gets its own folder "
                     "research/exp/<tag>/<run_id>/ (checkpoints, progress, state, STOP file)")
     a = ap.parse_args()

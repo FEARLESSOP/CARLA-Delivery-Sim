@@ -1,0 +1,42 @@
+{
+ "run_id": "drive_20261111_164500",
+ "args": {
+  "brain": "drive",
+  "round_steps": 200000,
+  "map": "OitaKosen",
+  "hours": 24.0,
+  "envs": 6,
+  "eval_every": 100000,
+  "resume": true,
+  "algo": "",
+  "seed": 0,
+  "dist": 0.0,
+  "wind_level": null,
+  "tag": ""
+ },
+ "started": "2026-11-11 16:45:00",
+ "git_commit": "8da1708",
+ "uncommitted_changes": true,
+ "env_constants": {
+  "HERE": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/rl_delivery",
+  "DT": 0.1,
+  "WHEELBASE": 2.6,
+  "HALF_W": 0.8,
+  "LENGTH": 3.6,
+  "MAX_STEER": 0.6,
+  "STEER_RATE": 1.2,
+  "MAX_ACC": 3.0,
+  "MAX_BRAKE": 3.0,
+  "POD_MAX": 8.333333333333334,
+  "CYCLE": 60.0,
+  "GREEN": 27.0,
+  "YELLOW": 3.0,
+  "AHEAD": [
+   5.0,
+   10.0,
+   20.0,
+   30.0,
+   40.0
+  ]
+ }
+}

@@ -1,0 +1,36 @@
+{
+ "run_id": "nav_20261111_154640",
+ "args": {
+  "brain": "nav",
+  "round_steps": 200000,
+  "map": "OitaKosen",
+  "hours": 10.0,
+  "envs": 6,
+  "eval_every": 100000,
+  "resume": true,
+  "algo": "",
+  "seed": 0,
+  "dist": 150.0,
+  "wind_level": null,
+  "tag": ""
+ },
+ "started": "2026-11-11 15:46:40",
+ "git_commit": "8da1708",
+ "uncommitted_changes": true,
+ "env_constants": {
+  "MAX_TILT": 0.5235987755982988,
+  "HERE": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/rl_delivery",
+  "DT": 0.05,
+  "RAYS": 16,
+  "RANGE": 40.0,
+  "NOFLY_DIRS": 8,
+  "NOFLY_RANGE": 150.0,
+  "MAX_S": 480.0,
+  "PAD_Z": 2.6,
+  "CEILING_AGL": 150.0,
+  "PROG_K": 0.3,
+  "NEAR_BONUS": 25.0,
+  "NEAR_SCALE": 15.0,
+  "CIRCLE_COST": 0.02
+ }
+}

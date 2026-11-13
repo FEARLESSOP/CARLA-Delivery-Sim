@@ -1944,6 +1944,8 @@ def signal():
 # tells the driving window to ignore wheel presses while we are listening.
 # 運転ウインドウと共有するキー・ホイール割り当て（keybinds.py）。
 def _keybinds_payload(bindings=None):
+    import importlib
+    importlib.reload(keybinds)
     bindings = bindings if bindings is not None else keybinds.load()
     lab = keybinds.load_labels()
     return {

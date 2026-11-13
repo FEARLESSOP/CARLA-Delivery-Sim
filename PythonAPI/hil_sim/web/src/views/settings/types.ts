@@ -85,6 +85,7 @@ export interface KbAction {
   group: string
   kind: 'hold' | 'press'
   axis: boolean
+  window?: string
 }
 export interface KbCell { keys: string[]; wheel: string[] }
 export type KbBindings = Record<string, KbCell>

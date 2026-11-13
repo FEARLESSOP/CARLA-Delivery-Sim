@@ -244,6 +244,8 @@ Read `PythonAPI/hil_sim/docs/RL_DELIVERY.md` fully before touching it (skill stu
   baselines), **pure RL, no geofence / emergency stop**, pretend world first, agents may fail,
   hidden realistic wind, OitaKosen first, check the trainings every 30 min and fix stuck or
   exploiting brains with world rules / rewards (never steering).
+- Roles (user decision, 2026-11-11): **Claude Code is no longer running. Antigravity manages both
+  the 30-minute checks and trainer execution directly** (start, stop, monitor, evaluate).
 - One trainer per brain (`ps -eo pid,etime,args | grep "[r]l_delivery.train"`); stop with
   `touch rl_delivery/results/STOP_<brain>`, carry on with `--resume`; trainers die with the
   agent session. Dashboard AI training page = status, charts, watch-mode replays.

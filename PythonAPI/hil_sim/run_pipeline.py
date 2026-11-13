@@ -515,6 +515,10 @@ def main():
                    help='Extra options for delivery_sim.py, e.g. '
                         '"--first-now --drone-prob 0.7" '
                         '/ delivery_sim.py への追加オプション')
+    p.add_argument("--policy-nav", default="off", choices=("off", "latest"),
+                   help="drone navigation RL brain (off: rule-based, latest: trained model) / ドローン航法ブレイン")
+    p.add_argument("--policy-drive", default="off", choices=("off", "latest"),
+                   help="pod driving RL brain (off: BasicAgent, latest: trained model) / ポッド運転ブレイン")
     p.add_argument("--drone-cams", action="store_true",
                    help="open the drone camera wall (drone_viewer.py) at start; needs "
                         "--delivery (without this flag it can still be opened from the "
@@ -847,6 +851,10 @@ def main():
             # LastMile charging stations (none: the road-side chargers) / 充電ステーション
             cmd += charge_station_args(args.charge_stations, args.charge_mode,
                                        map_name or current_map)
+            if getattr(args, "policy_nav", "") and args.policy_nav != "off":
+                cmd += ["--policy-nav", args.policy_nav]
+            if getattr(args, "policy_drive", "") and args.policy_drive != "off":
+                cmd += ["--policy-drive", args.policy_drive]
             if args.delivery_args:
                 cmd += shlex.split(args.delivery_args)
             return cmd
@@ -1153,6 +1161,10 @@ def main():
                                                       int(req["charge_stations"])))
                 if req.get("charge_mode") in ("random", "manual"):
                     args.charge_mode = req["charge_mode"]
+                if req.get("policy_nav") in ("off", "latest"):
+                    args.policy_nav = req["policy_nav"]
+                if req.get("policy_drive") in ("off", "latest"):
+                    args.policy_drive = req["policy_drive"]
                 on = args.delivery > 0 or args.minipod_hubs > 0
                 restart_child("delivery", delivery_cmd() if on else None, 15.0)
                 if args.delivery > 0:

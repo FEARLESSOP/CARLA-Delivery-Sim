@@ -105,6 +105,12 @@ class Fleet(object):
         self.keep = keep
         self._sp = {}
         self.order_gap, self.drone_prob = order_gap, drone_prob
+        # orders per hour for the whole fleet: random per episode in this range
+        # (domain randomisation: quiet to overloaded), or fixed for tests (rate_fixed)
+        # 注文数/時（フリート全体）：エピソードごとに無作為、テストでは固定
+        self.rate_range = (30.0, 90.0)
+        self.rate_fixed = None
+        self.rate = 60.0
         self.rng = np.random.default_rng(seed)
         # the stations' pod bays and lockers snapped to the road graph / 道路網へ
         self.stations = []
@@ -195,6 +201,9 @@ class Fleet(object):
     def reset(self, seed=None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
+        self.rate = float(self.rate_fixed if self.rate_fixed else self.rng.uniform(*self.rate_range))
+        mean_gap = 3600.0 * len(self.zones) / self.rate        # per zone / ゾーンあたり
+        self.order_gap = (0.5 * mean_gap, 1.5 * mean_gap)
         self.t = 0.0
         self.wind = Wind(self.rng, level=1.0, grid=self.grid)
         self.rain = self.rain_target = 0.0
@@ -251,7 +260,7 @@ class Fleet(object):
                         o["kind"] = "drone"
                 self.orders[o["id"]] = o
                 self.oid += 1
-                self.next_order[z] += self.rng.uniform(*self.order_gap)
+                self.next_order[z] += self.rng.uniform(*self.order_gap)          # gap per zone / ゾーンごとの間隔
 
     def pod_orders(self, pod, kind):
         return [o for o in self.orders.values() if o["pod"] == pod["id"] and o["state"] == "pod" and o["kind"] == kind]
@@ -298,18 +307,24 @@ class Fleet(object):
                         st["bay"] = pod["id"]
                         pod["charging"] = st["id"]
                         self.k["charges"] += 1
+                        if pod["batt"] < 35.0:
+                            # Scaled docking reward: only rewarded when arriving with low battery (< 35%)
+                            self.reward += 40.0 * min(max(0.0, 35.0 - pod["batt"]) / 25.0, 1.0)
                     else:
                         pod["queued"] = st["id"]
         pod["batt"] -= P["pod_idle_drain"] * DT
         # a low pod battery costs, more the lower it gets (the warning before a
         # stranding, which alone came too late to learn from) / 低電池は段階的にコスト
         if pod["batt"] < 25.0:
-            self.reward -= 0.02 * (25.0 - pod["batt"]) * DT / 60.0 * 10.0
+            # quadratic penalty for dangerously low battery
+            self.reward -= 0.1 * ((25.0 - pod["batt"]) / 5.0) ** 2 * (DT / 5.0)
         if pod.get("queued") is not None:
             st = self.stations[pod["queued"]]
             if st["bay"] is None:
                 st["bay"], pod["charging"], pod["queued"] = pod["id"], st["id"], None
                 self.k["charges"] += 1
+                if pod["batt"] < 35.0:
+                    self.reward += 40.0 * min(max(0.0, 35.0 - pod["batt"]) / 25.0, 1.0)
         if pod["charging"] is not None:
             rate = P["station_kw"] / P["pod_kwh"] * 100.0 / 3600.0 * DT
             pod["batt"] = min(P["pod_charge_to"], pod["batt"] + rate)
@@ -330,7 +345,7 @@ class Fleet(object):
         if pod["batt"] <= 0.0:
             pod["batt"], pod["stranded"] = 0.0, True
             self.k["stranded"] += 1
-            self.reward -= 500.0
+            self.reward -= 2500.0                      # heavy penalty: wipes out gains from ~50 deliveries / 電欠脱落ペナルティ
             self._event("pod_stranded", pod=pod["id"])
 
     def pod_free(self, pod):
@@ -517,8 +532,18 @@ class Fleet(object):
             self.t += DT
             self._weather()
             self._spawn_orders()
-            # every waiting parcel costs, minute by minute (world time) / 待ち荷物は時間でコスト
-            self.reward -= 0.05 * sum(o["state"] != "done" for o in self.orders.values()) * DT / 60.0
+            # every waiting parcel costs, minute by minute; escalating SLA penalty for starving orders
+            unfulfilled = [o for o in self.orders.values() if o["state"] != "done"]
+            self.reward -= 0.05 * len(unfulfilled) * DT / 60.0
+            if unfulfilled:
+                ages = [self.t - o["t0"] for o in unfulfilled]
+                max_age = max(ages)
+                self.k["max_order_age"] = max(self.k.get("max_order_age", 0.0), max_age)
+                expired = [age for age in ages if age > 1800.0]
+                self.k["expired_orders"] = max(self.k.get("expired_orders", 0), len(expired))
+                if expired:
+                    starv_pen = 0.05 * sum(((age - 1800.0) / 600.0) ** 2 for age in expired) * (DT / 60.0)
+                    self.reward -= min(starv_pen, 5.0)
             for pod in self.pods:
                 self._pod_step(pod)
                 pod["decided_t"] = -1
@@ -580,9 +605,32 @@ class Fleet(object):
             m[A_LOCK + j] = L is not None
         out = [d for d in self.drones if d["pod"] == pod["id"] and d["state"] in (FLY, HOVER)]
         m[A_GOMEET] = bool(out) and pod["meet_node"] is not None
-        m[A_CHARGE:A_CHARGE + K_STN] = True
-        m[A_SWAP] = bool(docked) and any(d["state"] == STANDBY for d in self.drones)
+        n_stn = min(K_STN, len(self.stations))
+        m[A_CHARGE:A_CHARGE + n_stn] = pod["batt"] < 50.0   # mask charging if battery >= 50% (anti-docking loop)
+        # Swap requires docked drone, standby available, 300s cooldown, max 4 swaps/episode
+        m[A_SWAP] = (bool(docked) and any(d["state"] == STANDBY for d in self.drones)
+                     and (self.t - pod.get("last_swap_t", -999.0) > 300.0)
+                     and (pod.get("swaps_used", 0) < 4))
         m[A_WAIT] = True
+
+        # Battery-protective action masking / 電池切れ防止のアクションマスク
+        if pod["batt"] < 25.0:
+            # Stop launching new drones or driving out to delivery spots
+            m[A_SPOT:A_SPOT + K_SPOT] = False
+            m[A_LAUNCH:A_LOCK] = False
+        if pod["batt"] < 15.0:
+            # Below 15%: forbid lockers and swaps as well; only charge or meet active airborne drones
+            m[A_LOCK:A_GOMEET] = False
+            m[A_SWAP] = False
+            if not out:
+                m[A_GOMEET] = False
+                # If no airborne drones and chargers are reachable, disallow passive waiting
+                if any(m[A_CHARGE:A_CHARGE + n_stn]):
+                    m[A_WAIT] = False
+
+        # Fallback safety: at least one action must always be legal for MaskablePPO
+        if not np.any(m):
+            m[A_WAIT] = True
         return m
 
     def pod_act(self, pod, a):
@@ -624,6 +672,10 @@ class Fleet(object):
             if s < len(self.stations):
                 self._drive(pod, self.stations[s]["node"], "charge", s)
         elif a == A_SWAP:
+            pod["swaps_used"] = pod.get("swaps_used", 0) + 1
+            pod["last_swap_t"] = self.t
+            self.reward -= 10.0                                  # swap logistics overhead penalty
+            self.k["swaps"] += 1
             docked = [d for d in self.drones if d["pod"] == pod["id"] and d["state"] == DOCKED]
             tired = min(docked, key=lambda d: d["batt"])
             self._request("swap", pod, tired=tired["id"])
@@ -643,6 +695,20 @@ class Fleet(object):
         m = np.zeros(3, bool)
         if kind == D_LAUNCH:
             m[:] = True
+        elif kind == D_AFTER:
+            # Paper 1 Hard Feasibility Masking (FA-RAMPPO):
+            # a=0: Recover to LMP-4 pod
+            # a=1: Divert to fixed charging station
+            pod = self.pods[d["pod"]] if d["pod"] is not None else None
+            m[1] = True  # Station charger fallback
+            if pod is not None:
+                tgt = pod["meet"] if pod["meet"] is not None else self.xy[pod["node"]]
+                dist_m = float(np.hypot(d["pos"][0] - tgt[0], d["pos"][1] - tgt[1]))
+                # Energy needed plus 15% reserve
+                need_batt = (dist_m / self.P["drone_speed"]) * 0.25 + 15.0
+                pod_stopped = (pod["state"] in ("spot", "wait"))
+                if d["batt"] >= need_batt and (pod_stopped or getattr(self, "recovery_mode", "stopped_bay") == "moving_roof"):
+                    m[0] = True
         else:
             m[:2] = True
         return m
@@ -732,6 +798,7 @@ class Fleet(object):
                       float(self._zone(st["xy"]) == pod["zone"])]
             else:
                 v += [0.0, 0.0, 0.0]
+        v += [self.rate / 100.0]
         v += [float(pod["meet_node"] is not None),
               (self.route(pod["node"], pod["meet_node"]) / sp / 600.0) if pod["meet_node"] is not None else 0.0,
               self.open_sky(pod["node"]), self.t / EP_S]
@@ -793,7 +860,7 @@ class Fleet(object):
         k = self.k
         hours = max(self.t, 1.0) / 3600.0
         lead = k["lead"]
-        return {"hours": round(hours, 2),
+        return {"hours": round(hours, 2), "order_rate": self.rate,
                 "deliveries_per_h": (k["delivered_f2f"] + k["delivered_drone"]) / hours,
                 "f2f_per_h": k["delivered_f2f"] / hours, "drone_per_h": k["delivered_drone"] / hours,
                 "lead_mean_s": float(np.mean(lead)) if lead else None,
@@ -802,6 +869,8 @@ class Fleet(object):
                 "hover_s_per_h": k["hover_s"] / hours, "swaps": k["swaps"], "recoveries": k["recoveries"],
                 "replacements": k["replacements"], "stranded": k["stranded"], "charges": k["charges"],
                 "pod_km": k["pod_km"], "takeoff_crash": k["takeoff_crash"],
+                "max_order_age_s": float(k.get("max_order_age", 0.0)),
+                "expired_orders": int(k.get("expired_orders", 0)),
                 "waiting": sum(o["state"] != "done" for o in self.orders.values()),
                 "parcels_at_crash_sites": sum(o["state"] == "site" for o in self.orders.values())}
 

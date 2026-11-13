@@ -1,0 +1,192 @@
+{
+  "S1_Normal": {
+    "B0_Heuristic": {
+      "mean_reward": 5.979746352881149,
+      "std_reward": 0.043730118019684676,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.03296120557934046
+    },
+    "B1_Standard_PPO": {
+      "mean_reward": 5.989606389830724,
+      "std_reward": 0.036110896656075725,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.02762872027233243
+    },
+    "B2_Maskable_PPO": {
+      "mean_reward": 5.989606389830724,
+      "std_reward": 0.036110896656075725,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.025623105466365814
+    },
+    "B3_Forecast_PPO": {
+      "mean_reward": 5.989606389830724,
+      "std_reward": 0.036110896656075725,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.01989348093047738
+    },
+    "B4_FA_RAMPPO": {
+      "mean_reward": 5.989606389830724,
+      "std_reward": 0.036110896656075725,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.8552949419245124
+    },
+    "B5_Rollout_Heuristic": {
+      "mean_reward": 5.99071068168571,
+      "std_reward": 0.03419750742195759,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.8264056066982448
+    }
+  },
+  "S2_Surge": {
+    "B0_Heuristic": {
+      "mean_reward": 5.891181317043232,
+      "std_reward": 0.05606180286095795,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.021282793022692204
+    },
+    "B1_Standard_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.019086420070379972
+    },
+    "B2_Maskable_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.018504029139876366
+    },
+    "B3_Forecast_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.017929403111338615
+    },
+    "B4_FA_RAMPPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.7577624646946788
+    },
+    "B5_Rollout_Heuristic": {
+      "mean_reward": 5.89785263506746,
+      "std_reward": 0.049415742871012094,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.7524615628644824
+    }
+  },
+  "S3_Traffic": {
+    "B0_Heuristic": {
+      "mean_reward": 5.891181317043232,
+      "std_reward": 0.05606180286095795,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.020879856310784817
+    },
+    "B1_Standard_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.01897662878036499
+    },
+    "B2_Maskable_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.018526229541748762
+    },
+    "B3_Forecast_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.018026179168373346
+    },
+    "B4_FA_RAMPPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.7530586221255362
+    },
+    "B5_Rollout_Heuristic": {
+      "mean_reward": 5.89785263506746,
+      "std_reward": 0.049415742871012094,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.9329711445607245
+    }
+  },
+  "S4_Weather": {
+    "B0_Heuristic": {
+      "mean_reward": 5.891181317043232,
+      "std_reward": 0.05606180286095795,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.021267833653837442
+    },
+    "B1_Standard_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.018611096311360598
+    },
+    "B2_Maskable_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.0178205082193017
+    },
+    "B3_Forecast_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.017999368719756603
+    },
+    "B4_FA_RAMPPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.7604934866540134
+    },
+    "B5_Rollout_Heuristic": {
+      "mean_reward": 5.89785263506746,
+      "std_reward": 0.049415742871012094,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.7659495119005442
+    }
+  },
+  "S5_HeldOut": {
+    "B0_Heuristic": {
+      "mean_reward": 5.891181317043232,
+      "std_reward": 0.05606180286095795,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.020511914044618607
+    },
+    "B1_Standard_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.0190695165656507
+    },
+    "B2_Maskable_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.01816847361624241
+    },
+    "B3_Forecast_PPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 0.01799413003027439
+    },
+    "B4_FA_RAMPPO": {
+      "mean_reward": 5.880940238102968,
+      "std_reward": 0.07707039013964197,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.7627627588808537
+    },
+    "B5_Rollout_Heuristic": {
+      "mean_reward": 5.89785263506746,
+      "std_reward": 0.049415742871012094,
+      "feasibility_rate": 1.0,
+      "mean_latency_ms": 1.76335220457986
+    }
+  }
+}

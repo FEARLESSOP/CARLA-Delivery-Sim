@@ -1,12 +1,15 @@
 # CARLA HIL Driving Simulator / CARLA HILドライビングシミュレータ/ ver.1
 
-Human-in-the-loop driving study on CARLA 0.9.15, driven with a Logitech G923
+Human-in-the-loop driving study on CARLA 0.9.16, driven with a Logitech G923
 steering wheel. One command starts the simulator, traffic, a live telemetry
 dashboard, and the driver's view.
 
-CARLA 0.9.15上のヒューマン・イン・ザ・ループ（HIL）運転実験環境。
+CARLA 0.9.16上のヒューマン・イン・ザ・ループ（HIL）運転実験環境。
 Logitech G923ステアリングホイールで運転します。コマンド1つでシミュレータ・
 交通・テレメトリダッシュボード・ドライバー視点をまとめて起動できます。
+
+**All documentation, by topic: [`docs/README.md`](docs/README.md).**
+**全ドキュメントの索引：[`docs/README.md`](docs/README.md)。**
 
 ---
 

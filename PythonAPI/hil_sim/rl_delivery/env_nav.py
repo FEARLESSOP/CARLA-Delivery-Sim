@@ -175,6 +175,22 @@ class NavEnv(gym.Env):
                     return start.copy(), drop, meet.copy(), z
         raise RuntimeError("no trip found / 経路が見つからない")
 
+    def _update_goal(self):
+        dr_p = self.drone.p
+        if self.phase == 0:
+            self.goal = self.drop_goal
+        else:
+            target = self.meet_goal
+            hd = float(np.linalg.norm(dr_p[:2] - target[:2]))
+            z_cruise = max(self.gd, self.gm) + 40.0
+            z_final = self.meet_goal[2]
+            R_CONE = 25.0
+            if hd >= R_CONE:
+                eff_z = z_cruise
+            else:
+                eff_z = z_final + (z_cruise - z_final) * (hd / R_CONE)
+            self.goal = np.array([target[0], target[1], eff_z], dtype=float)
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         if seed is not None:
@@ -187,8 +203,9 @@ class NavEnv(gym.Env):
         self.drop_goal = np.array([drop[0], drop[1], gd + 7.0])          # hover to lower the parcel / 投下ホバー
         gm = float(self.H.ground_at(meet[0], meet[1]))
         self.meet_goal = np.array([meet[0], meet[1], gm + PAD_Z])         # land on the pod / ポッドに着陸
-        self.goal = self.drop_goal
+        self.g0, self.gd, self.gm = g0, gd, gm
         self.phase = 0                                                     # 0 to the drop, 1 to the pod
+        self._update_goal()
         self.wind = Wind(self.rng, level=self.wind_level, grid=self.grid)
         self.n = 0
         self.d_best = float(np.linalg.norm(self.goal - self.drone.p))
@@ -229,16 +246,15 @@ class NavEnv(gym.Env):
         w = self.wind.at(dr.p[0], dr.p[1], agl)
         dr.step(act, w, DT)
         self.n += 1
+        self._update_goal()
         obs = self._obs()
         d = float(np.linalg.norm(self.goal - dr.p))
         r = 0.0
-        # closer = more reward, away = the same loss; steeper in the last ~15 m
-        # (potential-based, so hovering anywhere earns nothing) / 近いほど報酬（離れると同じだけ減る）
-        phi = self._phi(d)
-        r += phi - self.phi_last
-        self.phi_last = phi
-        self.d_best = min(self.d_best, d)
-        # circling the drop: sideways speed round it within 30 m costs / 投下点の周回にコスト
+        # Monotonic high-water-mark progress reward (eliminates oscillation loops under discounting)
+        if d < self.d_best:
+            r += PROG_K * (self.d_best - d)
+            self.d_best = d
+        # circling the target: sideways speed round it within 30 m costs / 目的地の周回にコスト
         hv = self.goal[:2] - dr.p[:2]
         hd = float(np.linalg.norm(hv))
         if hd < 30.0 and hd > 0.5:
@@ -257,15 +273,17 @@ class NavEnv(gym.Env):
         self.last_act = act
         term = trunc = False
         top = float(self.H.top_at(dr.p[0], dr.p[1]))
-        hd_goal = float(np.linalg.norm(self.goal[:2] - dr.p[:2]))
-        # touchdown on the pod roof: within 1.3 m of its centre, sinking < 1.5 m/s,
-        # drifting < 1.2 m/s (was 1.0 / 1.0 / 0.8: never learnt) / ポッドへの着陸条件
-        landed = (self.phase == 1 and hd_goal < 1.3 and dr.p[2] - self.goal[2] < 0.6
-                  and dr.v[2] > -1.5 and float(np.linalg.norm(dr.v[:2])) < 1.2)
+        hd_meet = float(np.linalg.norm(self.meet_goal[:2] - dr.p[:2]))
+        hd_drop = float(np.linalg.norm(self.drop_goal[:2] - dr.p[:2]))
+        tilt_deg = max(abs(dr.roll), abs(dr.pitch)) * 180.0 / math.pi
+        # touchdown on the pod roof: within 1.3 m of centre, sinking < 1.5 m/s, drifting < 1.2 m/s, tilt <= 12 deg
+        landed = (self.phase == 1 and hd_meet < 1.3 and dr.p[2] - self.meet_goal[2] < 0.6
+                  and dr.v[2] > -1.5 and float(np.linalg.norm(dr.v[:2])) < 1.2
+                  and tilt_deg <= 12.0)
         if landed:
             pass
-        elif self.phase == 1 and hd_goal < 1.6 and dr.p[2] < self.goal[2] + 0.2:
-            self.stats["crash"] = "pod"                                 # hit the pod / ポッドに衝突
+        elif self.phase == 1 and hd_meet < 1.6 and dr.p[2] < self.meet_goal[2] + 0.3:
+            self.stats["crash"] = "pod"                                 # hit the pod or hard slammed / ポッドに衝突
         elif dr.p[2] < top + 0.2 and self.n > 10:
             self.stats["crash"] = "obstacle" if top > float(self.H.ground_at(dr.p[0], dr.p[1])) + 0.5 else "ground"
         elif self._in_nofly(dr.p):
@@ -274,24 +292,24 @@ class NavEnv(gym.Env):
             self.stats["crash"] = "ceiling"
         elif dr.battery <= 0:
             self.stats["crash"] = "battery"
-        if self.stats["crash"]:
+        if self.stats["crash"] and not term:
             r -= 50.0
             term = True
         elif landed:                                                    # back on the pod / 帰還
             r += 100.0 + 20.0 * dr.battery / 100.0
             term = True
             self.stats["reached"] = True
-        elif self.phase == 0 and hd_goal < 2.5 and abs(self.goal[2] - dr.p[2]) < 3.0 \
+        elif self.phase == 0 and hd_drop < 2.5 and abs(self.drop_goal[2] - dr.p[2]) < 3.0 \
                 and float(np.linalg.norm(dr.v)) < 1.5:
             # parcel lowered: now fly to the meeting point / 投下完了、合流地点へ
             r += 60.0
             self.stats["delivered"], self.stats["deliver_t"] = True, self.n * DT
             self.phase = 1
-            self.goal = self.meet_goal
-            self.phi_last = self._phi(float(np.linalg.norm(self.goal - dr.p)))
+            self._update_goal()
+            self.d_best = float(np.linalg.norm(self.goal - dr.p))
         elif self.n * DT >= MAX_S:
-            # not delivering is a failure too (no safe "hover until time is up") / 時間切れも失敗
-            r -= 50.0
+            # terminal penalty for airborne timeout to prevent "hover out the clock" exploit
+            r -= 100.0
             term = True
             self.stats["crash"] = "timeout"
         if self.log is not None and self.n % 2 == 0:

@@ -24,3 +24,6 @@ when_jst,brain,type,change,reason,evidence
 2026-11-10 12:2x,drive,reward,progress 0.1 -> 0.3 per metre,"crawled at 0.6-0.9 m/s, 12-19 % reached",
 2026-11-10 12:2x,research,infrastructure,"research record, automatic run configs, --algo/--seed/--tag, experiment queue, compare",user: research paper comparing algorithms and changes,
 2026-11-10 13:0x,drive,world,pedal made symmetric: +-3.0 m/s2 (was +2.5 / -6.0),SAC never got moving (0.08 m/s): random exploration braked more than it accelerated,random actions now average 1.6 m/s; scripted 19/20 reached
+2026-11-10 13:3x,fleet,bug,trainer froze: waited forever on vanished worker processes,no checkpoint for 1 h,"killed by PID, restarted"
+2026-11-10 14:2x,fleet,world,order rate random per episode 30-90/h (domain randomisation); rate in the pod observation; tests at 30 / 47 (CARLA) / 72 per h,"user: train at a high rate, deploy to CARLA's lower rate; brains learn the conditions they practise in","rule flow @30/47/72: 26.8/36.0/36.3 deliveries/h, waiting 12/33.5/105"
+2026-11-10 14:2x,roles,infrastructure,"Antigravity runs the checks, Claude Code starts/restarts trainers (HANDOFF.md)",two agents managing the same trainers,

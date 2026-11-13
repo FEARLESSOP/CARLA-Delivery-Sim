@@ -65,21 +65,23 @@ export const eventMods = (e: KeyboardEvent): Mod[] =>
 export interface Conflicts { keys: Record<string, string[]>; wheel: Record<string, string[]> }
 
 /** Same rules as keybinds.conflicts(): a hold action clashes on its base key
- *  whatever the modifiers. / 押し続ける操作は修飾キーに関係なく衝突する */
+ *  whatever the modifiers. Actions targeting different windows (driving vs carla)
+ *  do not clash for keys. / 押し続ける操作は修飾キーに関係なく衝突する。別ウィンドウは衝突除外 */
 export function kbConflicts(actions: KbAction[], b: KbBindings): Conflicts {
-  const keyUsers: Record<string, { id: string; mods: string; hold: boolean; s: string }[]> = {}
+  const keyUsers: Record<string, { id: string; mods: string; hold: boolean; s: string; win: string }[]> = {}
   const wheelUsers: Record<string, string[]> = {}
   const keys: Record<string, string[]> = {}, wheel: Record<string, string[]> = {}
   for (const a of actions) {
+    const win = a.window || 'driving'
     for (const s of b[a.id]?.keys ?? []) {
       const p = kbParse(s)
-      ;(keyUsers[p.key] ??= []).push({ id: a.id, mods: [...p.mods].sort().join('+'), hold: a.kind === 'hold', s })
+      ;(keyUsers[p.key] ??= []).push({ id: a.id, mods: [...p.mods].sort().join('+'), hold: a.kind === 'hold', s, win })
     }
     for (const w of b[a.id]?.wheel ?? []) (wheelUsers[w] ??= []).push(a.id)
   }
   for (const users of Object.values(keyUsers))
     users.forEach((u, i) => users.slice(i + 1).forEach((v) => {
-      if (u.id === v.id || !(u.hold || v.hold || u.mods === v.mods)) return
+      if (u.id === v.id || u.win !== v.win || !(u.hold || v.hold || u.mods === v.mods)) return
       for (const s of [u.s, v.s]) {
         const l = (keys[s] ??= [])
         for (const x of [u.id, v.id]) if (!l.includes(x)) l.push(x)

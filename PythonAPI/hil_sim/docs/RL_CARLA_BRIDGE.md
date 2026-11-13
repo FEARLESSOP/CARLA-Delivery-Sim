@@ -3,10 +3,25 @@
 How the RL brains from `rl_delivery/` (see [RL_DELIVERY.md](RL_DELIVERY.md))
 get to drive the pods and fly the drones in the real CARLA simulation.
 
-> **Status (2026-11-10): not built yet.** `delivery_sim.py` has no hook for
-> trained brains; checkpoints run only in the pretend world and in the
-> dashboard's watch mode. This file is the plan and the how-to the bridge
-> will follow. Update it as each part lands.
+> **Status (checked 2026-11-13) / 状況（2026-11-13 確認）: built, not working well.**
+> The code below exists and its unit tests pass (`tests/test_rl_bridge.py`), but
+> the brains it loads are not good enough to use; both RL options are `off` in
+> the saved launch options. / コードとテストはあるが、読み込む脳が使える水準にない。
+> - **Drone navigation** (`--policy-nav`, `RLNavFlight`): the latest checkpoint
+>   collapsed in training (`results/nav_progress.csv`: `reached = 0`, `crash = 1.0`
+>   from ~30 M steps). An earlier note called it "verified, 0 crashes"; the logs
+>   do not support that. Since 2026-11-13 the flight is stepped at the trained
+>   0.05 s even when the client loop is slower, and torch runs on one thread
+>   (it slowed the delivery loop to ~4 Hz and made the drones jump).
+> - **Pod driving** (`--policy-drive`, `DriveBridge`, SAC): on 2026-11-13 live it
+>   froze all three LastMile pods at full left lock, so no drone could launch.
+> - **Fleet recovery** (`--policy-recovery`, `FleetRecoveryBridge`): wires
+>   `rl_delivery/ramppo.py` + `delivery/feasibility_engine.py` into the drop
+>   (`D_AFTER`). Its hard-coded feasibility rules go against "nothing hardcoded"
+>   ([RL_DELIVERY.md](RL_DELIVERY.md)), and its benchmark is not valid (see
+>   [archive/antigravity_2026-11/README.md](archive/antigravity_2026-11/README.md)).
+> - Checkpoint names `latest` / `auto` resolve to the newest file.
+> - Tests: `tests/test_rl_bridge.py` (no CARLA), `tests/test_bridge_live.py` (needs CARLA).
 
 ## 1. The idea
 
