@@ -11,6 +11,7 @@ class LoopProfile(object):
     this script poses, move in jumps). / メインループの各段階の所要時間を
     定期的に表示（ループが遅いとドローンがカクつく）。"""
     PERIOD = 20.0
+    TAG = "[loop]"
 
     def __init__(self):
         self.acc, self.n = collections.OrderedDict(), 0
@@ -31,12 +32,12 @@ class LoopProfile(object):
         now = time.perf_counter()
         if now - self.t_print >= self.PERIOD and self.n:
             span = now - self.t_print
-            print("[loop] %.1f Hz | %s / ループ時間" % (self.n / span, ", ".join(
+            print("%s %.1f Hz | %s / ループ時間" % (self.TAG, self.n / span, ", ".join(
                 "%s %.1f ms" % (k, v * 1000.0 / self.n) for k, v in self.acc.items())),
                 flush=True)
             slow = SLOW.report(span)
             if slow:
-                print("[loop] blocking CARLA calls / 待ちの出る呼び出し: " + slow, flush=True)
+                print("%s blocking CARLA calls / 待ちの出る呼び出し: %s" % (self.TAG, slow), flush=True)
             self.acc.clear()
             self.n, self.t_print = 0, now
 

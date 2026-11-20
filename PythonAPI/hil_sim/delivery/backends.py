@@ -30,6 +30,7 @@ from delivery.loop_prof import LOOP_PROF
 from delivery.battery import Battery
 from delivery.drone import (Sortie, Transfer, Mission, TAKEOFF, ASCEND, LAND, DESCEND, DROP)
 from delivery.wind import Drift
+from delivery.drone_motion import VisualPose
 
 # the artist's drone, its rotor and a parcel that fits it (no collision)
 # アーティスト製ドローン・ローターと、それに合う荷物（衝突なし）
@@ -225,6 +226,40 @@ class RayWorker(object):
 RAYS = RayWorker()
 
 
+class WeatherReader(object):
+    """Reads the world's weather every ``period`` s on a thread with its own
+    client, so the main loop never waits for it (a get_weather() there costs
+    ~30 ms, a whole frame). ``get()`` is the last reading, or None before the
+    first. / 天気を専用クライアントのスレッドで定期的に読む（メインループで
+    読むと 1 フレーム分待つ）。get() は最後の値（未取得なら None）。"""
+
+    def __init__(self):
+        self._w = None
+
+    def start(self, host, port, period=2.0):
+        def loop():
+            try:
+                c = carla.Client(host, port)
+                c.set_timeout(10.0)
+                world = c.get_world()
+            except RuntimeError as e:
+                print("[delivery] weather reader: no client (%s) / 天気は直接読む" % e, flush=True)
+                return
+            while True:
+                try:
+                    self._w = world.get_weather()
+                except RuntimeError:
+                    pass
+                time.sleep(period)
+        threading.Thread(target=loop, name="weather-reader", daemon=True).start()
+
+    def get(self):
+        return self._w
+
+
+WEATHER = WeatherReader()
+
+
 class DroneUnit(object):
     """One physical drone: battery, flight, wind drift, failures and its props.
 
@@ -247,6 +282,10 @@ class DroneUnit(object):
         self.hover_s, self.drop_height = hover_s, drop_height
         self.nav_bridge = nav_bridge
         self.recovery_bridge = recovery_bridge
+        # how the body is shown: smooth quadcopter motion over the flight logic
+        # 機体の見せ方：飛行ロジックの上に滑らかなクアッドの動き
+        self.motion = VisualPose()
+        self._render_dt = 0.0
         self.battery = Battery(100.0)
         self.drift = Drift(max_wind)
         self.status = STANDBY
@@ -433,9 +472,17 @@ class DroneUnit(object):
         ポッドから発進して配達し、合流地点へ。機体は独立（ポッドは移動できる）。"""
         start = van.unit_pos(self)
         self.order, self.parcel_lost = order, False
-        self.flight = Mission(start, hover_point, cruise_z, meet, meet_z, h_speed=self.h_speed,
-                              v_speed=self.v_speed, hover_s=self.hover_s,
-                              drop_height=self.drop_height)
+        if self.nav_bridge is not None:
+            # the nav brain flies out, drops and flies to the meeting point; holding and
+            # the landing on the pod stay scripted (delivery/rl_bridge.py RLMission)
+            # RL 脳が往路・投下・合流地点まで飛ぶ（待機と着陸はスクリプト）
+            self.flight = self.nav_bridge.create_mission(
+                start, hover_point, cruise_z, meet, meet_z, battery=self.battery.level, drain=self.bm.hover,
+                h_speed=self.h_speed, v_speed=self.v_speed, hover_s=self.hover_s, drop_height=self.drop_height)
+        else:
+            self.flight = Mission(start, hover_point, cruise_z, meet, meet_z, h_speed=self.h_speed,
+                                  v_speed=self.v_speed, hover_s=self.hover_s,
+                                  drop_height=self.drop_height)
         self.pos, self._start_z = tuple(start), start[2]
         self.yaw = van.car.get_transform().rotation.yaw
         self._free_here()           # same pose, now free of the car / 車から独立
@@ -466,6 +513,9 @@ class DroneUnit(object):
 
     # -- per tick / 毎 tick
     def update(self, t, dt, wind):
+        job = getattr(self, "_p1_job", None)
+        if job is not None and self.recovery_bridge.poll(self, job, t):
+            self._p1_job = None
         if self.status in FLYING:
             return self._fly(t, dt, wind)
         if self.status == FALLING:
@@ -475,6 +525,7 @@ class DroneUnit(object):
     def _fly(self, t, dt, wind):
         f = self.flight
         events = []
+        rl_crash = None
         self.air_s += dt
         t0 = time.perf_counter()
         evs = f.update(dt)
@@ -490,7 +541,12 @@ class DroneUnit(object):
                     h, d = f.drops[0], self.order.drop
                     self._drop_parcel_at(h[0], h[1], d[2], t)
                     events.append(("delivered", self.order))
-                    if self.recovery_bridge is not None and self.van is not None:
+                    if getattr(self.recovery_bridge, "paper1", False):
+                        # Paper 1 method: decided in a worker, applied from a later tick
+                        # (after the delivery is recorded) / 別プロセスで判断し、後の tick で反映
+                        if self.van is not None:
+                            self._p1_job = self.recovery_bridge.on_drop(self, t, wind)
+                    elif self.recovery_bridge is not None and self.van is not None:
                         sky_st = getattr(self.van, "sky", None)
                         st_pads = sky_st.drones.station.pads if sky_st and hasattr(sky_st, "drones") and hasattr(sky_st.drones, "station") else []
                         w_vec = (float(wind[0]), float(wind[1])) if len(wind) >= 2 else (0.0, 0.0)
@@ -520,6 +576,11 @@ class DroneUnit(object):
                 events.append(("arrived", None))
             elif ev == "at_meet":
                 events.append(("at_meet", None))
+            elif ev == "crashed":
+                # an RL flight's own crash (obstacle, no-fly zone, empty battery): before,
+                # it was dropped and the drone counted as docked in mid-air
+                # RL 飛行自身の墜落（以前は無視され、空中で「収容」扱いになっていた）
+                rl_crash = data
         if getattr(f, "holding", False) and self.van is not None:
             self.note = "waiting for pod %d" % self.van.vid
         wspeed = math.hypot(*wind)
@@ -535,6 +596,8 @@ class DroneUnit(object):
             self.battery.drain(dt, self.bm.rate(f.loaded, f.state in (TAKEOFF, ASCEND), wspeed))
         t0 = time.perf_counter()
         crash = self._hazard(dt, f, actual)
+        if crash is None and rl_crash is not None:
+            crash = "rl_%s" % rl_crash
         LOOP_PROF.add(" (hazard ray)", time.perf_counter() - t0)
         self.km += math.dist(actual, self.pos) / 1000.0
         self.pos = actual
@@ -558,6 +621,7 @@ class DroneUnit(object):
             self.status, self.note, self.flight = DOCKED, "", None
             self.drift.reset()
         t0 = time.perf_counter()
+        self._render_dt = dt
         self._render(f)
         LOOP_PROF.add(" (pose)", time.perf_counter() - t0)
         self._draw_trail(f)
@@ -648,16 +712,20 @@ class DroneUnit(object):
         if self.body is None:
             return
         if self._attached is not None:
+            self.motion.reset(self.pos, self.yaw)
             if f.done:          # exactly back on the dock / 格納位置に正確に戻す
                 d = self.van.dock_for(self)
                 tf = carla.Transform(carla.Location(d.x, d.y, d.z))
             else:
                 tf = _tf(rig.to_parent(*(self._frame + (self.pos, self.yaw))))
+        elif f.done:            # landed: exactly where the logic put it / 着地：論理位置そのまま
+            self.motion.reset(self.pos, self.yaw)
+            tf = carla.Transform(carla.Location(*self.pos), carla.Rotation(yaw=float(self.yaw)))
         else:
-            rot = carla.Rotation(pitch=float(getattr(f, "pitch_deg", 0.0)),
-                                 yaw=float(self.yaw),
-                                 roll=float(getattr(f, "roll_deg", 0.0)))
-            tf = carla.Transform(carla.Location(*self.pos), rot)
+            # smooth position, limited yaw rate, tilt into the motion (delivery/drone_motion.py)
+            # 滑らかな位置・旋回・進行方向への傾き
+            pos, yaw, pitch, roll = self.motion.update(self._render_dt, self.pos, self.yaw)
+            tf = carla.Transform(carla.Location(*pos), carla.Rotation(pitch=pitch, yaw=yaw, roll=roll))
         cmds = [carla.command.ApplyTransform(self.body.id, tf)]
         if not f.done:      # rotors idle once landed / 着地後は停止
             self._spin += rig.ROTOR_STEP_DEG

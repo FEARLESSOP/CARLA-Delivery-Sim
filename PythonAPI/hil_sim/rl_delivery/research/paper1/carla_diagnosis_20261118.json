@@ -1,0 +1,53 @@
+{
+ "note": "Why the first B4 (B4conf) chose chargers in CARLA: 22 decisions saved with their situation, run data/delivery/20261118_091543 (typical battery).",
+ "decisions": 22,
+ "live_B4conf": {
+  "pod": 10,
+  "station": 12
+ },
+ "replay": {
+  "B0": {
+   "pod": 22
+  },
+  "B2": {
+   "pod": 22
+  },
+  "B4conf": {
+   "pod": 11,
+   "station": 11
+  }
+ },
+ "pod_battery_median": {
+  "pod_choices": 54.0,
+  "charger_choices": 29.8
+ },
+ "drone_battery_median": 97.0,
+ "B4conf_if_pod_battery": {
+  "30": {
+   "pod": 7,
+   "station": 15
+  },
+  "60": {
+   "pod": 16,
+   "station": 6
+  },
+  "90": {
+   "pod": 16,
+   "station": 6
+  }
+ },
+ "B2_sure_of_pod": [
+  0.988,
+  0.997
+ ],
+ "causes": [
+  "CARLA drops are minutes apart, so the look-ahead runs long and unevenly per option",
+  "the reward prices a 30-minute charge at about 0.6 on-time parcels",
+  "B2's critic is unreliable in states that were rare in training"
+ ],
+ "ruled_out": [
+  "the bridge (offline replay reproduces 21/22 live decisions)",
+  "pod charging rules and workload (aligned to CARLA: no change)"
+ ],
+ "fix": "equal look-ahead + keep B2's choice when B2 is at least 95 % sure: 0 of 22 chargers"
+}

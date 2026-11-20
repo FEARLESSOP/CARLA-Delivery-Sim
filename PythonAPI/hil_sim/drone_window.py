@@ -56,6 +56,11 @@ import pygame  # noqa: E402
 
 from delivery import live as delivery_live  # noqa: E402
 from delivery.drone_sensors import CAMERAS, CAMERA_ORDER, IN_POD  # noqa: E402
+from delivery.drone_motion import nadir_mount  # noqa: E402
+from drone_hud import draw_tilt  # noqa: E402
+
+# cameras that always look straight down (not tilted with the body) / 常に真下を向くカメラ
+NADIR = ("down",)
 
 VIEWS = ("chase", "orbit", "fpv", "down", "front", "rear")
 VIEW_NAME = {"chase": "CHASE", "orbit": "ORBIT", "fpv": "FPV GIMBAL", "down": "DELIVERY CAM",
@@ -152,7 +157,8 @@ class Cam(object):
         self.surface = pygame.surfarray.make_surface(a[:, :, 2::-1].swapaxes(0, 1))
 
     def move(self, loc, rot):
-        self.sensor.set_transform(carla.Transform(carla.Location(*loc), carla.Rotation(pitch=rot[0], yaw=rot[1])))
+        self.sensor.set_transform(carla.Transform(carla.Location(*loc), carla.Rotation(
+            pitch=rot[0], yaw=rot[1], roll=rot[2] if len(rot) > 2 else 0.0)))
 
     def destroy(self, client):
         try:
@@ -257,7 +263,11 @@ class Window(object):
         if view == "chase" and kind == "pod":
             mount = ("rigid", POD_TF, CHASE_FOV)
         elif view == "chase" and not down:
-            mount = ("rigid", CHASE_TF, CHASE_FOV)
+            # a level chase view: follows the drone's position and heading, never its
+            # pitch or roll (2026-11-19) / 水平な追従視点（機体の傾きは受けない）
+            mount = ("free", None, CHASE_FOV)
+        elif view in NADIR:
+            mount = ("free", None, CAMERAS[view]["fov"])  # follows the body, always straight down / 常に真下
         elif view in CAMERAS:
             c = CAMERAS[view]
             mount = ("rigid", carla.Transform(carla.Location(c["x"], c["y"], c["z"]),
@@ -276,8 +286,12 @@ class Window(object):
             p = (loc.x, loc.y, loc.z + 0.2)
             if view == "orbit":
                 pos, rot = orbit_pose(p, time.time() - self.t0)
-            else:
-                pos, rot = level_follow(p, float(d.get("yaw") or 0.0))
+            elif view in NADIR:
+                pos, rot = self._nadir(target, view)
+            else:                           # level chase (also for a crashed drone) / 水平な追従
+                tft = target.get_transform() if kind == "body" else None
+                yaw = tft.rotation.yaw if tft is not None else float(d.get("yaw") or 0.0)
+                pos, rot = level_follow(p, yaw, back=2.3, up=1.05)
             self.main.move(pos, rot)
         # onboard strip: on the body while it is out of the pod / 機載カメラ（格納中は停止）
         if kind == "body" and not self.args.no_strip:
@@ -285,15 +299,47 @@ class Window(object):
                 self.drop_strip()
                 for n in CAMERA_ORDER:
                     c = CAMERAS[n]
+                    if n in NADIR:              # not attached: placed straight down each frame / 毎フレーム真下へ
+                        pos, rot = self._nadir(target, n)
+                        tf = carla.Transform(carla.Location(*pos), carla.Rotation(pitch=rot[0], yaw=rot[1]))
+                        self.strip[n] = Cam(self.world, self.tile, c["fov"], tf, None, self.args.drone,
+                                            tick=1.0 / self.args.strip_fps)
+                        continue
                     tf = carla.Transform(carla.Location(c["x"], c["y"], c["z"]),
                                          carla.Rotation(pitch=c["pitch"], yaw=c["yaw"]))
                     self.strip[n] = Cam(self.world, self.tile, c["fov"], tf, target, self.args.drone,
                                         tick=1.0 / self.args.strip_fps)
                 self.strip_body = aid
+            self.follow_nadir(target)
         else:
             self.drop_strip()
+        self.tilt_body = target if kind == "body" else None
         self.status_line = ""
         return kind
+
+    def _nadir(self, body, name):
+        """Pose of a straight-down camera under ``body``: follows its position and
+        heading, never its pitch or roll. / 機体の位置と向きだけに追従する真下カメラ。"""
+        tf = body.get_transform()
+        c = CAMERAS[name]
+        if tf is None:                      # a body that has no pose yet / 姿勢がまだ無い機体
+            return (c["x"], c["y"], c["z"]), (-90.0, 0.0, 0.0)
+        return nadir_mount((tf.location.x, tf.location.y, tf.location.z), tf.rotation.yaw,
+                           (c["x"], c["y"], c["z"]))
+
+    def follow_nadir(self, body=None):
+        """Re-place the strip's straight-down cameras (called every frame).
+        下段の真下カメラを毎フレーム置き直す。"""
+        if body is None:
+            if self.world is None or not self.strip_body:
+                return
+            body = self.world.get_actor(self.strip_body)
+        if body is None or not body.is_alive:
+            return
+        for n in NADIR:
+            cam = self.strip.get(n)
+            if cam is not None:
+                cam.move(*self._nadir(body, n))
 
     # -- drawing / 描画
     def text(self, s, pos, color=WHITE, font=None, anchor="topleft", shade=True):
@@ -353,6 +399,14 @@ class Window(object):
         if kind == "pod" and self.view in CAMERAS:
             view = "CHASE (in pod: onboard cameras off)"
         self.text(view, (W - 12, 10), GREEN, self.f, "topright")
+        body = getattr(self, "tilt_body", None)
+        if body is not None:                # tilt indicator under the view name / 傾き表示
+            try:
+                tf = body.get_transform()
+                if tf is not None:
+                    draw_tilt(self.display, (W - 52, 84), 34, tf.rotation.pitch, tf.rotation.roll, self.fs)
+            except (RuntimeError, AttributeError):
+                pass
         self.text("1-6 view  Tab next  H hud  F11 full  Esc close", (W - 12, self.big[1] - 8), GREY, self.fs,
                   "bottomright")
 
@@ -421,8 +475,13 @@ def main(argv=None):
                     win.status_line = "CARLA unreachable - retrying..."
                     next_probe = time.time() + 3.0
             elif win.main is not None and win.main_key and win.main_key[3] == "free" and win.drone:
-                try:                         # smooth orbit between probes / 周回を滑らかに
+                try:                         # smooth orbit / straight-down between probes / 周回・真下を滑らかに
                     kind = win.keep_cameras()
+                except RuntimeError:
+                    pass
+            elif win.strip and win.drone:
+                try:                         # the strip's straight-down camera every frame / 下段の真下カメラ
+                    win.follow_nadir()
                 except RuntimeError:
                     pass
             win.draw(kind)

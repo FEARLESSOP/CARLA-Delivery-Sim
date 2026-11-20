@@ -1,0 +1,42 @@
+{
+ "run_id": "nav_20261119_103203",
+ "args": {
+  "brain": "nav",
+  "round_steps": 200000,
+  "map": "OitaKosen",
+  "hours": 4.0,
+  "envs": 16,
+  "eval_every": 100000,
+  "resume": false,
+  "algo": "",
+  "seed": 0,
+  "dist": 0.0,
+  "geo_progress": true,
+  "detour_share": 0.5,
+  "wind_level": null,
+  "checkpoint": "rl_delivery/checkpoints/nav/step_057836252.zip",
+  "ent_coef": null,
+  "lr": 0.0,
+  "log_std_min": -2.0,
+  "tag": ""
+ },
+ "started": "2026-11-19 10:32:03",
+ "git_commit": "67abc2e",
+ "uncommitted_changes": true,
+ "env_constants": {
+  "MAX_TILT": 0.5235987755982988,
+  "HERE": "/home/inouelab/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/rl_delivery",
+  "DT": 0.05,
+  "RAYS": 16,
+  "RANGE": 40.0,
+  "NOFLY_DIRS": 8,
+  "NOFLY_RANGE": 150.0,
+  "MAX_S": 480.0,
+  "PAD_Z": 2.6,
+  "CEILING_AGL": 150.0,
+  "PROG_K": 0.3,
+  "NEAR_BONUS": 25.0,
+  "NEAR_SCALE": 15.0,
+  "CIRCLE_COST": 0.02
+ }
+}

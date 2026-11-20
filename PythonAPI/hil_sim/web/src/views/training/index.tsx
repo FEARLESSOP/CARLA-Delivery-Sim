@@ -13,7 +13,7 @@ import { Badge, Button, Card, EmptyState, Grid, KV, SectionTitle, Segmented, Sel
 
 interface ProgRow { steps: number; wall_s: number; wind_level: number; reached: number; crash: number; xtrack_mean: number; xtrack_max: number; guard_steps: number; battery_used: number; ep_reward: number }
 interface TrainState { brain?: string; running?: boolean; steps?: number; wind_level?: number; deadline?: number; last?: Partial<ProgRow>; round?: number; training?: string }
-type Brain = 'flight' | 'mission' | 'nav' | 'fleet' | 'drive'
+type Brain = 'flight' | 'mission' | 'nav' | 'fleet' | 'drive' | 'paper1'
 interface RuleBase { deliveries: number; crashes_per_100: number; lead_mean_s: number; landing_min: number }
 interface RlState { state: TrainState; alive: boolean; progress: ProgRow[]; checkpoints: string[]; drone_checkpoints?: string[]; rule?: RuleBase | null }
 interface Frame { t: number; p: number[]; c: number[]; wind: number[]; cmd: number[]; dev: number; guard: boolean }
@@ -533,7 +533,7 @@ interface FRec {
   kpi: Record<string, number | null | Record<string, number>>; bounds: number[]; zones: Record<string, Rect>; nofly: Rect[]
   stations: number[][]; lockers: number[][]; lines: number[][][]
 }
-const FSTATE: Record<string, string> = { fly: C.info, hover: C.cyan, standby: C.accent, down: C.danger }
+const FSTATE: Record<string, string> = { fly: C.info, hover: C.cyan, standby: C.accent, down: C.danger, stn_charge: C.warn, stn_queue: C.danger }
 
 function FleetMap({ rec, i }: { rec: FRec; i: number }) {
   const layer = useRef(new StaticLayer())
@@ -663,6 +663,108 @@ function FleetWatch({ pods, drones }: { pods: string[]; drones: string[] }) {
 
 function MissionMapWrap({ children }: { children: React.ReactNode }) { return <>{children}</> }
 
+// ---- Paper 1: two recovery methods on the same test day, side by side ----
+// Paper 1：同じテスト日を 2 つの回収手法で並べて再生
+const P1_METHODS = ['B0', 'POD', 'B1', 'B2', 'B3', 'B4', 'B5']
+const P1_SCEN = ['S1_normal', 'S2_rush_hour', 'S3_pod_delay', 'S4_station_outage', 'S5_high_wind', 'S6_burst_returns', 'S7_unseen_customers']
+type P1Rec = FRec & { label: string; method: string; world: string; scenario: string; day: number }
+
+function P1Stats({ rec, now }: { rec: P1Rec; now: number }) {
+  const t = useT()
+  const k = rec.kpi as Record<string, number | null>
+  const ev = rec.events.filter((e) => e.what === 'recover' && e.t <= now)
+  const cnt = (kind: string) => ev.filter((e) => e.kind === kind).length
+  const stn = ev.filter((e) => String(e.kind).startsWith('station')).length
+  const n = (x: unknown, d = 1) => (typeof x === 'number' ? fmt(x, d) : '–')
+  const kindLabel = (kind: string) => t(kind.startsWith('station') ? 'p1_k_station' : kind === 'pod_next' ? 'p1_k_next' : 'p1_k_pod')
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <KV k={t('p1_deliv')} v={n(k.delivered_per_h)} />
+        <KV k={t('p1_ontime')} v={n(k.ontime30_per_h)} />
+        <KV k={t('p1_ready')} v={typeof k.ready_time_mean_s === 'number' ? `${fmt(k.ready_time_mean_s, 0)} s` : '–'} />
+        <KV k={t('p1_fail')} v={n(k.recovery_failures, 0)} tone={Number(k.recovery_failures) > 0 ? 'bad' : 'good'} />
+      </div>
+      <KV k={t('p1_now')} v={`${cnt('pod')} / ${cnt('pod_next')} / ${stn}`} />
+      <h4 className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-fg-mute">{t('p1_recent')}</h4>
+      <ul className="flex flex-col gap-0.5 font-mono text-xs text-fg-2">
+        {ev.slice(-5).reverse().map((e, i) => <li key={i}>{fmtDur(e.t)} · D{String(e.drone)} → {kindLabel(String(e.kind))}</li>)}
+      </ul>
+    </div>
+  )
+}
+
+function Paper1Watch() {
+  const t = useT()
+  const [world, setWorld] = useState('v2')
+  const [scen, setScen] = useState('S2_rush_hour')
+  const [day, setDay] = useState(0)
+  const [ma, setMa] = useState('B0')
+  const [sa, setSa] = useState('0')
+  const [mb, setMb] = useState('B3')
+  const [sb, setSb] = useState('0')
+  const [recs, setRecs] = useState<[P1Rec | null, P1Rec | null]>([null, null])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const slow = [ma, mb].some((m) => m === 'B4' || m === 'B5')
+  const lead = recs[0] && recs[1] ? (recs[0].frames.length <= recs[1].frames.length ? recs[0] : recs[1]) : null
+  const r = useReplay(lead as unknown as Rec | null)
+  const methodOpts = P1_METHODS.map((m) => ({ value: m, label: t(`p1_m_${m}`) }))
+  const seedOpts = ['0', '1', '2'].map((s) => ({ value: s, label: `s${s}` }))
+  const record = async () => {
+    setBusy(true); setErr(null)
+    const body = (m: string, s: string, slot: string) => ({ brain: 'paper1', method: m, ckpt_seed: Number(s), world, scenario: scen, day, slot })
+    try {
+      const a = await postJSON<P1Rec>('/rl/watch', body(ma, sa, 'a'))
+      const b = await postJSON<P1Rec>('/rl/watch', body(mb, sb, 'b'))
+      setRecs([a, b])
+    } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+  }
+  const now = lead?.frames[r.i]?.t ?? 0
+  return (
+    <Card title={t('p1_title')} className="xl:col-span-4" footer={t('p1_legend')}>
+      <div className="grid gap-3 md:grid-cols-3">
+        <Select label={t('p1_world')} value={world} onChange={setWorld}
+          options={[{ value: 'v2', label: t('p1_w2') }, { value: 'v1', label: t('p1_w1') }]} />
+        <Select label={t('p1_scen')} value={scen} onChange={setScen}
+          options={P1_SCEN.map((s, i) => ({ value: s, label: `S${i + 1} ${t(`p1_s${i + 1}`)}` }))} />
+        <Stepper label={t('p1_day')} value={day} min={0} max={29} onChange={setDay} />
+        <Select label={`${t('p1_a')} · ${t('p1_method')}`} value={ma} options={methodOpts} onChange={setMa} />
+        <Select label={`${t('p1_a')} · ${t('p1_seed')}`} value={sa} options={seedOpts} onChange={setSa} />
+        <div className="hidden md:block" />
+        <Select label={`${t('p1_b')} · ${t('p1_method')}`} value={mb} options={methodOpts} onChange={setMb} />
+        <Select label={`${t('p1_b')} · ${t('p1_seed')}`} value={sb} options={seedOpts} onChange={setSb} />
+        <div className="flex items-end gap-2"><Button variant="primary" busy={busy} onClick={record}>{busy ? t('tr_recording') : t('tr_record')}</Button>
+          <a href="/paper1" target="_blank" rel="noopener" title={t('p1r_open_title')}
+            className="inline-flex h-9 items-center rounded-lg border border-accent/50 px-3 text-sm text-accent hover:bg-accent/10">{t('p1r_open')}</a></div>
+      </div>
+      {busy && slow && <Badge tone="info">{t('p1_slow')}</Badge>}
+      {err && <Badge tone="bad">{t('tr_err_msg')}: {err.slice(0, 200)}</Badge>}
+      {recs[0] && recs[1] && lead ? <>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {recs.map((rec, n) => rec && (
+            <div key={n} className="flex min-w-0 flex-col gap-2">
+              <div className="text-sm font-semibold text-fg">{n === 0 ? t('p1_a') : t('p1_b')}: {t(`p1_m_${rec.method}`)}{['B1', 'B2', 'B3', 'B4'].includes(rec.method) ? ` (${rec.label.split('_')[1]})` : ''}</div>
+              <FleetMap rec={rec} i={Math.min(r.i, rec.frames.length - 1)} />
+              <P1Stats rec={rec} now={now} />
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button size="sm" onClick={() => { if (r.i >= lead.frames.length - 1) r.setI(0); r.setPlay(!r.play) }}>{r.play ? t('tr_pause') : t('tr_play')}</Button>
+          <Segmented size="sm" label={t('tr_speed')} value={r.speed} onChange={r.setSpeed}
+            options={['1', '5', '20', '100'].map((v) => ({ value: v, label: `${Number(v) * 50}×` }))} />
+          <div className="min-w-[240px] flex-1">
+            <Slider label={t('tr_time')} value={r.i} min={0} max={lead.frames.length - 1} onChange={(v) => { r.setPlay(false); r.setI(v) }}
+              format={(v) => fmtDur(lead.frames[v]?.t ?? 0)} />
+          </div>
+        </div>
+      </> : <EmptyState>{t('p1_none')}</EmptyState>}
+    </Card>
+  )
+}
+
+
 // ---- driving: one route, lane edges, stop lines, lights, cars / 運転 ----
 interface DFrame { t: number; p: number[]; v: number; off: number; cars: number[][]; lights: number[] }
 interface DRec {
@@ -789,23 +891,23 @@ function DriveWatch({ ckpts }: { ckpts: string[] }) {
 export default function TrainingView() {
   const t = useT()
   const [brain, setBrain] = useState<Brain>('fleet')
-  const { data } = usePoll<RlState>(`/rl/state?brain=${brain}`, 5000)
+  const { data } = usePoll<RlState>(`/rl/state?brain=${brain === 'paper1' ? 'fleet' : brain}`, 5000)
   const st = data && (data as RlState & { _b?: string }) ? data : null
   return (
     <div className="flex flex-col gap-4">
       <SectionTitle sub={t('tr_sub')}>{t('tr_title')}</SectionTitle>
       <Segmented label={t('tr_brain')} value={brain} onChange={setBrain}
-        options={[{ value: 'fleet', label: t('tr_b_fleet') }, { value: 'drive', label: t('tr_b_drive') },
+        options={[{ value: 'paper1', label: t('tr_b_paper1') }, { value: 'fleet', label: t('tr_b_fleet') }, { value: 'drive', label: t('tr_b_drive') },
           { value: 'nav', label: t('tr_b_nav') }, { value: 'mission', label: t('tr_b_mission') + t('tr_retired') },
           { value: 'flight', label: t('tr_b_flight') + t('tr_retired') }]} />
-      <Grid cols={4}>
+      {brain === 'paper1' ? <Grid cols={4}><Paper1Watch /></Grid> : <Grid cols={4}>
         <Trainer key={`t-${brain}`} st={st} brain={brain} />
         <Learning rows={(st?.progress ?? []) as unknown as Record<string, number>[]} brain={brain} rule={st?.rule} />
         {brain === 'fleet' ? <FleetWatch pods={st?.checkpoints ?? []} drones={st?.drone_checkpoints ?? []} />
           : brain === 'drive' ? <DriveWatch ckpts={st?.checkpoints ?? []} />
           : brain === 'flight' ? <Watch ckpts={st?.checkpoints ?? []} />
           : brain === 'nav' ? <NavWatch ckpts={st?.checkpoints ?? []} /> : <MissionWatch ckpts={st?.checkpoints ?? []} />}
-      </Grid>
+      </Grid>}
     </div>
   )
 }

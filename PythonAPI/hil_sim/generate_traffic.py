@@ -984,11 +984,21 @@ def main():
         next_beat = 0.0
         tick_failures = 0
         frame = 0
+        # where the tick master's time goes: "[tick] ..." every 20 s in the log
+        # (it sets the whole rig's frame rate) / ティックマスタの時間配分を表示
+        from delivery.loop_prof import LoopProfile, SLOW
+        import threading as _threading
+        SLOW.install(carla, _threading.main_thread())
+        tick_prof = LoopProfile()
+        tick_prof.TAG = "[tick]"
         while True:
+            tick_prof.loop_done()
+            tick_prof.mark("helpers")
             if not args.asynch and synchronous_master:
                 try:
                     frame = world.tick()
                     tick_failures = 0
+                    tick_prof.mark("world.tick")
                 except RuntimeError as exc:
                     # One slow frame (map streaming, a GPU hitch) can blow
                     # the RPC timeout. Dying on it would leave the world
@@ -1016,6 +1026,7 @@ def main():
                         # 1秒以上遅れた場合（重いフレームやマップ読込）は、
                         # 取り戻そうと全速で回さず基準時刻を引き直す。
                         next_tick = time.time()
+                tick_prof.mark("pacing sleep")
             else:
                 try:
                     frame = world.wait_for_tick(PASSIVE_TIMEOUT_S).frame

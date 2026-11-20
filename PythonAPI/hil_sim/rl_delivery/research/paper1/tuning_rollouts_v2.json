@@ -1,0 +1,117 @@
+{
+ "note": "Validation days only: seeds 2020-2029, 7 situations (70 days), world v2. B4 versions use B2 seed 0 and are paired against B2; B5 versions are paired against B0. 95 % CI half-widths.",
+ "B4": [
+  {
+   "version": "A_current",
+   "ontime30_per_h": 18.01,
+   "ready_s": 317.0,
+   "d_ontime": -0.28,
+   "d_ontime_ci": 0.94,
+   "d_ready": -15.0,
+   "d_ready_ci": 46.0,
+   "baseline": "B2",
+   "label": "argmax, 10 min, 4 samples",
+   "chosen": false
+  },
+  {
+   "version": "C_confident",
+   "ontime30_per_h": 18.71,
+   "ready_s": 275.0,
+   "d_ontime": 0.42,
+   "d_ontime_ci": 0.58,
+   "d_ready": -57.0,
+   "d_ready_ci": 35.0,
+   "baseline": "B2",
+   "label": "confident override, 10 min, 4 samples",
+   "chosen": true
+  },
+  {
+   "version": "D_short8_conf",
+   "ontime30_per_h": 18.68,
+   "ready_s": 288.0,
+   "d_ontime": 0.39,
+   "d_ontime_ci": 0.81,
+   "d_ready": -44.0,
+   "d_ready_ci": 42.0,
+   "baseline": "B2",
+   "label": "confident, 2 decisions, 8 samples",
+   "chosen": false
+  }
+ ],
+ "B5": [
+  {
+   "version": "h600",
+   "ontime30_per_h": 17.96,
+   "ready_s": 407.0,
+   "d_ontime": 0.3,
+   "d_ontime_ci": 0.88,
+   "d_ready": 72.59,
+   "d_ready_ci": 47.85,
+   "baseline": "B0",
+   "label": "argmax, 10 min",
+   "chosen": false
+  },
+  {
+   "version": "h1200",
+   "ontime30_per_h": 17.28,
+   "ready_s": 436.0,
+   "d_ontime": -0.39,
+   "d_ontime_ci": 0.8,
+   "d_ready": 102.08,
+   "d_ready_ci": 45.24,
+   "baseline": "B0",
+   "label": "argmax, 20 min",
+   "chosen": false
+  },
+  {
+   "version": "h600_conf",
+   "ontime30_per_h": 18.61,
+   "ready_s": 303.0,
+   "d_ontime": 0.94,
+   "d_ontime_ci": 0.65,
+   "d_ready": -31.65,
+   "d_ready_ci": 35.42,
+   "baseline": "B0",
+   "label": "confident override, 10 min",
+   "chosen": false
+  },
+  {
+   "version": "h1200_conf",
+   "ontime30_per_h": 18.78,
+   "ready_s": 289.0,
+   "d_ontime": 1.11,
+   "d_ontime_ci": 0.7,
+   "d_ready": -45.31,
+   "d_ready_ci": 29.85,
+   "baseline": "B0",
+   "label": "confident override, 20 min",
+   "chosen": true
+  }
+ ],
+ "reference": {
+  "B2": {
+   "version": "B2",
+   "ontime30_per_h": 18.29,
+   "ready_s": 332.0,
+   "d_ontime": 0.0,
+   "d_ontime_ci": 0.0,
+   "d_ready": 0.0,
+   "d_ready_ci": 0.0,
+   "baseline": "B2",
+   "label": "B2",
+   "chosen": false
+  },
+  "B0": {
+   "version": "B0",
+   "ontime30_per_h": 17.67,
+   "ready_s": 334.0,
+   "d_ontime": 0.0,
+   "d_ontime_ci": 0.0,
+   "d_ready": 0.0,
+   "d_ready_ci": 0.0,
+   "baseline": "B0",
+   "label": "B0",
+   "chosen": false
+  }
+ }
+}

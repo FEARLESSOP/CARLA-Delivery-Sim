@@ -1,0 +1,20 @@
+{
+ "note": "Crash and recovery-failure causes, B0 in world v2, 7 situations x 30 test days (seeds 1000-1029). Other methods were not recorded by cause.",
+ "method": "B0",
+ "world": "v2",
+ "crashes": {
+  "wind": 157,
+  "battery": 50,
+  "collision": 37
+ },
+ "recovery_failures": {
+  "wind": 74,
+  "battery": 46,
+  "collision": 9
+ },
+ "S5_crashes": {
+  "wind": 62,
+  "battery": 10,
+  "collision": 4
+ }
+}

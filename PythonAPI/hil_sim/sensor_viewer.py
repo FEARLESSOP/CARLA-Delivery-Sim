@@ -221,10 +221,23 @@ class SensorPanel:
             bp = bp_lib.find('sensor.lidar.ray_cast')
             bp.set_attribute('range', self.options.get('range', '80'))
             bp.set_attribute('channels', self.options.get('channels', '64'))
-            bp.set_attribute('points_per_second',
-                             self.options.get('points_per_second', '250000'))
-            bp.set_attribute('rotation_frequency',
-                             self.options.get('rotation_frequency', '20'))
+            # CARLA's LiDAR scans only what it sweeps in ONE simulation step
+            # (rotation_frequency x step) with points_per_second x step points,
+            # so at 60 steps/s a 20 Hz LiDAR gave a 120 deg slice of 2,000
+            # points. One full turn per step, and points per reading = points
+            # per second / readings per second (same server load at any rate).
+            # LiDAR は 1 ステップで回る範囲だけを走査する。1 ステップで 1 回転させ、
+            # 1 回の点数＝毎秒点数÷毎秒の読み取り回数（どの速さでも負荷は同じ）。
+            pps = float(self.options.get('points_per_second', '250000'))
+            rot = float(self.options.get('rotation_frequency', '20'))
+            step = world.get_settings().fixed_delta_seconds
+            if step and step > 0.0:
+                tick = float(self.options.get('sensor_tick', SENSOR_TICK))
+                reads = 1.0 / max(tick, step) if tick > 0.0 else 1.0 / step
+                rot = 1.0 / step
+                pps = pps / reads / step
+            bp.set_attribute('points_per_second', str(int(pps)))
+            bp.set_attribute('rotation_frequency', '%.3f' % rot)
             bp.set_attribute('dropoff_general_rate',
                              bp.get_attribute('dropoff_general_rate')
                                .recommended_values[0])

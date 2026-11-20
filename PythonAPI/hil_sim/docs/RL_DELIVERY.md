@@ -42,14 +42,26 @@ The user's delivery flow (the world's rules, not scripts):
 
 ## 2. The user's rules for the RL (non-negotiable)
 
-- **Nothing hardcoded.** Every behaviour is learned: pod driving, pod
-  decisions, drone flying and path finding, drone decisions. Rule-based /
-  scripted / PID code exists **only as baselines to beat**, never in control.
+- **What is RL (user decision 2026-11-16):** pure RL = **the drones** (flying and
+  path finding, `env_nav.py`) and **the whole fleet system** (`env_fleet.py`: every pod
+  and drone decision — where to stop, launches, meeting points, charging, drone
+  recovery). **Only the pod's driving is code** (CARLA's BasicAgent with the Japan
+  rules, `--policy-drive off`); the pod-driving RL brain (`env_drive.py`,
+  `checkpoints/drive`) is retired — do not train it again. Paper 1 (a separate
+  study, `docs/PAPER1_BASELINES.md`) follows its guide, hard masks included.
+  ユーザー決定 2026-11-16：純粋 RL はドローン（飛行・経路）と艦隊の全判断。ポッドの運転だけ
+  コード（BasicAgent）で、運転 RL は廃止。Paper 1 はガイドどおり（ハードマスクあり）。
+- 2026-11-16: the behaviour masks added to `env_fleet.py` on 11-11 were removed
+  (charging blocked above 50 %, swap cool-down / cap, no launches below 25 %, only
+  charging below 15 %, the drone after-drop reserve mask, which also crashed on a
+  missing field). The fleet checkpoints were trained with them: retrain before use.
+- **Nothing hardcoded** inside the RL parts: their behaviour is learned. Rule-based /
+  scripted / PID code exists there **only as baselines to beat**, never in control.
   Before adding any helper that steers, plans, chooses or vetoes, check it is
   world physics, an option list or a reward, not behaviour.
 - **Pure RL, no safety layer**: no geofence for no-fly zones, no emergency stop
   for the pod. Breaches are possible; they are penalised and counted.
-- **Pretend world first**, CARLA for testing (pod driving may fine-tune there).
+- **Pretend world first**, CARLA for testing.
 - The agents must be **allowed to fail** in training (flat batteries, crashes,
   strandings): that is how they learn battery management.
 - **Wind is realistic and hidden**: no brain ever sees it.
@@ -63,7 +75,7 @@ The user's delivery flow (the world's rules, not scripts):
 |---|---|---|---|---|
 | **Pod (fleet)** | where to stop for a drone round (6 spots round the middle of the drone deliveries, with how open the sky is), how many drones to launch (1–4) + which meeting point (3), which locker (4), go to the meeting point, call a standby swap, go charge (3 stations), wait | `env_fleet.py` PodView | MaskablePPO (masked discrete, 28 actions) | `checkpoints/fleet_pod` |
 | **Drone (fleet)** | cruise height at launch, after the drop: meeting point or home to a station, while hovering: keep waiting or go home, standby: accept or decline a task | `env_fleet.py` DroneView | MaskablePPO (Discrete 3, masked per decision) | `checkpoints/fleet_drone` |
-| **Pod driving** | steering + pedal (±3 m/s², symmetric) 10×/s | `env_drive.py` | SAC (PPO pinned its outputs at full brake) | `checkpoints/drive` |
+| Pod driving (retired 2026-11-16: the pod is driven by code) | steering + pedal 10×/s | `env_drive.py` | SAC | `checkpoints/drive` |
 | **Drone navigation** | thrust / tilt / yaw 20×/s; finds its own way to the drop, then to the meeting point and lands on the pod | `env_nav.py` | RecurrentPPO (LSTM, to feel the hidden wind) | `checkpoints/nav` |
 | Drone mission (retired) | old one-pod world, replaced by the fleet brains | `env_mission.py` | | `checkpoints/mission` |
 | Drone flight (retired) | followed a given route; replaced by navigation | `env_flight.py` | | `checkpoints/flight` |
@@ -184,9 +196,59 @@ never with steering:
 | fleet pod | waited 328 / 359 decisions | per-decision credit made a 30 s wait look cheaper than minutes-long drives: waiting while there is work costs −3 (else −0.2); fresh pod brain |
 | drive | crawled at 0.6–0.9 m/s | progress 0.1 -> 0.3 per metre |
 | drive | (design) never got moving with SAC: 0.08 m/s | pedal was +2.5 / −6.0 m/s²: random exploration braked more than it accelerated; now symmetric ±3 m/s² |
+| nav | (11-11 → 11-13) **policy collapse**: after a reward change (progress only for beating the best distance so far) on a resumed brain with `ent_coef` 0, the action stopped depending on the observation; the drone crept at ~1 m/s into the first building; 0 % landed for ~55 M steps | restart from the last healthy checkpoint (24 M), potential-based progress again, `ent_coef` 0.005 + log_std floor −2.0, goal-height cone removed (a hand-written rule), and **health alarms that stop training** (section 13). "Do nothing" was *not* a better strategy (−2.7 vs +39.4 discounted): exploration died, so the brain could not get back |
 
 Watch for new tricks: a failure type (time-out, battery, ceiling, standing
 still) rising while the success number stays flat.
+
+### Nav: flying round no-fly zones (2026-11-18/19)
+
+In CARLA the nav brain flew LastMile missions (new `RLMission`, delivery/rl_bridge.py: scripted
+vertical take-off clear of everything within 15 m, the brain to the drop and on to the meeting
+point, scripted hold and landing on the pod). On 30 real trips 13 ended in a no-fly zone: pod
+1's drops lie behind the zone x 115-310, y −384..−280, and the brain flies straight. Random
+practice trips almost never cross a zone (2/32), and on 32 crossing trips the 50 M brain hit
+the zone 20 times. **Detour practice** (`--detour-share 0.5`: half the trips cross a zone,
+env_nav `detour_share`) for 7.7 M steps changed nothing (19/32; CARLA trips 12/30), because the
+progress reward measured the straight-line distance: going round a zone looks like losing
+ground, cutting through costs one −50. **Progress round the zones** (`--geo-progress`, env_nav
+`geo_progress`): the horizontal distance in the potential is the shortest legal path round the
+no-fly zones (10 m margin, visibility graph over the zones' corners) plus the height
+difference; still pure RL (only the reward changes). Run started 2026-11-19 from the 57.8 M
+brain; check: `rl_delivery/research/nav_detour_check.py` (CARLA trips, crossing trips, normal
+trips) → `nav_detour_check.json`.
+航法ブレインが飛行禁止区域を直進して突入する問題：迂回練習だけでは改善せず、進捗報酬を「区域を回る最短距離」で測るように変更して再学習。
+
+**First geo run failed (2026-11-19 09:00-10:01, auto-stopped: crash ≥ 80 % six times).** The
+brain started diving onto the pod (touch-down −4 m/s vs −0.5) and stopped landing; checkpoints
+moved to `checkpoints/nav/rejected_geo_20261119/` so `latest` stays the healthy 57.8 M brain.
+Analysis on the same flights (57.8 M brain): the episode totals barely change with geo progress
+(+3 per trip), but the distance **jumped** up to 63 m in one step (reward ±19): the visibility
+check used the corners' 10 m margin, so near a zone no corner was visible and the distance fell
+back to the straight line, and paths flipped between corners 10 m out; noisy reward spikes
+plausibly drowned the small careful-flight terms. Fixed: visibility against the zones
+themselves (0.2 m inside the edge), corners 1 m out, fallback via the nearest corner, no
+progress on the step that enters a zone; the per-step change is now ≤ 1.9 m on 16 crossing
+trips (straight line: 1.1 m). Second geo run started 2026-11-19 from the 57.8 M brain.
+最初の geo 学習は着陸が崩れ自動停止。原因は距離の跳び（最大 63 m/ステップ）。修正して再学習。
+
+**Second geo run (2026-11-19 10:32-14:32, 57.8 → 66.8 M steps, healthy: no collapse, landings
+56-69 %, pod crashes 0-6 % in the last hours).** Check (`nav_detour_check.json`):
+
+| brain | CARLA trips (30): completed / no-fly / obstacle | crossing trips (32): completed / no-fly | normal (32): completed |
+|---|---|---|---|
+| 50.1 M | 11 / 14 / 5 | 6 / 20 | 20 |
+| 57.8 M (detour practice) | 8 / 13 / 8 | 5 / 19 | 20 |
+| 66.8 M (geo progress) | 10 / 10 / 10 | 6 / 23 | 21 |
+
+Not solved: after about 16 M steps of detour practice (half of them with progress measured
+round the zones) the brain still enters the zone on about 70 % of the crossing trips; on
+the CARLA trips the no-fly crashes fell a little (10 vs 13-14) but obstacle crashes rose.
+Likely limit: the brain sees the zones only through 8 distance rays (150 m) and its goal as a
+straight-line vector, so it cannot tell which way round a 200 m zone is shorter; going round
+needs route information or far longer training. `latest` is the 66.8 M brain (healthy, as good
+as before on normal trips).
+2 回目の geo 学習は健全だが迂回は改善せず。原因はおそらく観測（距離レイと直線方向のみ）。
 
 ## 8. Curricula
 
@@ -209,10 +271,23 @@ still) rising while the success number stays flat.
 - Dashboard helpers must not call CARLA while its port is closed (a failed
   connect holds Python's lock and freezes every page for 5–25 s).
 - Mesh coordinates in `maps/build/<Map>/meshes` have y = north; CARLA y = south.
-- No CARLA bridge yet (plan and how-to: `docs/RL_CARLA_BRIDGE.md`): `delivery_sim.py` has no `--policy` hook. Order to
-  build it: navigation (drones are props it moves), driving (`apply_control`
-  with observations rebuilt from live waypoints / lights / actors), fleet
-  (replaces the dispatcher). Testing needs the demo stopped: ask the user.
+- `RecurrentPPO.load()` / `PPO.load()` keep the saved settings (`ent_coef`,
+  learning rate): train.py now sets them after loading (`--ent-coef`, `--lr`).
+  `--resume` takes the **newest file by time**; to start from a given brain use
+  `--checkpoint FILE`. Resuming a brain across a reward change is a new run:
+  watch explained variance and the health probe (section 13).
+- OpenDRIVE `<speed max>` is in **m/s** unless it has a `unit`: until 2026-11-13
+  prepare_map / prepare_drive stored it as km/h, so the driving brain learnt
+  8.3 km/h limits on 30 km/h roads. `road_speeds()` converts now.
+- `research_log.py` copies each run's progress from the file named in `RUNS`
+  every time it runs: when a trainer starts a fresh progress file (no
+  `--resume`), first freeze the old run's rows in their own file
+  (`results/<brain>_progress_<run>.csv`) and point the run there.
+- A success number at 0 % for a whole evaluation series means stop and look,
+  not "keep training": the 11-11 nav run went ~55 M steps like that.
+- The CARLA bridge exists (`delivery/rl_bridge.py`, `--policy-nav`,
+  `--policy-drive`, `--policy-recovery`; status in `docs/RL_CARLA_BRIDGE.md`).
+  Testing needs the demo stopped or restarted: ask the user.
 
 ## 10. Findings so far (material for the paper)
 
@@ -251,14 +326,14 @@ To make these claims in a paper: rerun each as a controlled comparison with
 e.g. with / without shaping, curriculum, landing tolerance, symmetric pedal,
 idle cost; RecurrentPPO vs PPO vs SAC for navigation; SAC vs PPO vs TD3 for driving.
 
-## 11. Status (2026-11-10 13:30 JST)
+## 11. Status (2026-11-13 15:40 JST)
 
 | Brain | Latest (test set) | Stage |
 |---|---|---|
-| Drone navigation | 7.8 M steps: 88 % delivered, 50–62 % landed on the pod, 25 % obstacle, 6 % no-fly | 200 m trips, calm; needs 70 % landed for longer trips, then wind |
-| Fleet | fresh pod brain (12:15) still in its first round; before: ~9 deliveries/h, pods stranded (rule flow 41.5/h, 0 stranded) | fixing idling / charging |
-| Pod driving | restarted 13:0x with the symmetric pedal: 0.1 M steps, 0 % reached, 0.3 m/s | early |
-| Drone mission | retired; stopped (an accidental dashboard start ran 2 h) | — |
+| Drone navigation | run nav_v7_fix from the 24 M brain (15:33): first evaluation 75 % delivered, 62 % landed at 300 m, health normal | re-climbing the distance curriculum with alarms on |
+| Fleet | 14–17 deliveries/h (pod / drone brains, 11-12) vs 36 for the rule flow at the CARLA rate | needs work |
+| Pod driving | retired 2026-11-16 (the pod is driven by code); last runs: resumed 32.5 M 58 % reached / 31 % kerb, fresh experiment 83 % / 10 % on 150 m routes | — |
+| Drone mission | retired | — |
 
 ## 12. Next
 
@@ -273,3 +348,42 @@ idle cost; RecurrentPPO vs PPO vs SAC for navigation; SAC vs PPO vs TD3 for driv
    (algorithms, ablations, 3–5 seeds), tables / charts with `compare.py`.
 6. Mini Pods and porter bots as more agent types (same fleet world design).
 7. Optional: CUDA PyTorch for the RTX 5080 (faster network updates).
+
+## 13. Navigation KPIs and health alarms (2026-11-13)
+
+Computed by `train.py` at every evaluation (16 fixed test trips, deterministic)
+and written to `results/nav_progress.csv` and each checkpoint's `.json`.
+The design started from a proposal by Argon (`docs/NAV_FIX_BRIEF.md` was its
+brief); thresholds are calibrated on the 2026-11 collapse (one run: treat them
+as first values). / 評価ごとに計算する航法の KPI と、崩壊を検知して学習を止める警報。
+
+**Outcome / 成果**
+
+| Column | Definition | Target |
+|---|---|---|
+| `delivered`, `reached` | share of trips that hovered at the drop / landed on the pod | ≥ 80 % / ≥ 70 % at 900 m |
+| `crash`, `crash_<cause>`, `timeout` | share of trips ending that way (pod, obstacle, no-fly, ceiling, battery) | crash ≤ 20 %; no cause rising alone |
+| `ret_mean` | mean undiscounted return of the trips | ↑ |
+| `zero_gap` | `ret_mean` minus the "do nothing" policy's return on the same trips (cached per world version / wind / distance in `results/nav_zero_baseline.json`) | ≥ 15 (alarm below) |
+| `progress_drop`, `progress_pod` | per leg: (start − end horizontal distance) ÷ start; the pod leg only on delivered trips | → 1 |
+| `speed_useful` | horizontal distance closed on both legs ÷ trip time (m/s) | ≥ 2 (the collapsed brain: ~1) |
+| `landing_batt` | battery left on landed trips (%) | ↑ |
+| `min_clear_p10` | 10th percentile of each trip's closest approach to anything (m) | ≥ 0.8 |
+
+**Training health / 学習の健全性**
+
+| Column | Definition | Healthy (24 M) | Collapsed |
+|---|---|---|---|
+| `probe_std_min` | smallest per-command spread of the deterministic action over 300 fixed observations (`results/nav_probe_obs.npy`, from the 24 M brain's flights) | 0.31 | 0.003 (alarm < 0.12) |
+| `probe_abs_mean` | mean \|action\| over the same observations | 0.38 | 0.01 (alarm < 0.15) |
+| `log_std_min/max` | the policy's exploration noise (floored at `--log-std-min`, default −2.0) | −1.3 | −6.5 |
+| `dact_mean` | mean command change per step in the test trips | — | ~0 |
+| `lstm_std` | spread of the LSTM state over a trip (memory in use) | — | — |
+| `explained_var`, `approx_kl` | PPO update statistics averaged since the last evaluation | EV 0.6–0.85 | — |
+| `alarm` | `collapse` (probe below its limits), `crash` (≥ 80 %), `zero_gap` | empty | — |
+
+**Automatic stop / 自動停止:** two `collapse` alarms in a row, or three
+evaluations with crash ≥ 80 %, write `results/STOP_nav` with the reason (also in
+`train_state_nav.json` → `alarm`); roll back to the last healthy checkpoint
+(`--checkpoint`) and fix the world or reward. The curriculum does not advance
+while any alarm is on.

@@ -1,0 +1,60 @@
+{
+ "step_050135964.zip": {
+  "carla_trips_30": {
+   "crash_nofly": 14,
+   "completed": 11,
+   "crash_obstacle": 5
+  },
+  "detour_32": {
+   "crash_nofly": 20,
+   "completed": 6,
+   "delivered_only": 4,
+   "crash_obstacle": 2
+  },
+  "normal_32": {
+   "completed": 20,
+   "crash_obstacle": 4,
+   "delivered_only": 7,
+   "crash_nofly": 1
+  }
+ },
+ "step_057836252.zip": {
+  "carla_trips_30": {
+   "crash_nofly": 13,
+   "crash_obstacle": 8,
+   "completed": 8,
+   "timeout": 1
+  },
+  "detour_32": {
+   "crash_nofly": 19,
+   "crash_obstacle": 5,
+   "delivered_only": 3,
+   "completed": 5
+  },
+  "normal_32": {
+   "delivered_only": 8,
+   "completed": 20,
+   "crash_obstacle": 3,
+   "crash_nofly": 1
+  }
+ },
+ "step_066798316.zip": {
+  "carla_trips_30": {
+   "crash_nofly": 10,
+   "completed": 10,
+   "crash_obstacle": 10
+  },
+  "detour_32": {
+   "crash_nofly": 23,
+   "completed": 6,
+   "crash_obstacle": 2,
+   "delivered_only": 1
+  },
+  "normal_32": {
+   "completed": 21,
+   "delivered_only": 7,
+   "crash_obstacle": 3,
+   "crash_nofly": 1
+  }
+ }
+}

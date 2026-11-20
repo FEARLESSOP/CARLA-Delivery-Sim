@@ -26,9 +26,11 @@ let started = false
 function emit() { views.forEach((f) => f()) }
 
 let firstTick = true
+let busy = false               // one request at a time: slow answers must not pile up / 重ねて送らない
 async function tick() {
-  if (document.hidden && !firstTick) return
+  if (busy || (document.hidden && !firstTick)) return
   firstTick = false
+  busy = true
   try {
     const r = await fetch('/telemetry', { cache: 'no-store' })
     const s = (await r.json()) as Telemetry
@@ -38,6 +40,8 @@ async function tick() {
   } catch {
     online = false
     current = current ? { ...current, connected: false } : null
+  } finally {
+    busy = false
   }
   emit()
 }

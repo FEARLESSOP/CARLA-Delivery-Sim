@@ -525,7 +525,9 @@ class Fleet(object):
 
     def advance(self):
         """Run the world until a decision is needed; returns it (or None at the end)."""
-        while self.t < EP_S:
+        # t_stop: an optional earlier end (Paper 1 rollouts end every option at the same
+        # time); unset = the episode end / 任意の早い終了時刻（未設定ならエピソード終了）
+        while self.t < min(EP_S, getattr(self, "t_stop", EP_S)):
             p = self.pending()
             if p is not None:
                 return p
@@ -605,28 +607,17 @@ class Fleet(object):
             m[A_LOCK + j] = L is not None
         out = [d for d in self.drones if d["pod"] == pod["id"] and d["state"] in (FLY, HOVER)]
         m[A_GOMEET] = bool(out) and pod["meet_node"] is not None
+        # Pure RL (user rule, 2026-11-16): the mask only says what is physically
+        # possible (a station exists, a docked drone and a standby exist for a swap).
+        # Behaviour rules added on 2026-11-11 were removed: charging blocked above
+        # 50 %, swap cool-down / cap, no launches below 25 %, only charging below
+        # 15 %. Rewards (docking only when low, low-battery cost, stranding -2500,
+        # swap -10) teach the same without forbidding anything.
+        # 純粋 RL：マスクは物理的に可能かだけを表す（11-11 の行動制限は削除し、報酬で学ぶ）。
         n_stn = min(K_STN, len(self.stations))
-        m[A_CHARGE:A_CHARGE + n_stn] = pod["batt"] < 50.0   # mask charging if battery >= 50% (anti-docking loop)
-        # Swap requires docked drone, standby available, 300s cooldown, max 4 swaps/episode
-        m[A_SWAP] = (bool(docked) and any(d["state"] == STANDBY for d in self.drones)
-                     and (self.t - pod.get("last_swap_t", -999.0) > 300.0)
-                     and (pod.get("swaps_used", 0) < 4))
+        m[A_CHARGE:A_CHARGE + n_stn] = True
+        m[A_SWAP] = bool(docked) and any(d["state"] == STANDBY for d in self.drones)
         m[A_WAIT] = True
-
-        # Battery-protective action masking / 電池切れ防止のアクションマスク
-        if pod["batt"] < 25.0:
-            # Stop launching new drones or driving out to delivery spots
-            m[A_SPOT:A_SPOT + K_SPOT] = False
-            m[A_LAUNCH:A_LOCK] = False
-        if pod["batt"] < 15.0:
-            # Below 15%: forbid lockers and swaps as well; only charge or meet active airborne drones
-            m[A_LOCK:A_GOMEET] = False
-            m[A_SWAP] = False
-            if not out:
-                m[A_GOMEET] = False
-                # If no airborne drones and chargers are reachable, disallow passive waiting
-                if any(m[A_CHARGE:A_CHARGE + n_stn]):
-                    m[A_WAIT] = False
 
         # Fallback safety: at least one action must always be legal for MaskablePPO
         if not np.any(m):
@@ -695,21 +686,12 @@ class Fleet(object):
         m = np.zeros(3, bool)
         if kind == D_LAUNCH:
             m[:] = True
-        elif kind == D_AFTER:
-            # Paper 1 Hard Feasibility Masking (FA-RAMPPO):
-            # a=0: Recover to LMP-4 pod
-            # a=1: Divert to fixed charging station
-            pod = self.pods[d["pod"]] if d["pod"] is not None else None
-            m[1] = True  # Station charger fallback
-            if pod is not None:
-                tgt = pod["meet"] if pod["meet"] is not None else self.xy[pod["node"]]
-                dist_m = float(np.hypot(d["pos"][0] - tgt[0], d["pos"][1] - tgt[1]))
-                # Energy needed plus 15% reserve
-                need_batt = (dist_m / self.P["drone_speed"]) * 0.25 + 15.0
-                pod_stopped = (pod["state"] in ("spot", "wait"))
-                if d["batt"] >= need_batt and (pod_stopped or getattr(self, "recovery_mode", "stopped_bay") == "moving_roof"):
-                    m[0] = True
         else:
+            # after a drop / while hovering / a standby task: both options are always
+            # possible; the brain learns which is safe (pure RL). The 2026-11-11
+            # battery-reserve mask here was removed (it also read a missing field,
+            # pod["state"]). Paper 1 keeps its own masks (rl_delivery/paper1/).
+            # 投下後・ホバー中・待機タスク：両方とも常に可能（純粋 RL）。
             m[:2] = True
         return m
 

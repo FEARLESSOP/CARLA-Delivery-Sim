@@ -23,6 +23,34 @@ Request format / Record format:
 
 ## Requests & Runs
 
+## 2026-11-13 16:28 JST drive - RUNNING (drive_v6_kmh, Claude Code)
+- seen: in CARLA the RL pods froze at full lock; in its own world the brain was stuck at 250 m routes
+  for 28 M steps (50-80 % reached, 12-37 % kerb, 5 / 24 test routes stalled), crawling at ~3 m/s
+  while "speeding" 13-38 s per route.
+- change made: speed limits were m/s read as km/h (30 km/h roads were 8.3 km/h): `prepare_map.road_speeds`
+  converts; `maps/OitaKosen_drive.json` and `maps/OitaKosen.json` fixed in place (×3.6, backups in
+  `maps/backup_speed_units_20261113/`). CARLA bridge rebuilt (`DrivePolicy` + one `DriveBridge` per pod,
+  observation from the training lane data, 10 Hz, real wheel angle, pedal model): parity test 636 / 636.
+- action: `train --brain drive --hours 8 --envs 4 --eval-every 100000 --resume` (from 30.1 M, alongside nav;
+  log `results/train_drive.log`).
+- next: measure the LMP-4's pedal response in CARLA (`drive_actuator.json`) and test the bridge live (ask the user).
+
+## 2026-11-13 15:33 JST nav - RUNNING (nav_v7_fix, Claude Code)
+- seen: policy collapse in the 11-11 run (nav_v6): 0 % landed from ~36 M to 99.7 M steps; the action
+  stopped depending on the observation (300-observation probe std 0.50 at 24 M -> 0.003 at 99.7 M),
+  log_std -1 -> -6 with `ent_coef` 0. The 24 M checkpoint still delivers 94 % / lands 69 % (150 m).
+  "Do nothing" is not better (-2.7 vs +39.4 discounted): exploration died.
+- change made: `env_nav.py`: goal-height cone removed (hand-written rule), potential-based progress
+  restored. `train.py`: `--checkpoint`, `--ent-coef` (default 0.005, set after load), `--lr`,
+  `--log-std-min` (-2.0), KPI + health columns, auto-stop alarms (docs/RL_DELIVERY.md section 13).
+  Smoke run (tagged experiment, deleted): 62-75 % landed at 300-450 m, probe 0.28-0.33, EV 0.64-0.85.
+  Collapsed checkpoints moved to `checkpoints/nav_collapsed_20261111/` (1518 files, not deleted);
+  old progress kept as `results/nav_progress_until_20261113_153333.csv` (+ v5 / v6 splits).
+- action: `train --brain nav --hours 8 --envs 12 --eval-every 100000 --checkpoint
+  rl_delivery/checkpoints/nav/step_023992572.zip --dist 300` (log `results/train_nav.log`),
+  checked every 30 minutes.
+- done: (running) first evaluation 24.09 M: 75 % delivered, 62 % landed, probe 0.34, log_std -1.29, EV 0.71.
+
 ## 2026-11-11 09:18 JST all brains (fleet, drive, nav) - RUNNING
 - seen:
   - `fleet`: Pods ignored charging stations and stranded (chose SWAP/SPOT even at 1% battery because drone recharge draws directly from pod battery, while delivery rewards (+40..+60) outweighed the weak low-battery penalty).

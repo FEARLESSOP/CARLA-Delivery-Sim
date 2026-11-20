@@ -45,13 +45,26 @@ def find_build(name):
     raise SystemExit("no build folder for %s" % name)
 
 
+SPEED_UNIT = {"m/s": 3.6, "km/h": 1.0, "mph": 1.609344}
+
+
 def road_speeds(xodr_text):
-    """road id -> max lane speed [km/h] from the xodr. / 道路ごとの制限速度"""
+    """road id -> max lane speed [km/h] from the xodr. OpenDRIVE's <speed max>
+    is in m/s unless it has a ``unit`` attribute (2026-11-13: it was taken as
+    km/h, so the driving brain learnt 8.3 km/h limits on 30 km/h roads).
+    道路ごとの制限速度 [km/h]。<speed max> は unit 属性が無ければ m/s
+    （2026-11-13 まで km/h と誤読し、30 km/h の道路を 8.3 km/h と学習していた）。"""
     out = {}
     for m in re.finditer(r'<road\b[^>]*\bid="([^"]+)"(.*?)</road>', xodr_text, re.S):
-        sp = [float(x) for x in re.findall(r'<speed\b[^>]*\bmax="([0-9.]+)"', m.group(2))]
+        sp = []
+        for tag in re.findall(r'<speed\b[^>]*>', m.group(2)):
+            mx = re.search(r'\bmax="([0-9.]+)"', tag)
+            if not mx:
+                continue
+            unit = re.search(r'\bunit="([^"]+)"', tag)
+            sp.append(float(mx.group(1)) * SPEED_UNIT.get(unit.group(1) if unit else "m/s", 3.6))
         if sp:
-            out[int(m.group(1)) if m.group(1).isdigit() else m.group(1)] = max(sp)
+            out[int(m.group(1)) if m.group(1).isdigit() else m.group(1)] = round(max(sp), 1)
     return out
 
 

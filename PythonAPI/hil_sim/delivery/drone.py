@@ -41,6 +41,38 @@ def _move_towards(p, target, max_step):
     return tuple(p[i] + d[i] / n * max_step for i in range(3)), False
 
 
+# A real multirotor speeds up and brakes: horizontal / vertical acceleration limits, and
+# it brakes in time to stop on the final target (2026-11-19; before, it jumped to full
+# speed and stopped dead). / 実機のように加速・減速する（以前は即座に最高速・急停止）
+A_HORIZ, A_VERT = 3.0, 2.0          # m/s^2
+
+
+def _ramp_step(f, target, speed, dt, remain=None):
+    """One step towards ``target`` at a speed that ramps up and down: never faster
+    than ``speed``, never faster than it can still stop in ``remain`` metres (the
+    distance to the final target; default: to ``target``). The current speed lives
+    on the flight (``f._v``). / 加速・減速つきで目標へ 1 歩進む。"""
+    d = [target[i] - f.pos[i] for i in range(3)]
+    n = math.sqrt(sum(c * c for c in d))
+    if n == 0.0:
+        return tuple(target), True
+    horiz = math.hypot(d[0], d[1]) >= abs(d[2])
+    a = A_HORIZ if horiz else A_VERT
+    left = n if remain is None else max(n, float(remain))
+    v = getattr(f, "_v", 0.0)
+    v_t = min(float(speed), math.sqrt(2.0 * a * left))
+    if v_t > v:
+        v = min(v_t, v + a * dt)
+    else:
+        v = max(v_t, v - 2.0 * a * dt)            # braking may use up to twice the limit / 減速は最大 2 倍まで
+    f._v = v
+    step = max(v * dt, 1e-3 if n < 0.05 else 0.0)
+    if n <= step or n < 0.02:
+        f._v = 0.0 if remain is None or remain <= n + 1e-6 else v
+        return tuple(target), True
+    return tuple(f.pos[i] + d[i] / n * step for i in range(3)), False
+
+
 class _Route(object):
     """Horizontal flight to a (possibly moving) target, round the no-fly zones
     (zones.ACTIVE); a straight line when there are none. Re-planned when the
@@ -62,7 +94,10 @@ class _Route(object):
             self.goal, self.ver = (target[0], target[1]), zones.ACTIVE["ver"]
         last = len(self.pts) <= 1
         wp = target if last else self.pts[0]
-        if f._step((wp[0], wp[1], z), speed, dt):
+        # brake for the end of the route, not for every corner / 角ではなく終点に向けて減速
+        remain = math.hypot(wp[0] - f.pos[0], wp[1] - f.pos[1]) + sum(
+            math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(self.pts[:-1], self.pts[1:])) if not last else None
+        if f._step((wp[0], wp[1], z), speed, dt, remain):
             if last:
                 return True
             self.pts.pop(0)
@@ -119,8 +154,8 @@ class Sortie(object):
         """Carrying a parcel right now. / 荷物を運搬中か。"""
         return self.state in OUTBOUND
 
-    def _step(self, target, speed, dt):
-        new, arrived = _move_towards(self.pos, target, speed * dt)
+    def _step(self, target, speed, dt, remain=None):
+        new, arrived = _ramp_step(self, target, speed, dt, remain)
         self.distance += math.sqrt(sum((new[i] - self.pos[i]) ** 2 for i in range(3)))
         self.pos = new
         return arrived
@@ -207,8 +242,8 @@ class Transfer(object):
     def done(self):
         return self.state == DONE
 
-    def _step(self, target, speed, dt):
-        new, arrived = _move_towards(self.pos, target, speed * dt)
+    def _step(self, target, speed, dt, remain=None):
+        new, arrived = _ramp_step(self, target, speed, dt, remain)
         self.distance += math.sqrt(sum((new[i] - self.pos[i]) ** 2 for i in range(3)))
         self.pos = new
         return arrived
@@ -289,8 +324,8 @@ class Mission(object):
         """The pod is ready: land on ``land_fn()``. / 着陸許可。"""
         self.land_fn = land_fn
 
-    def _step(self, target, speed, dt):
-        new, arrived = _move_towards(self.pos, target, speed * dt)
+    def _step(self, target, speed, dt, remain=None):
+        new, arrived = _ramp_step(self, target, speed, dt, remain)
         self.distance += math.sqrt(sum((new[i] - self.pos[i]) ** 2 for i in range(3)))
         self.pos = new
         return arrived

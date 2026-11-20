@@ -25,9 +25,14 @@ Flask ウェブページを提供する。
 import argparse
 import csv
 import glob
+import gzip
+import hashlib
 import json
 import math
+import multiprocessing
 import os
+import pickle
+import re
 import signal as _signal     # not "signal": a route below is called that / ルート名と衝突回避
 import socket
 import subprocess
@@ -1154,6 +1159,20 @@ def telemetry_worker(host, port, log_dir=None):
                 STATE["connected"] = False
                 STATE["hero_found"] = False
             print("[dashboard] telemetry worker error: %s" % exc, file=sys.stderr)
+            # Stop the sensors' streams before forgetting them: a listening sensor
+            # of a server that is gone keeps reconnecting to the next CarlaUE4 with
+            # its old stream id, and that server then logs "Invalid session: no
+            # stream available" tens of thousands of times a second while it loads
+            # the map (2026-11-13: 278,000 lines per launch). stop() is client-side.
+            # 消えたサーバのセンサーを止めてから破棄する。止めないと次の CarlaUE4 に
+            # 古いストリーム ID で再接続し続け、サーバが大量のエラーを出す。
+            for s_ in sensors:
+                try:
+                    s_.stop()
+                except Exception:
+                    pass
+            sensors = []
+            current_hero_id = None
             time.sleep(1.0)
             # If the simulator went away (a GPU crash takes CarlaUE4 with it),
             # retrying straight into get_world() would burn the client timeout
@@ -1186,6 +1205,43 @@ def telemetry():
         return jsonify(STATE)
 
 
+# -- smaller replies / 応答を小さく ------------------------------------------
+# Large JSON GET replies are gzip-compressed (JSON shrinks ~5-10x) and carry
+# an ETag, so a poll whose data has not changed is answered "304 Not
+# Modified" with no body (the browser reuses its copy: fetch cache "no-cache").
+# 大きな JSON は gzip で圧縮し ETag を付ける（変化が無ければ 304 で本体なし）。
+GZIP_MIN = 1024
+_GZ_CACHE = {}                 # url -> (etag, gzip bytes) for the last large reply / 直近の圧縮結果
+
+
+@app.after_request
+def _small_replies(resp):
+    if (request.method != "GET" or resp.status_code != 200 or resp.direct_passthrough
+            or resp.mimetype != "application/json"):
+        return resp
+    data = resp.get_data()
+    if len(data) < GZIP_MIN:
+        return resp
+    etag = hashlib.blake2b(data, digest_size=12).hexdigest()
+    resp.set_etag(etag)
+    resp.make_conditional(request)
+    if resp.status_code == 304:
+        return resp
+    if "gzip" in request.headers.get("Accept-Encoding", ""):
+        hit = _GZ_CACHE.get(request.full_path)
+        if hit and hit[0] == etag:
+            z = hit[1]
+        else:
+            z = gzip.compress(data, compresslevel=4)
+            if len(data) > 256 * 1024:            # keep big ones (the map) / 大きいものは保持
+                _GZ_CACHE[request.full_path] = (etag, z)
+        resp.set_data(z)
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Content-Length"] = str(len(z))
+        resp.vary.add("Accept-Encoding")
+    return resp
+
+
 # Delivery drones: delivery_sim.py writes its live state to files in this
 # folder and reads wind commands appended to commands.jsonl (delivery/live.py).
 # 配送ドローン：delivery_sim.py がこのフォルダに状態を書き出し、
@@ -1207,12 +1263,25 @@ def delivery_state():
     return jsonify(s)
 
 
+_MAP_CACHE = {"key": None, "body": None}
+
+
 @app.route("/delivery/map")
 def delivery_map():
-    m = delivery_live.read_json(os.path.join(DELIVERY_DIR, delivery_live.MAP))
-    if not m:
-        return jsonify({"error": "no map yet"}), 404
-    return jsonify(m)
+    """The delivery sim's map (~3 MB), read and serialised again only when the
+    file changes. / 配送地図（約 3 MB）。ファイルが変わった時だけ読み直す。"""
+    path = os.path.join(DELIVERY_DIR, delivery_live.MAP)
+    try:
+        st = os.stat(path)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is None or key != _MAP_CACHE["key"]:
+        m = delivery_live.read_json(path)
+        if not m:
+            return jsonify({"error": "no map yet"}), 404
+        _MAP_CACHE.update(key=key, body=json.dumps(m, separators=(",", ":")))
+    return Response(_MAP_CACHE["body"], mimetype="application/json")
 
 
 @app.route("/delivery/zones", methods=["GET", "POST"])
@@ -1513,6 +1582,7 @@ def season_route():
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
         SEASON_STATUS["pending"] = True
+        _child_send({"season_pending": True})
     return jsonify({"season": s["season"], "wind": s["wind"],
                     "by_date": seasons.season_for(),
                     "seasons": [{"key": k, "en": seasons.LABELS[k][0], "ja": seasons.LABELS[k][1]}
@@ -1637,6 +1707,126 @@ def vehicle_tuning_worker(host, port):
             print("[dashboard] vehicle tuning: %s" % exc)
             world = None
             time.sleep(3.0)
+
+
+# -- the CARLA workers run in a child process / CARLA ワーカーは子プロセスで --
+# CARLA's client library can abort the whole process from its own threads
+# ("terminate called after throwing ... carla::client::TimeoutException" when
+# the server stalls or goes away), and a blocking call holds Python's lock and
+# freezes every page. So the three workers that talk to CARLA (telemetry,
+# vehicle tuning, seasons) run in a child process that sends its state here
+# ~10 times a second; this process only serves the web UI and restarts the
+# child when it dies. (2026-11-16: the dashboard aborted at map loads.)
+# CARLA のクライアントライブラリは自身のスレッドからプロセスごと異常終了させる
+# ことがあり、待ちの長い呼び出しは GIL を握ってページを止める。そこで CARLA と
+# 通信する 3 つのワーカーを子プロセスで動かし、状態を毎秒約 10 回送らせる。
+# このプロセスは Web UI だけを提供し、子が落ちたら再起動する。
+_CHILD = {"conn": None, "lock": threading.Lock()}
+LOG_SHARED = ("path", "dir", "root", "summary_path")
+
+
+def _child_send(msg):
+    with _CHILD["lock"]:
+        conn = _CHILD["conn"]
+        if conn is None:
+            return
+        try:
+            conn.send_bytes(pickle.dumps(msg))
+        except (OSError, ValueError):
+            pass
+
+
+def _carla_child(host, port, log_dir, conn):
+    """Child process: run the CARLA workers and publish their state.
+    子プロセス：CARLA ワーカーを動かし状態を送る。"""
+    _signal.signal(_signal.SIGTERM, lambda *_: os._exit(0))
+    for target, a in ((telemetry_worker, (host, port, log_dir)),
+                      (vehicle_tuning_worker, (host, port)),
+                      (season_worker, (host, port))):
+        threading.Thread(target=target, args=a, daemon=True).start()
+    last_flush = 0.0
+    while True:
+        try:
+            while conn.poll():
+                msg = pickle.loads(conn.recv_bytes())
+                if msg.get("season_pending"):
+                    SEASON_STATUS["pending"] = True
+            with STATE_LOCK:
+                payload = pickle.dumps({"state": STATE,
+                                        "log": {k: LOG.get(k) for k in LOG_SHARED},
+                                        "season": dict(SEASON_STATUS)})
+            conn.send_bytes(payload)
+        except (EOFError, OSError):
+            os._exit(0)                            # the web process is gone / 親が終了
+        now = time.time()
+        if now - last_flush > 1.0 and LOG.get("fh") is not None:
+            last_flush = now
+            try:
+                LOG["fh"].flush()
+            except Exception:
+                pass
+        time.sleep(0.1)
+
+
+def carla_supervisor(host, port, log_dir):
+    """Start the CARLA worker process, take in its state, restart it when it
+    dies. / CARLA ワーカープロセスを起動し、状態を受け取り、落ちたら再起動する。"""
+    ctx = multiprocessing.get_context("spawn")
+    while True:
+        conn, child_conn = ctx.Pipe()
+        proc = ctx.Process(target=_carla_child, args=(host, port, log_dir, child_conn),
+                           name="dashboard-carla", daemon=True)
+        proc.start()
+        child_conn.close()
+        with _CHILD["lock"]:
+            _CHILD["conn"] = conn
+        print("[dashboard] CARLA worker process started (pid %d) / CARLA ワーカー起動" % proc.pid,
+              flush=True)
+        while True:
+            try:
+                if conn.poll(1.0):
+                    d = pickle.loads(conn.recv_bytes())
+                    with STATE_LOCK:
+                        STATE.clear()
+                        STATE.update(d["state"])
+                    LOG.update({k: v for k, v in d["log"].items() if v or k != "root"})
+                    SEASON_STATUS.update(d["season"])
+                elif not proc.is_alive():
+                    break
+            except (EOFError, OSError):
+                break
+        proc.join(2.0)
+        with _CHILD["lock"]:
+            _CHILD["conn"] = None
+        with STATE_LOCK:
+            STATE["connected"] = False
+            STATE["hero_found"] = False
+        print("[dashboard] CARLA worker process exited (rc=%s) -> restarting it; the web UI "
+              "stays up / CARLA ワーカーが終了、再起動（Web UI は継続）" % proc.exitcode, flush=True)
+        time.sleep(2.0)
+
+
+def _wait_for_port(port, limit=60.0):
+    """A dashboard restarted right after the last one may find the port still
+    taken for a few seconds: wait for it instead of exiting (the launcher
+    restarted it every second, 55 times in a row on 2026-11-13).
+    直前の dashboard がまだポートを使っていれば、終了せずに空くのを待つ。"""
+    deadline, said = time.time() + limit, False
+    while time.time() < deadline:
+        sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sk.bind(("0.0.0.0", port))
+            return True
+        except OSError:
+            if not said:
+                print("[dashboard] port %d still in use, waiting / ポート使用中のため待機" % port,
+                      flush=True)
+                said = True
+            time.sleep(1.0)
+        finally:
+            sk.close()
+    return False
 
 
 def _shutdown_worker():
@@ -1786,6 +1976,9 @@ def _rl_brain_running(brain):
     return any("rl_delivery.train" in line and "--brain %s" % brain in line for line in out.splitlines())
 
 
+_RL_ROWS = {}                  # brain -> (file key, parsed rows) / 解析済みの行
+
+
 @app.route("/rl/state")
 def rl_state():
     """Trainer status, progress rows and checkpoints of one brain. / 学習の状態"""
@@ -1796,15 +1989,27 @@ def rl_state():
     except (OSError, ValueError):
         st = {}
     rows = []
+    prog = os.path.join(RL_RES, "%s_progress.csv" % brain)
     try:
-        with open(os.path.join(RL_RES, "%s_progress.csv" % brain), newline="") as f:
+        pkey = (os.stat(prog).st_mtime_ns, os.stat(prog).st_size)
+    except OSError:
+        pkey = None
+    hit = _RL_ROWS.get(brain)
+    if hit and pkey is not None and hit[0] == pkey:
+        rows = hit[1]
+    else:
+      try:
+        with open(prog, newline="") as f:
             def num(v):
+                # NaN / inf would make the reply unreadable in the browser / ブラウザが読めないため None に
                 try:
-                    return float(v)
+                    f = float(v)
+                    return f if math.isfinite(f) else None
                 except (TypeError, ValueError):
                     return None if v in ("", None) else v
             rows = [{k: num(v) for k, v in r.items()} for r in csv.DictReader(f)]
-    except OSError:
+        _RL_ROWS[brain] = (pkey, rows)
+      except OSError:
         pass
     ck = sorted(glob.glob(os.path.join(RL_DIR, "checkpoints", "fleet_pod" if brain == "fleet" else brain,
                                        "step_*.zip")))
@@ -1849,6 +2054,26 @@ def rl_watch():
     return it (a few seconds). / 1 エピソードを記録して返す"""
     body = request.get_json(silent=True) or {}
     out = os.path.join(RL_RES, "watch", "_last.json")
+    if str(body.get("brain")) == "paper1":
+        # Paper 1 day replay: whitelisted values only / Paper 1 の 1 日（許可した値のみ）
+        method, world = str(body.get("method", "B0")), str(body.get("world", "v2"))
+        scen = str(body.get("scenario", "S1_normal"))
+        if method not in ("B0", "POD", "B1", "B2", "B3", "B4", "B5") or world not in ("v1", "v2") \
+                or not re.fullmatch(r"S[1-7]_[a-z_]+", scen):
+            return jsonify({"error": "bad request"}), 400
+        out = os.path.join(RL_RES, "watch", "_last_paper1_%s.json" % str(body.get("slot", "a"))[:1])
+        cmd = [RL_PY, "-W", "ignore", "-m", "rl_delivery.watch", "--brain", "paper1", "--method", method,
+               "--world", world, "--scenario", scen, "--day", str(max(0, min(29, int(body.get("day", 0))))),
+               "--ckpt-seed", str(max(0, min(2, int(body.get("ckpt_seed", 0))))), "--out", out]
+        try:
+            # B4 / B5 imagine the future at every decision: a day takes 1-2 min / B4・B5 は 1 日 1〜2 分
+            r = subprocess.run(cmd, cwd=os.path.dirname(RL_DIR), capture_output=True, text=True, timeout=400)
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "timeout"}), 504
+        if r.returncode != 0:
+            return jsonify({"error": (r.stderr or r.stdout)[-400:]}), 500
+        with open(out) as f:
+            return Response(f.read(), mimetype="application/json")
     ck = str(body.get("checkpoint", "latest"))
     brain = str(body.get("brain", "flight"))
     if ck not in ("latest", "pid", "rule", "scripted"):
@@ -1867,6 +2092,28 @@ def rl_watch():
         return jsonify({"error": (r.stderr or r.stdout)[-400:]}), 500
     with open(out) as f:
         return Response(f.read(), mimetype="application/json")
+
+
+@app.route("/rl/paper1/data")
+def rl_paper1_data():
+    """Every Paper 1 result for the results page, read from the local research folder
+    (rl_delivery/paper1/report.py; recomputed only when a file changes).
+    Paper 1 の全結果（ローカルの研究フォルダから読む）"""
+    try:
+        from rl_delivery.paper1 import report as p1_report
+        return jsonify(p1_report.build())
+    except Exception as e:                      # a half-written file during a run / 書き込み途中
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@app.route("/paper1")
+def paper1_page():
+    """The Paper 1 results page (separate entry of the web build, opened in a new tab).
+    Paper 1 結果ページ（新しいタブで開く）"""
+    page = os.path.join(WEB_DIST, "paper1.html")
+    if os.path.exists(page):
+        return send_file(page)
+    return "web build missing: cd web && npm run build", 404
 
 
 # Timetabled buses (bus_schedule.py, run by generate_traffic on OitaStation):
@@ -2034,6 +2281,17 @@ def sessions():
     保存済みセッションの一覧を返す：[{date, time, ...summary}, ...]（新しい順）。
     """
     root = LOG.get("root") or "logs"
+    # the scan reads every summary.json: redo it at most every 10 s, or at once
+    # when a session folder appears / 全 summary.json を読むため 10 秒に 1 回まで
+    try:
+        days = sorted(os.listdir(root), reverse=True)
+        key = (root, LOG.get("dir"), tuple(days[:1]),
+               os.stat(os.path.join(root, days[0])).st_mtime_ns if days else 0)
+    except OSError:
+        key = None
+    hit = _SESSIONS_CACHE.get("v")
+    if hit and hit[0] == key and time.time() - hit[1] < 10.0:
+        return jsonify(hit[2])
     out = []
     try:
         for day in sorted(os.listdir(root), reverse=True):
@@ -2056,7 +2314,11 @@ def sessions():
                 out.append(s)
     except OSError:
         pass
+    _SESSIONS_CACHE["v"] = (key, time.time(), out[:200])
     return jsonify(out[:200])
+
+
+_SESSIONS_CACHE = {}
 
 
 @app.route("/download")
@@ -2065,10 +2327,8 @@ def download():
     if not LOG["path"]:
         return Response("no session log active (run without --no-log)",
                         status=404, mimetype="text/plain")
-    try:
-        LOG["fh"].flush()
-    except Exception:
-        pass
+    # the log is written (and flushed every second) by the CARLA worker process
+    # ログは CARLA ワーカープロセスが書き、毎秒 flush する
     return send_file(os.path.abspath(LOG["path"]), as_attachment=True)
 
 
@@ -2195,15 +2455,18 @@ def main():
     # SIGTERM で正常終了。ドローン窓は独立プロセス
     _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
 
+    # no access-log line per request (the 200 ms telemetry poll alone wrote
+    # 5 lines a second into data/launcher.out); warnings and errors still show
+    # リクエストごとのアクセスログは出さない（警告・エラーは表示）
+    import logging
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     log_dir = None if args.no_log else args.log_dir
-    t = threading.Thread(
-        target=telemetry_worker, args=(args.host, args.port, log_dir),
-        daemon=True)
-    t.start()
-    threading.Thread(target=vehicle_tuning_worker, args=(args.host, args.port),
-                     daemon=True).start()
-    threading.Thread(target=season_worker, args=(args.host, args.port),
-                     daemon=True).start()
+    # saved sessions are listed from the start, before any drive opens a log
+    # 保存済みセッションは運転開始前から一覧に出す
+    LOG["root"] = log_dir or ""
+    _wait_for_port(args.dashboard_port)
+    threading.Thread(target=carla_supervisor, args=(args.host, args.port, log_dir),
+                     name="carla-supervisor", daemon=True).start()
 
     print("[dashboard] serving http://0.0.0.0:%d/" % args.dashboard_port)
     app.run(host="0.0.0.0", port=args.dashboard_port,

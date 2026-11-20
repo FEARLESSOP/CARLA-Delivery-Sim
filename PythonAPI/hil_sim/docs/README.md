@@ -34,6 +34,8 @@ Organised 2026-11-13.
 | [`RL_CARLA_BRIDGE.md`](RL_CARLA_BRIDGE.md) | Running the trained brains in CARLA (`--policy-nav`, `--policy-drive`, `--policy-recovery`) and their status / CARLA への接続と現状 |
 | [`../rl_delivery/research/README.md`](../rl_delivery/research/README.md) | The research record: runs, changes, baselines (CSV) for a paper / 研究記録 |
 | [`../rl_delivery/HANDOFF.md`](../rl_delivery/HANDOFF.md) | Training log and requests between agents (status note on top) / 学習の引き継ぎ記録 |
+| [`NAV_FIX_BRIEF.md`](NAV_FIX_BRIEF.md) | Self-contained brief for fixing the collapsed drone navigation brain and designing its KPIs (2026-11-13) / 航法ブレイン修正と KPI 設計の依頼書 |
+| [`PAPER1_BASELINES.md`](PAPER1_BASELINES.md) | Paper 1 baselines B0–B5: definitions, status, existing data, comparison protocol (2026-11-16) / Paper 1 の比較手法と手順 |
 
 ## RL for the driving study / 運転研究の強化学習（`rl/`）
 

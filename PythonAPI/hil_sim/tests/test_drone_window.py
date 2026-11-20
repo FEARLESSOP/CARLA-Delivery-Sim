@@ -138,15 +138,17 @@ W.view, W.main, W.main_key, W.strip, W.strip_body, W.status_line = "chase", None
 W.vans = vans
 W.drone = {"id": 3, "status": "delivering", "actor": 77, "van": 2, "yaw": 30.0}
 kind = W.keep_cameras()
-check("flying: chase camera rides on the body + 4 onboard cameras on it",
-      kind == "body" and W.main.parent == 77 and len(W.strip) == 4 and all(c.parent == 77 for c in W.strip.values()))
+check("flying: level chase camera (free) + 4 onboard cameras (down one free, always straight down)",
+      kind == "body" and W.main.parent is None and W.main_key[3] == "free" and len(W.strip) == 4
+      and all(c.parent == 77 for n, c in W.strip.items() if n not in win.NADIR)
+      and all(W.strip[n].parent is None for n in win.NADIR))
 n = len(made)
 W.keep_cameras()
 check("same body: nothing respawned", len(made) == n and not gone)
 W.drone = dict(W.drone, actor=78)
 W.keep_cameras()
-check("body actor changed: everything re-attached to the new one", W.main.parent == 78 and
-      all(c.parent == 78 for c in W.strip.values()) and len(gone) == 5)
+check("body actor changed: everything re-attached to the new one", W.main.parent is None and W.main_key[2] == 78 and
+      all(c.parent == 78 for n, c in W.strip.items() if n not in win.NADIR) and len(gone) == 5)
 W.view = "fpv"
 W.keep_cameras()
 check("FPV view: the big camera at the FPV mount on the body", W.main.parent == 78 and W.main_key[0] == "fpv")

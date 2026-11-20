@@ -61,7 +61,18 @@ SCHEMA = [
     {"key": "policy_drive", "flag": "--policy-drive", "type": "choice", "default": "off",
      "choices": ["off", "latest"], "group": "delivery", "label": "Pod RL driving",
      "help": "drive LastMile pods with the trained SAC brain (off: BasicAgent)", "live": "live"},
+    {"key": "paper1_recovery", "flag": "--paper1-recovery", "type": "choice", "default": "off",
+     "choices": ["off", "B0", "B1", "B2", "B3", "B4", "B5"], "group": "delivery", "label": "Drone after drop: code or AI",
+     "help": "where each drone goes after its drop (pod, the pod's next stop or a charger), "
+             "decided by a Paper 1 method (B4 = proposed; off: the sim's own rule)", "live": "live"},
+    {"key": "paper1_seed", "flag": "--paper1-seed", "type": "choice", "default": "0",
+     "choices": ["0", "1", "2"], "group": "delivery", "label": "Paper 1 training seed",
+     "help": "which trained network B1-B4 use (B4 runs on that seed's B2)", "live": "live"},
     # driving / 運転
+    {"key": "manual_control", "flag": "--no-manual-control", "type": "nbool", "default": True,
+     "group": "driving", "label": "Manual driving window",
+     "help": "your car with the wheel / keyboard view (off: no car of yours; the CARLA window is the "
+             "main view, Q / E follow the pods and drones)", "live": "restart"},
     {"key": "start_vehicle", "flag": "--start-vehicle", "type": "vehicle", "default": "vehicle.mazda.rx7",
      "group": "driving", "label": "Your car", "help": "the car you start in (Backspace cycles in game)",
      "live": "live"},
@@ -97,8 +108,14 @@ SCHEMA = [
     {"key": "triple_fov", "flag": "--triple-fov", "type": "float", "default": 150.0, "min": 90, "max": 210,
      "group": "display", "label": "3-screen field of view", "help": "degrees across all three screens",
      "live": "restart"},
-    {"key": "fps", "flag": "--fps", "type": "int", "default": 60, "min": 20, "max": 144,
-     "group": "display", "label": "Frame cap", "help": "driving window FPS limit", "live": "restart"},
+    {"key": "fps", "flag": "--fps", "type": "int", "default": 60, "min": 0, "max": 240,
+     "group": "display", "label": "Frame cap", "help": "driving window FPS limit, 0 = no limit "
+     "(it cannot show more new frames than the simulation rate)", "live": "restart"},
+    # the server's real frame rate: steps per second of the tick master, paced to real
+    # time (generate_traffic.py --sim-fps) / サーバの実際のフレームレート（実時間に合わせる）
+    {"key": "sim_fps", "flag": "--sim-fps", "type": "int", "default": 30, "min": 20, "max": 144,
+     "group": "display", "label": "Simulation rate", "help": "CARLA frames (simulation steps) per second, "
+     "kept in real time; if the PC cannot keep up, the world runs slower than real time", "live": "restart"},
     {"key": "sensor_viewer", "flag": "--no-sensor-viewer", "type": "nbool", "default": False,
      "group": "display", "label": "Sensor viewer", "help": "camera / LiDAR / depth window", "live": "live"},
     # advanced / 詳細
@@ -163,7 +180,9 @@ def to_argv(opts):
                 argv.append(s["flag"])
         elif t in ("str", "map", "vehicle") and v == "":
             continue
-        elif s["key"] in ("policy_nav", "policy_drive") and v == "off":
+        elif s["key"] in ("policy_nav", "policy_drive", "paper1_recovery") and v == "off":
+            continue
+        elif s["key"] == "paper1_seed" and o.get("paper1_recovery", "off") == "off":
             continue
         else:
             argv += [s["flag"], str(v)]

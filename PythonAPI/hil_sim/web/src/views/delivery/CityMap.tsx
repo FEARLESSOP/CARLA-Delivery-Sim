@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref } from 'react'
 import { Expand, Info, Layers as LayersIcon, Minus, Plus, Scan, Shrink, SquarePen } from 'lucide-react'
-import { getJSON } from '@/lib/api'
+import { loadDeliveryMap } from '@/lib/deliveryMap'
 import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui'
@@ -60,7 +60,7 @@ function useDeliveryMap(state: DeliveryState | null): DeliveryMap | null {
   useEffect(() => {
     if (!want || (map && map.map === want) || loading.current) return
     loading.current = true
-    getJSON<DeliveryMap>('/delivery/map')
+    loadDeliveryMap<DeliveryMap>(want)
       .then((m) => { if (m && Array.isArray(m.roads)) setMap(m) })
       .catch(() => { /* not written yet: retried on the next state / 次の状態で再試行 */ })
       .finally(() => { loading.current = false })

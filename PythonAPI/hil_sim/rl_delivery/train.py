@@ -186,23 +186,51 @@ def make_nav(map_name, seed):
     return _f
 
 
+NAV_PROBE = os.path.join(HERE, "results", "nav_probe_obs.npy")      # 300 fixed observations / 固定の観測 300 個
+NAV_ZERO = os.path.join(HERE, "results", "nav_zero_baseline.json")  # "do nothing" scores / 何もしない場合の得点
+# Training-health alarms (calibrated on the 2026-11 collapse: the healthy 24 M brain
+# had probe_std_min 0.31 / probe_abs_mean 0.38; at 50 M 0.04 / 0.06). Below = alarm.
+# 学習の健全性の警報値（2026-11 の崩壊から設定。正常 24M: 0.31 / 0.38、50M: 0.04 / 0.06）
+NAV_ALARM = {"probe_std_min": 0.12, "probe_abs_mean": 0.15, "zero_gap": 15.0, "crash": 0.8}
+
+
 def evaluate_nav(model, map_name, level, dist, n=16, seed=4242):
-    """Reach / crash rates over n deliveries at a wind level and distance cap. / 航法の評価"""
+    """Outcome KPIs over n fixed test trips at a wind level and distance cap
+    (``model`` None = the "do nothing" policy, all-zero commands). Definitions:
+    docs/RL_DELIVERY.md section 13. / 固定の n 回の試験飛行で成果 KPI を計算
+    （model が None なら「何もしない」方策）。定義は docs/RL_DELIVERY.md 13 章。"""
     from rl_delivery.env_nav import NavEnv
     env = NavEnv(map_name, wind_level=level, seed=seed)
     env.curriculum_dist = dist
-    res = []
+    res, rets, lstm = [], [], []
     for k in range(n):
         obs, _ = env.reset(seed=seed + k)
-        state, start = None, np.ones((1,), bool)
+        state, start, ret, hs = None, np.ones((1,), bool), 0.0, []
         while True:
-            act, state = model.predict(obs, state=state, episode_start=start, deterministic=True)
-            start = np.zeros((1,), bool)
-            obs, _r, te, tr, info = env.step(act)
+            if model is None:
+                act = np.zeros(4, np.float32)
+            else:
+                act, state = model.predict(obs, state=state, episode_start=start, deterministic=True)
+                start = np.zeros((1,), bool)
+                if isinstance(state, tuple) and len(hs) < 4000:
+                    hs.append(np.asarray(state[0]).ravel())
+            obs, r, te, tr, info = env.step(act)
+            ret += r
             if te or tr:
                 res.append(info["kpi"])
+                rets.append(ret)
+                if len(hs) > 2:
+                    lstm.append(float(np.std(np.array(hs), axis=0).mean()))
                 break
     crash = [r["crash"] for r in res]
+
+    def ratio(a, b):
+        return float(np.clip((a - b) / max(a, 1.0), -1.0, 1.0))
+    landed = [r for r in res if r["reached"]]
+    pod_legs = [r for r in res if r.get("leg1_start") is not None and r.get("leg1_end") is not None]
+    useful = [(max(r["leg0_start"] - r["leg0_end"], 0.0)
+               + (max(r["leg1_start"] - r["leg1_end"], 0.0) if r in pod_legs else 0.0)) / max(r["time_s"], 1.0)
+              for r in res]
     return {"wind_level": level, "dist": dist, "reached": float(np.mean([r["reached"] for r in res])),
             "delivered": float(np.mean([r.get("delivered", False) for r in res])),
             "crash_pod": float(np.mean([c == "pod" for c in crash])),
@@ -214,94 +242,267 @@ def evaluate_nav(model, map_name, level, dist, n=16, seed=4242):
             "timeout": float(np.mean([c == "timeout" for c in crash])),
             "min_clear": float(np.mean([r["min_clear"] for r in res])),
             "battery_used": float(np.mean([r["battery_used"] for r in res])),
-            "time_s": float(np.mean([r["time_s"] for r in res]))}
+            "time_s": float(np.mean([r["time_s"] for r in res])),
+            "ret_mean": float(np.mean(rets)),
+            "progress_drop": float(np.mean([ratio(r["leg0_start"], r["leg0_end"]) for r in res])),
+            "progress_pod": float(np.mean([ratio(r["leg1_start"], r["leg1_end"]) for r in pod_legs]))
+            if pod_legs else float("nan"),
+            "speed_useful": float(np.mean(useful)),
+            "landing_batt": float(np.mean([100.0 - r["battery_used"] for r in landed])) if landed else float("nan"),
+            "min_clear_p10": float(np.percentile([r["min_clear"] for r in res], 10)),
+            "dact_mean": float(np.mean([r["dact_mean"] for r in res])),
+            "lstm_std": float(np.mean(lstm)) if lstm else float("nan")}
 
 
-NAV_COLS = ["steps", "wall_s", "wind_level", "dist", "reached", "delivered", "crash_pod", "crash", "crash_obstacle", "crash_nofly",
-            "crash_ceiling", "crash_battery",
-            "timeout", "min_clear", "battery_used", "time_s", "ep_reward"]
+def nav_probe(model):
+    """Training health: is the brain still reacting to what it senses (action
+    spread over 300 fixed observations, fresh memory each) and still exploring
+    (log_std)? Empty if the probe file is missing. / 学習の健全性：固定観測 300 個に
+    対する行動のばらつき（反応しているか）と log_std（探索しているか）。"""
+    out = {}
+    if hasattr(model.policy, "log_std"):
+        ls = model.policy.log_std.detach().cpu().numpy()
+        out.update(log_std_min=float(ls.min()), log_std_max=float(ls.max()))
+    if os.path.exists(NAV_PROBE):
+        obs = np.load(NAV_PROBE)
+        acts = np.array([model.predict(o, state=None, episode_start=np.ones((1,), bool), deterministic=True)[0]
+                         for o in obs])
+        out.update(probe_std_min=float(acts.std(0).min()), probe_abs_mean=float(np.abs(acts).mean()))
+    return out
+
+
+def make_nav_probe(checkpoint, map_name="OitaKosen", n_obs=300):
+    """Build NAV_PROBE once from a healthy checkpoint's flights (trips seed 900..,
+    300 m cap, every 10th step). / 正常なチェックポイントの飛行から固定観測を作る。"""
+    from sb3_contrib import RecurrentPPO
+    from rl_delivery.env_nav import NavEnv
+    m = RecurrentPPO.load(checkpoint, device="cpu")
+    env = NavEnv(map_name, wind_level=0.0, seed=7)
+    env.curriculum_dist = 300.0
+    obs_list, s = [], 900
+    while len(obs_list) < n_obs and s < 960:
+        obs, _ = env.reset(seed=s)
+        st, start, i = None, np.ones((1,), bool), 0
+        while True:
+            a, st = m.predict(obs, state=st, episode_start=start, deterministic=True)
+            start = np.zeros((1,), bool)
+            if i % 10 == 0:
+                obs_list.append(obs.copy())
+            obs, _r, te, tr, _info = env.step(a)
+            i += 1
+            if te or tr:
+                break
+        s += 1
+    np.save(NAV_PROBE, np.array(obs_list[:n_obs], np.float32))
+    return NAV_PROBE
+
+
+def nav_zero_baseline(map_name, level, dist):
+    """The "do nothing" policy's mean return on the test trips, cached per world
+    version (hash of env_nav.py + drone_dyn.py), wind level and distance cap.
+    「何もしない」方策の平均収益（世界の版・風・距離ごとにキャッシュ）。"""
+    import hashlib
+    h = hashlib.sha1()
+    for f in ("env_nav.py", "drone_dyn.py", "wind.py"):
+        with open(os.path.join(HERE, f), "rb") as fh:
+            h.update(fh.read())
+    key = "%s|%s|%.1f|%.0f" % (map_name, h.hexdigest()[:12], level, dist)
+    try:
+        with open(NAV_ZERO) as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        cache = {}
+    if key not in cache:
+        cache[key] = evaluate_nav(None, map_name, level, dist)["ret_mean"]
+        with open(NAV_ZERO + ".tmp", "w") as f:
+            json.dump(cache, f, indent=1)
+        os.replace(NAV_ZERO + ".tmp", NAV_ZERO)
+    return cache[key]
+
+
+def _finite(v):
+    """NaN / inf -> None, recursively: browsers cannot parse NaN in JSON, and the
+    dashboard reads these files. / NaN を None に（ブラウザは JSON の NaN を読めない）"""
+    if isinstance(v, dict):
+        return {k: _finite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_finite(x) for x in v]
+    if isinstance(v, float) and not np.isfinite(v):
+        return None
+    return v
+
+
+NAV_COLS = ["steps", "wall_s", "wind_level", "dist", "reached", "delivered", "crash_pod", "crash", "crash_obstacle",
+            "crash_nofly", "crash_ceiling", "crash_battery", "timeout", "min_clear", "battery_used", "time_s",
+            # added 2026-11-13: outcome KPIs, training health, alarms / 追加：成果 KPI・健全性・警報
+            "ret_mean", "zero_gap", "progress_drop", "progress_pod", "speed_useful", "landing_batt", "min_clear_p10",
+            "dact_mean", "lstm_std", "probe_std_min", "probe_abs_mean", "log_std_min", "log_std_max", "ent_coef",
+            "explained_var", "approx_kl", "alarm", "ep_reward"]
 
 
 def train_nav(a):
     import torch
     from sb3_contrib import RecurrentPPO
     from stable_baselines3.common.callbacks import BaseCallback
+    from stable_baselines3.common.utils import get_schedule_fn
     from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
     torch.set_num_threads(4)
     os.makedirs(os.path.join(CKPT, "nav"), exist_ok=True)
     venv = VecMonitor(SubprocVecEnv([make_nav(a.map, 3000 + 1000 * a.seed + i) for i in range(a.envs)]))
-    resume = latest("nav") if a.resume else None
+    # --checkpoint FILE starts from that file (e.g. the last healthy one), --resume
+    # from the newest. / --checkpoint で指定ファイルから、--resume で最新から再開
+    src = getattr(a, "checkpoint", "") or (latest("nav") if a.resume else None)
     level, dist = 0.0, 80.0
     algo = a.algo or "recurrent_ppo"
     if algo not in NAV_ALGOS:
         raise SystemExit("nav --algo: %s" % "/".join(NAV_ALGOS))
-    if resume:
-        model = algo_class(algo).load(resume, env=venv, device="cpu")
-        meta = resume[:-4] + ".json"
+    if src:
+        model = algo_class(algo).load(src, env=venv, device="cpu")
+        meta = src[:-4] + ".json"
         if os.path.exists(meta):
             with open(meta) as f:
                 j = json.load(f)
             level, dist = j.get("wind_level", 0.0), j.get("dist", 200.0)
+        print("[nav] starting from %s (%d steps) / 再開元" % (src, model.num_timesteps), flush=True)
     else:
         model = new_model(algo, venv, a.seed, gamma=0.995)
     if getattr(a, "dist", 0.0) > 0.0:
         dist = float(a.dist)
     if getattr(a, "wind_level", None) is not None:
         level = float(a.wind_level)
+    # Settings that load() would otherwise keep from the file (2026-11-13: ent_coef 0
+    # let exploration die and the brain collapse). / load() はファイルの設定を引き継ぐ
+    # ため、ここで上書き（探索 0 で崩壊した）
+    on_policy = algo in ("recurrent_ppo", "ppo")
+    if on_policy:
+        model.ent_coef = 0.005 if a.ent_coef is None else float(a.ent_coef)
+    if a.lr:
+        model.learning_rate = float(a.lr)
+        model.lr_schedule = get_schedule_fn(float(a.lr))
+    log_std_min = a.log_std_min if on_policy and hasattr(model.policy, "log_std") else None
+
+    def floor():
+        """Keep the exploration noise from dying out. / 探索ノイズの下限"""
+        if log_std_min is not None:
+            with torch.no_grad():
+                model.policy.log_std.clamp_(min=float(log_std_min))
+    floor()
+
+    detour = float(getattr(a, "detour_share", 0.0) or 0.0)
 
     def setc():
         venv.env_method("__setattr__", "wind_level", level)
         venv.env_method("__setattr__", "curriculum_dist", dist)
+        venv.env_method("__setattr__", "detour_share", detour)   # trips that cross a no-fly zone / 迂回の練習
+        venv.env_method("__setattr__", "geo_progress", bool(getattr(a, "geo_progress", False)))
     setc()
+    if not os.path.exists(NAV_PROBE) and src:
+        make_nav_probe(src, a.map)
     prog = os.path.join(RES, "nav_progress.csv")
-    new_file = not os.path.exists(prog) or not resume
-    pf = open(prog, "w" if new_file else "a", newline="")
+    header = None
+    if os.path.exists(prog):
+        with open(prog, newline="") as f:
+            header = next(csv.reader(f), None)
+    if os.path.exists(prog) and (header != NAV_COLS or not src):
+        # keep the old file (other columns, or a fresh brain) / 旧ファイルは残す
+        os.replace(prog, prog[:-4] + "_until_%s.csv" % time.strftime("%Y%m%d_%H%M%S"))
+    new_file = not os.path.exists(prog)
+    pf = open(prog, "a", newline="")
     pw = csv.writer(pf)
     if new_file:
         pw.writerow(NAV_COLS)
     t0 = time.time()
     deadline = t0 + a.hours * 3600.0
     sfile = os.path.join(RES, "train_state_nav.json")
+    stop_file = os.path.join(RES, "STOP_nav")
 
     class Cb(BaseCallback):
         def __init__(self):
             super().__init__()
             self.next_eval = model.num_timesteps + a.eval_every
+            self.ev, self.kl = [], []
+            self.collapse_n = self.crash_n = 0
+
+        def _on_rollout_start(self):
+            # after each update: floor the noise, keep the update statistics / 更新後
+            floor()
+            nv = self.model.logger.name_to_value
+            if "train/explained_variance" in nv:
+                self.ev.append(float(nv["train/explained_variance"]))
+            if "train/approx_kl" in nv:
+                self.kl.append(float(nv["train/approx_kl"]))
 
         def _on_step(self):
             nonlocal level, dist
             if self.num_timesteps >= self.next_eval:
                 self.next_eval += a.eval_every
                 k = evaluate_nav(self.model, a.map, level, dist)
+                k.update(nav_probe(self.model))
+                k["zero_gap"] = k["ret_mean"] - nav_zero_baseline(a.map, level, dist)
+                k["ent_coef"] = float(getattr(self.model, "ent_coef", 0.0) or 0.0)
+                k["explained_var"] = float(np.mean(self.ev)) if self.ev else float("nan")
+                k["approx_kl"] = float(np.mean(self.kl)) if self.kl else float("nan")
+                self.ev, self.kl = [], []
+                # alarms / 警報
+                alarms = []
+                collapse = (k.get("probe_std_min", 1.0) < NAV_ALARM["probe_std_min"]
+                            or k.get("probe_abs_mean", 1.0) < NAV_ALARM["probe_abs_mean"])
+                self.collapse_n = self.collapse_n + 1 if collapse else 0
+                self.crash_n = self.crash_n + 1 if k["crash"] >= NAV_ALARM["crash"] else 0
+                if collapse:
+                    alarms.append("collapse")
+                if self.crash_n:
+                    alarms.append("crash")
+                if k["zero_gap"] < NAV_ALARM["zero_gap"]:
+                    alarms.append("zero_gap")
+                k["alarm"] = "+".join(alarms)
                 rew = [e["r"] for e in self.model.ep_info_buffer] if self.model.ep_info_buffer else [0]
-                pw.writerow([self.num_timesteps, round(time.time() - t0)] + [round(k[c], 3) for c in NAV_COLS[2:-1]]
+                pw.writerow([self.num_timesteps, round(time.time() - t0)]
+                            + [k[c] if c == "alarm" else
+                               ("" if not np.isfinite(float(k.get(c, float("nan")))) else round(float(k[c]), 4))
+                               for c in NAV_COLS[2:-1]]
                             + [round(float(np.mean(rew)), 1)])
                 pf.flush()
                 path = os.path.join(CKPT, "nav", "step_%09d.zip" % self.num_timesteps)
                 self.model.save(path)
                 with open(path[:-4] + ".json", "w") as f:
-                    json.dump(dict(k, steps=self.num_timesteps), f)
+                    json.dump(_finite(dict(k, steps=self.num_timesteps)), f)
                 # curriculum: longer trips first, then wind / まず距離、次に風
-                if k["reached"] >= 0.7:
+                if k["reached"] >= 0.7 and not alarms:
                     if dist < 900.0:
                         dist = min(900.0, dist + (60.0 if dist < 200 else 150.0))
                     elif level < 1.0:
                         level = min(1.0, level + 0.2)
                     setc()
+                reason = ""
+                if self.collapse_n >= 2:
+                    reason = "collapse alarm twice in a row (probe_std_min %.3f, probe_abs_mean %.3f)" % (
+                        k.get("probe_std_min", -1), k.get("probe_abs_mean", -1))
+                elif self.crash_n >= 6:       # 3 was too twitchy with 16 test trips (2026-11-13) / 3 回では敏感すぎた
+                    reason = "crash >= %.0f%% six times in a row" % (100 * NAV_ALARM["crash"])
                 with open(sfile, "w") as f:
-                    json.dump({"brain": "nav", "running": True, "steps": self.num_timesteps, "wind_level": level,
-                               "dist": dist, "last": k, "checkpoint": path, "started": t0, "deadline": deadline,
-                               "t": time.time()}, f)
-                print("[nav] %d steps  dist %.0f  wind %.1f  delivered %.0f%%  landed on pod %.0f%%  crash %.0f%% (obstacle %.0f%%, no-fly %.0f%%, "
-                      "ceiling %.0f%%, battery %.0f%%)  time-out %.0f%%" % (self.num_timesteps, dist, level, 100 * k["delivered"], 100 * k["reached"],
-                                                           100 * k["crash"], 100 * k["crash_obstacle"],
-                                                           100 * k["crash_nofly"], 100 * k["crash_ceiling"],
-                                                           100 * k["crash_battery"], 100 * k["timeout"]), flush=True)
-            return time.time() < deadline and not os.path.exists(os.path.join(RES, "STOP_nav"))
+                    json.dump(_finite({"brain": "nav", "running": not reason, "steps": self.num_timesteps,
+                                       "wind_level": level, "dist": dist, "last": k, "checkpoint": path,
+                                       "started": t0, "deadline": deadline, "alarm": reason, "t": time.time()}), f)
+                print("[nav] %d steps  dist %.0f  wind %.1f  delivered %.0f%%  landed on pod %.0f%%  crash %.0f%% "
+                      "(obstacle %.0f%%, no-fly %.0f%%, battery %.0f%%)  time-out %.0f%% | probe %.2f/%.2f "
+                      "log_std %.2f  zero-gap %.0f  EV %.2f%s" % (
+                          self.num_timesteps, dist, level, 100 * k["delivered"], 100 * k["reached"],
+                          100 * k["crash"], 100 * k["crash_obstacle"], 100 * k["crash_nofly"],
+                          100 * k["crash_battery"], 100 * k["timeout"], k.get("probe_std_min", -1),
+                          k.get("probe_abs_mean", -1), k.get("log_std_min", 0.0), k["zero_gap"],
+                          k["explained_var"], ("  ALARM " + k["alarm"]) if k["alarm"] else ""), flush=True)
+                if reason:
+                    print("[nav] STOPPING: %s. Roll back to the last healthy checkpoint. / 警報で停止" % reason,
+                          flush=True)
+                    with open(stop_file, "w") as f:
+                        f.write(reason + "\n")
+                    return False
+            return time.time() < deadline and not os.path.exists(stop_file)
 
     try:
-        model.learn(total_timesteps=10 ** 10, callback=Cb(), reset_num_timesteps=not resume)
+        model.learn(total_timesteps=10 ** 10, callback=Cb(), reset_num_timesteps=not src)
     finally:
         path = os.path.join(CKPT, "nav", "step_%09d.zip" % model.num_timesteps)
         model.save(path)
@@ -325,10 +526,12 @@ DRIVE_COLS = ["steps", "wall_s", "route_len", "traffic", "reached", "kerb", "col
               "red_violations", "centre_s", "speeding_s", "speed", "p10_speed", "ep_reward"]
 
 
-def evaluate_drive(model, map_name, route_len, traffic, n=16, seed=8080):
-    from rl_delivery.env_drive import DriveEnv
+def evaluate_drive(model, map_name, route_len, traffic, n=48, seed=8080, a_lat=None):
+    # 48 test routes (16 swung +-20 points between evaluations) / 48 経路で評価
+    from rl_delivery.env_drive import DriveEnv, A_LAT_MAX
     env = DriveEnv(map_name, seed=seed)
     env.route_len, env.traffic = route_len, traffic
+    env.a_lat_max = A_LAT_MAX if a_lat is None else a_lat
     res = []
     for k in range(n):
         obs, _ = env.reset(seed=seed + k)
@@ -361,8 +564,13 @@ def train_drive(a):
     torch.set_num_threads(2)
     os.makedirs(os.path.join(CKPT, "drive"), exist_ok=True)
     venv = VecMonitor(SubprocVecEnv([make_drive(a.map, 7000 + 1000 * a.seed + i) for i in range(a.envs)]))
-    resume = latest("drive") if a.resume else None
+    # --checkpoint FILE starts from that file, --resume from the newest / 指定ファイルから再開
+    resume = getattr(a, "checkpoint", "") or (latest("drive") if a.resume else None)
     route_len, traffic = 150.0, 0
+    # grip curriculum (2026-11-16): from 9 m/s2 down to the van's 5 m/s2, 1 m/s2 at a
+    # time while >= 60 % of the test routes are reached / グリップを段階的に現実の値へ
+    from rl_delivery.env_drive import A_LAT_MAX
+    a_lat = 9.0
     algo = a.algo or "sac"
     if algo not in DRIVE_ALGOS:
         raise SystemExit("drive --algo: %s" % "/".join(DRIVE_ALGOS))
@@ -373,6 +581,7 @@ def train_drive(a):
             with open(meta) as f:
                 j = json.load(f)
             route_len, traffic = j.get("route_len", 150.0), j.get("traffic", 0)
+            a_lat = j.get("a_lat", a_lat)
     else:
         # SAC: tanh-squashed actions (PPO's clipped Gaussian pinned at full brake)
         # SAC（PPO は出力が端に張り付いた）
@@ -381,6 +590,7 @@ def train_drive(a):
     def setc():
         venv.env_method("__setattr__", "route_len", route_len)
         venv.env_method("__setattr__", "traffic", traffic)
+        venv.env_method("__setattr__", "a_lat_max", a_lat)
     setc()
     prog = os.path.join(RES, "drive_progress.csv")
     new_file = not os.path.exists(prog) or not resume
@@ -398,10 +608,11 @@ def train_drive(a):
             self.next_eval = model.num_timesteps + a.eval_every
 
         def _on_step(self):
-            nonlocal route_len, traffic
+            nonlocal route_len, traffic, a_lat
             if self.num_timesteps >= self.next_eval:
                 self.next_eval += a.eval_every
-                k = evaluate_drive(self.model, a.map, route_len, traffic)
+                k = evaluate_drive(self.model, a.map, route_len, traffic, a_lat=a_lat)
+                k["a_lat"] = a_lat
                 rew = [e["r"] for e in self.model.ep_info_buffer] if self.model.ep_info_buffer else [0]
                 pw.writerow([self.num_timesteps, round(time.time() - t0)] + [round(k[c], 3) for c in DRIVE_COLS[2:-1]]
                             + [round(float(np.mean(rew)), 1)])
@@ -414,7 +625,10 @@ def train_drive(a):
                 clean_runs = k["reached"] >= 0.75
                 safe_runs = (k.get("kerb", 0.0) + k.get("collision", 0.0) + k.get("stalls", 0.0)) <= 0.10
                 lawful_runs = (k["stop_violations"] + k["red_violations"]) < 0.10
-                if clean_runs and safe_runs and lawful_runs:
+                if a_lat > A_LAT_MAX and k["reached"] >= 0.6:
+                    a_lat = max(A_LAT_MAX, a_lat - 1.0)            # grip first / まずグリップ
+                    setc()
+                elif a_lat <= A_LAT_MAX and clean_runs and safe_runs and lawful_runs:
                     if route_len < 800.0:
                         route_len = min(800.0, route_len + 100.0)
                     elif traffic < 6:
@@ -422,11 +636,11 @@ def train_drive(a):
                     setc()
                 with open(sfile, "w") as f:
                     json.dump({"brain": "drive", "running": True, "steps": self.num_timesteps, "route_len": route_len,
-                               "traffic": traffic, "last": k, "checkpoint": path, "started": t0,
+                               "traffic": traffic, "a_lat": a_lat, "last": k, "checkpoint": path, "started": t0,
                                "deadline": deadline, "t": time.time()}, f)
-                print("[drive] %d steps  route %.0f m  traffic %d  reached %.0f%%  kerb %.0f%%  collision %.0f%%  "
+                print("[drive] %d steps  grip %.0f m/s2  route %.0f m  traffic %d  reached %.0f%%  kerb %.0f%%  collision %.0f%%  "
                       "stop viol %.2f  red viol %.2f  centre %.1f s  speed %.1f m/s" % (
-                          self.num_timesteps, route_len, traffic, 100 * k["reached"], 100 * k["kerb"],
+                          self.num_timesteps, a_lat, route_len, traffic, 100 * k["reached"], 100 * k["kerb"],
                           100 * k["collision"], k["stop_violations"], k["red_violations"], k["centre_s"],
                           k["speed"]), flush=True)
             return time.time() < deadline and not os.path.exists(os.path.join(RES, "STOP_drive"))
@@ -437,7 +651,7 @@ def train_drive(a):
         path = os.path.join(CKPT, "drive", "step_%09d.zip" % model.num_timesteps)
         model.save(path)
         with open(path[:-4] + ".json", "w") as f:
-            json.dump({"steps": model.num_timesteps, "route_len": route_len, "traffic": traffic}, f)
+            json.dump({"steps": model.num_timesteps, "route_len": route_len, "traffic": traffic, "a_lat": a_lat}, f)
         with open(sfile, "w") as f:
             json.dump({"brain": "drive", "running": False, "steps": model.num_timesteps, "t": time.time()}, f)
         pf.close()
@@ -771,7 +985,18 @@ def main():
         "/".join(NAV_ALGOS), "/".join(DRIVE_ALGOS)))
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--dist", type=float, default=0.0, help="Override curriculum distance (m)")
+    ap.add_argument("--geo-progress", action="store_true",
+                    help="nav: progress reward measured round the no-fly zones (shortest legal path) / 迂回距離で進捗を測る")
+    ap.add_argument("--detour-share", type=float, default=0.0,
+                    help="nav: share of practice trips whose straight line crosses a no-fly zone (0-1) / 迂回練習の割合")
     ap.add_argument("--wind-level", type=float, default=None, help="Override wind level (0.0-1.0)")
+    ap.add_argument("--checkpoint", default="", help="nav: start from this checkpoint file (not the newest) "
+                    "/ 指定チェックポイントから再開")
+    ap.add_argument("--ent-coef", type=float, default=None, help="nav (PPO): entropy bonus, default 0.005 "
+                    "(0 let the 2026-11 run collapse) / 探索ボーナス")
+    ap.add_argument("--lr", type=float, default=0.0, help="override the learning rate / 学習率の上書き")
+    ap.add_argument("--log-std-min", type=float, default=-2.0, help="nav (PPO): floor of the policy's log_std, "
+                    "keeps exploration alive / 探索ノイズの下限")
     ap.add_argument("--tag", default="", help="experiment name: the run gets its own folder "
                     "research/exp/<tag>/<run_id>/ (checkpoints, progress, state, STOP file)")
     a = ap.parse_args()

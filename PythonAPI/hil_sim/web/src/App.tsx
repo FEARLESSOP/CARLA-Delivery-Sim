@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState, type ComponentType } from 'react'
 import { Activity, BarChart3, Bot, BrainCircuit, CarFront, Download, Gauge, Package, Plane, Settings2, Square } from 'lucide-react'
 import '@/i18n/common'
+import '@/i18n/paper1'
 import { useLang, useT } from '@/lib/i18n'
 import { simPhase, startSim, useSim, type SimPhase } from '@/lib/sim'
 import { startTelemetry, useBackendOnline, useTelemetry } from '@/lib/telemetry'
@@ -117,6 +118,10 @@ export default function App() {
             {live && sim?.pipeline?.map && <Badge>{sim.pipeline.map}</Badge>}
             {live && tel && !tel.hero_found && <Badge tone="warn">{t('st_hero_wait')}</Badge>}
             {live && <StopButton />}
+            <a href="/paper1" target="_blank" rel="noopener" title={t('p1r_open_title')}
+              className="hidden h-8 items-center gap-1.5 rounded-lg border border-accent/50 px-2.5 text-xs text-accent hover:bg-accent/10 sm:inline-flex">
+              {t('p1r_open')}
+            </a>
             <a href="/download" className="hidden h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-xs text-fg-2 hover:bg-muted sm:inline-flex">
               <Download className="h-3.5 w-3.5" aria-hidden />{t('csv')}
             </a>

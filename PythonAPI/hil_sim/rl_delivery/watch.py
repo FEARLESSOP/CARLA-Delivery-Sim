@@ -243,9 +243,49 @@ def record_drive(checkpoint, seed, map_name="OitaKosen"):
             "limit": [round(float(q[6]), 0) for q in P[::5]]}
 
 
+def record_paper1(method, world, scenario, day, ckpt_seed, map_name="OitaKosen"):
+    """One Paper 1 day (3 h) of a recovery method (B0, POD, B1-B3) in world v1 or v2:
+    the hub's pod, its 4 drones, orders, stations, lockers every 5 s, plus each
+    recovery decision as an event. Same world + scenario + day = the same orders and
+    wind for every method, so two methods can be compared side by side.
+    Paper 1 の 1 日（3 時間）を記録する。同じ世界・シナリオ・日なら注文と風は同じ。"""
+    from rl_delivery.paper1.evaluate import SEED0, run_episode
+    ckpt = None
+    name = method
+    if method in ("B1", "B2", "B3", "B4"):
+        # B4 runs on a trained B2 (its prior, continuation and critic) / B4 は学習済み B2 を使う
+        sub = ["v2"] if world == "v2" else []
+        net = "B2" if method == "B4" else method
+        ckpt = os.path.join(CKPT, "paper1", *sub, net, "s%d" % ckpt_seed, "final.zip")
+        if not os.path.exists(ckpt):
+            raise SystemExit("no checkpoint %s" % ckpt)
+        name = "%s_s%d" % (method, ckpt_seed)
+    box = {}
+    row, _dec = run_episode(method, scenario, SEED0 + day, log_decisions=False, checkpoint=ckpt,
+                            world=world, record=box)
+    W = box["world"]
+    m = W.m
+    return {"brain": "paper1", "method": method, "label": name, "world": world, "scenario": scenario,
+            "day": day, "seed": SEED0 + day, "frames": W.log, "events": W.events[-4000:],
+            "kpi": {k: v for k, v in row.items() if isinstance(v, (int, float)) or v is None},
+            "bounds": m["bounds"], "zones": {str(z): m["zones"]["pods"][str(z)] for z in W.area},
+            "nofly": m["zones"]["nofly"],
+            "stations": [[round(float(st["xy"][0]), 1), round(float(st["xy"][1]), 1)] for st in W.stations],
+            "lockers": [[round(float(L["xy"][0]), 1), round(float(L["xy"][1]), 1)] for L in W.lockers
+                        if L["zone"] in W.area],
+            "lines": [[[round(x), round(y)] for x, y in l[::3] + [l[-1]]] for l in m["lines"]],
+            "pod_checkpoint": name, "drone_checkpoint": "-",
+            "checkpoint": "%s_%s_%s_d%d" % (name, world, scenario.split("_")[0], day)}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--brain", default="flight", choices=["flight", "mission", "nav", "fleet", "drive"])
+    ap.add_argument("--brain", default="flight", choices=["flight", "mission", "nav", "fleet", "drive", "paper1"])
+    ap.add_argument("--method", default="B0", help="paper1: B0 | POD | B1 | B2 | B3 | B4 | B5")
+    ap.add_argument("--world", default="v2", help="paper1: v1 | v2")
+    ap.add_argument("--scenario", default="S1_normal", help="paper1 scenario")
+    ap.add_argument("--day", type=int, default=0, help="paper1 test day 0-29 (seed 1000 + day)")
+    ap.add_argument("--ckpt-seed", type=int, default=0, help="paper1 training seed of B1-B3 (0-2)")
     ap.add_argument("--drone-checkpoint", default="latest")
     ap.add_argument("--checkpoint", default="latest")
     ap.add_argument("--wind", type=float, default=1.0)
@@ -253,7 +293,9 @@ def main():
     ap.add_argument("--map", default="OitaKosen")
     ap.add_argument("--out", default="")
     a = ap.parse_args()
-    if a.brain == "fleet":
+    if a.brain == "paper1":
+        rec = record_paper1(a.method, a.world, a.scenario, a.day, a.ckpt_seed, a.map)
+    elif a.brain == "fleet":
         rec = record_fleet(a.checkpoint, a.drone_checkpoint, a.seed, a.map)
     elif a.brain == "drive":
         rec = record_drive(a.checkpoint, a.seed, a.map)

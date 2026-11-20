@@ -5,7 +5,7 @@
 // 右列：電池ゲージ・速度/残り距離の推移・到着予想・小地図
 import { useEffect, useState, type ReactNode } from 'react'
 import { Clock, Gauge, MapPin, Route, Zap } from 'lucide-react'
-import { getJSON } from '@/lib/api'
+import { loadDeliveryMap } from '@/lib/deliveryMap'
 import { useCanvas } from '@/lib/canvas'
 import { C, FONT_MONO } from '@/lib/colors'
 import { useT } from '@/lib/i18n'
@@ -186,7 +186,7 @@ function useMiniMap(name: string | undefined) {
     if (!name) return
     if (MAP_CACHE && MAP_CACHE.name === name) { setM(MAP_CACHE); return }
     let alive = true
-    getJSON<DeliveryMap>('/delivery/map').then((mp) => {
+    loadDeliveryMap<DeliveryMap>(name).then((mp) => {
       if (!alive || !mp || !Array.isArray(mp.roads)) return
       MAP_CACHE = buildMap(name, mp)
       setM(MAP_CACHE)

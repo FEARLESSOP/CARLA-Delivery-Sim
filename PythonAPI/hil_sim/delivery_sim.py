@@ -1975,6 +1975,7 @@ class Fleet(object):
         self.suites = {}
         self.probe = backends.SensorProbe(world)
         backends.RAYS.start(getattr(args, "host", "127.0.0.1"), getattr(args, "port", 2000))
+        backends.WEATHER.start(getattr(args, "host", "127.0.0.1"), getattr(args, "port", 2000))
         self.probe.start(getattr(args, "host", "127.0.0.1"), getattr(args, "port", 2000),
                          lambda: self.sky.drones.units)
         self.sensor_ms = 0.0
@@ -2338,6 +2339,12 @@ class Fleet(object):
             sc["playing"] = bool(c.get("playing", True))
             sc["speed"] = lmp_rig.clamp(float(c.get("speed", sc["speed"])), 0.1, 4.0)
 
+    def _map_name(self):
+        """The map's name, asked once (get_map() waits for the server). / マップ名（1 回だけ問い合わせ）"""
+        if getattr(self, "_map_name_c", None) is None:
+            self._map_name_c = self.world.get_map().name
+        return self._map_name_c
+
     def weather(self, t):
         """Let the trees sway with the wind (CARLA weather wind_intensity), and
         read the rain that grounds the drones (weather_cycle.py).
@@ -2346,7 +2353,8 @@ class Fleet(object):
             return
         self._weather_t = t
         was = self.sky.drones.raining
-        self.sky.drones.rain = float(self.world.get_weather().precipitation)
+        wx = backends.WEATHER.get() or self.world.get_weather()   # read off the loop / ループ外で読む
+        self.sky.drones.rain = float(wx.precipitation)
         if self.sky.drones.raining != was:
             self.log(t, "rain_hold" if not was else "rain_over",
                      detail="rain %.0f%%: %s" % (self.sky.drones.rain,
@@ -2354,7 +2362,7 @@ class Fleet(object):
         speed = math.hypot(*self.sky.wind.vector(t))
         intensity = min(100.0, speed / 15.0 * 100.0)
         if self._weather_wind is None or abs(intensity - self._weather_wind) > 5.0:
-            w = self.world.get_weather()
+            w = backends.WEATHER.get() or self.world.get_weather()
             w.wind_intensity = intensity
             self.world.set_weather(w)
             self._weather_wind = intensity
@@ -2485,7 +2493,7 @@ class Fleet(object):
                   for e in self.log.rows[-300:] if e["event"] in self.EVENTS_SHOWN][-30:]
         st = self.sky.drones.station
         self.live.write_state({
-            "running": True, "t": r1(t), "map": self.world.get_map().name,
+            "running": True, "t": r1(t), "map": self._map_name(),
             "wind": dict(self.sky.wind.state(t), grounded=self.sky.drones.grounded,
                          hold=self.sky.drones.wind_hold, drone_max=self.args.drone_max_wind,
                          rain=r1(self.sky.drones.rain), raining=self.sky.drones.raining,
@@ -3258,6 +3266,11 @@ def parse_args(argv=None):
                    help="fleet pod dispatcher policy (.zip checkpoint or 'latest') / 配車ポッド")
     p.add_argument("--policy-fleet-drone", default="",
                    help="fleet drone dispatcher policy (.zip checkpoint or 'latest') / 配車ドローン")
+    p.add_argument("--paper1-recovery", default="", choices=("", "B0", "POD", "B1", "B2", "B3", "B4", "B5"),
+                   help="Paper 1 recovery method for the pods' drones after each drop (B4 = proposed); "
+                        "needs LastMile pods / Paper 1 の回収手法（投下後の行き先）")
+    p.add_argument("--paper1-seed", type=int, default=0, choices=(0, 1, 2),
+                   help="training seed of the Paper 1 network (B1-B4) / 学習シード")
     p.add_argument("--policy-recovery", default="",
                    choices=("", "auto", "b0", "b1", "b2", "b3", "b4", "b5", "ramppo", "heuristic", "maskable", "standard", "forecast", "rollout"),
                    help="recovery reservation baseline (e.g. 'ramppo' / 'b4', 'heuristic' / 'b0') / 回収予約ブレイン")
@@ -3618,7 +3631,12 @@ def main(argv=None):
             map_name = args.map or (wmap.name.split("/")[-1] if wmap else "OitaKosen")
             nav_bridge = NavBridge(args.policy_nav, map_name=map_name, wind_level=args.wind)
         recovery_bridge = None
-        if getattr(args, "policy_recovery", "") or getattr(args, "policy_fleet_drone", ""):
+        if getattr(args, "paper1_recovery", ""):
+            from delivery.paper1_bridge import Paper1RecoveryBridge
+            recovery_bridge = Paper1RecoveryBridge(args.paper1_recovery, args.paper1_seed)
+            print("  Paper 1 recovery: %s (seed %d) decides where each drone goes after its drop / "
+                  "投下後の行き先を Paper 1 の手法で決める" % (args.paper1_recovery, args.paper1_seed), flush=True)
+        elif getattr(args, "policy_recovery", "") or getattr(args, "policy_fleet_drone", ""):
             from delivery.rl_bridge import FleetRecoveryBridge
             map_name = args.map or (wmap.name.split("/")[-1] if wmap else "OitaKosen")
             rec_base = getattr(args, "policy_recovery", "") or "b4"
@@ -3680,11 +3698,15 @@ def main(argv=None):
             fleet_size=len(cars) + len(lmh_cars), boxes=box_targets)
         drive_bridge = None
         if getattr(args, "policy_drive", ""):
-            from delivery.rl_bridge import DriveBridge
+            from delivery.rl_bridge import DriveBridge, DrivePolicy
             map_name = args.map or (wmap.name.split("/")[-1] if wmap else "OitaKosen")
-            drive_bridge = DriveBridge(args.policy_drive, map_name=map_name)
-        vans = [Van(i + 1, args, world, car, hubs, grp, log, obstacles, gen, sky,
-                    pod=pod, drive_bridge=drive_bridge) for i, (car, pod) in enumerate(zip(cars, pods))]
+            drive_bridge = DrivePolicy(args.policy_drive, map_name=map_name)   # brain loaded once / 1 回だけ読む
+        # one bridge per pod (its own route and state), sharing the brain
+        # (2026-11-13: one shared bridge made every pod drive by the last pod's route)
+        # ポッドごとに別のブリッジ（共有すると他車の経路で走っていた）
+        vans = [Van(i + 1, args, world, car, hubs, grp, log, obstacles, gen, sky, pod=pod,
+                    drive_bridge=DriveBridge(policy=drive_bridge, map_name=map_name) if drive_bridge else None)
+                for i, (car, pod) in enumerate(zip(cars, pods))]
         sky.drones.start(vans)          # drones only for the drone pods / ドローンはポッドのみ
         lmh_shared = None
         if lmh_cars:
@@ -3783,6 +3805,16 @@ def main(argv=None):
                 summary["kpi"] = {"error": str(exc)}
             if not args.sync:
                 summary["missed_ticks"] = missed
+            p1 = locals().get("recovery_bridge")
+            if getattr(p1, "paper1", False):
+                # Paper 1 bridge: counts in the summary, every decision in its own file
+                # Paper 1 ブリッジ：集計は summary、各判断は別ファイル
+                summary["paper1_recovery"] = p1.summary()
+                if log.dir:
+                    with open(os.path.join(log.dir, "paper1_decisions.json"), "w") as f:
+                        json.dump(p1.history, f, indent=1,
+                                  default=lambda o: o.item() if hasattr(o, "item") else str(o))
+                p1.close()
             log.close(summary)
             print(json.dumps(summary, indent=2, ensure_ascii=False))
             if log.dir:

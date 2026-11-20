@@ -411,11 +411,35 @@ def launch(cmd, cwd, name, env=None):
                             start_new_session=True)
 
 
+class NoDrivingWindow(object):
+    """Stands in for the manual driving window when it is turned off
+    (--no-manual-control): the supervise loop waits on it like on the real
+    window, and a dashboard Stop or map switch "closes" it.
+    手動運転ウィンドウを開かない場合の代役。監視ループはこれを待ち、
+    ダッシュボードの停止・マップ切替で「閉じる」。"""
+    pid = None
+
+    def __init__(self):
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def send_signal(self, sig):
+        self.returncode = 0
+
+
 def signal_group(proc, sig):
     """Send a signal to the child's whole process group (fallback: child).
 
     子のプロセスグループ全体へシグナルを送る（失敗時は子プロセスのみに送る）。
     """
+    if isinstance(proc, NoDrivingWindow):
+        proc.send_signal(sig)
+        return
     try:
         os.killpg(os.getpgid(proc.pid), sig)
     except (ProcessLookupError, PermissionError, OSError):
@@ -519,6 +543,10 @@ def main():
                    help="drone navigation RL brain (off: rule-based, latest: trained model) / ドローン航法ブレイン")
     p.add_argument("--policy-drive", default="off", choices=("off", "latest"),
                    help="pod driving RL brain (off: BasicAgent, latest: trained model) / ポッド運転ブレイン")
+    p.add_argument("--paper1-recovery", default="off", choices=("off", "B0", "B1", "B2", "B3", "B4", "B5"),
+                   help="Paper 1 recovery method after each drone drop (off: the sim's rule) / Paper 1 の回収手法")
+    p.add_argument("--paper1-seed", default="0", choices=("0", "1", "2"),
+                   help="training seed of the Paper 1 network / Paper 1 の学習シード")
     p.add_argument("--drone-cams", action="store_true",
                    help="open the drone camera wall (drone_viewer.py) at start; needs "
                         "--delivery (without this flag it can still be opened from the "
@@ -531,6 +559,10 @@ def main():
     p.add_argument("--ffb-strength", type=float, default=None,
                    help="carla_ffb.py --strength (overall force multiplier) "
                         "/ フォースフィードバック全体の強さ")
+    p.add_argument("--no-manual-control", action="store_true",
+                   help="Do not open the manual driving window (no car of yours): the "
+                        "CarlaUE4 window is the main view; stop from the dashboard / "
+                        "手動運転ウィンドウを開かない（CARLA ウィンドウが主画面）")
     p.add_argument("--keyboard", action="store_true",
                    help="Drive with W/A/S/D instead of the G923 wheel "
                         "(automatic anyway when no wheel is detected) "
@@ -541,8 +573,11 @@ def main():
     p.add_argument("--no-sim", action="store_true",
                    help="Skip CarlaUE4.sh launch (assume it's already running)")
     p.add_argument("--fps", type=int, default=60,
-                   help="Driving window frame cap (default: 60) "
-                        "/ 運転ウィンドウの上限FPS（既定 60）")
+                   help="Driving window frame cap, 0 = no limit (default: 60) "
+                        "/ 運転ウィンドウの上限FPS、0 で無制限（既定 60）")
+    p.add_argument("--sim-fps", type=int, default=30,
+                   help="CARLA simulation steps per second, paced to real time; this is the "
+                        "server's frame rate (default: 30) / シミュレーションの毎秒ステップ数＝サーバの FPS（既定 30）")
     p.add_argument("--mirror-fps", type=float, default=30.0,
                    help="Rear/left/right mirror camera rate (default: 30). "
                         "Each mirror is an extra render pass; 0 = uncapped "
@@ -812,7 +847,8 @@ def main():
                    "-w", str(args.walkers),
                    "--cyclists", str(args.cyclists if args.vehicles or args.walkers else 0),
                    "--wheelchair-share", str(args.wheelchair_share),
-                   "--runners", str(args.runners)]
+                   "--runners", str(args.runners),
+                   "--sim-fps", str(args.sim_fps)]
             lht = map_is_left_hand(map_name)
             if lht and not args.no_hybrid:
                 # In hybrid mode the traffic manager moves far-away cars along
@@ -855,6 +891,8 @@ def main():
                 cmd += ["--policy-nav", args.policy_nav]
             if getattr(args, "policy_drive", "") and args.policy_drive != "off":
                 cmd += ["--policy-drive", args.policy_drive]
+            if getattr(args, "paper1_recovery", "off") != "off":
+                cmd += ["--paper1-recovery", args.paper1_recovery, "--paper1-seed", str(args.paper1_seed)]
             if args.delivery_args:
                 cmd += shlex.split(args.delivery_args)
             return cmd
@@ -967,7 +1005,10 @@ def main():
                 print("[pipeline] --drone-cams needs --delivery N (no drones without vans) "
                       "/ --drone-cams には --delivery が必要")
 
-            if args.ffb:
+            if args.ffb and args.no_manual_control:
+                print("[pipeline] no manual driving window -> no force feedback "
+                      "(there is no car of yours) / 手動運転なしのため FFB なし")
+            elif args.ffb:
                 # carla_ffb.py only reads the world and restarts itself on errors.
                 # A second copy would fight the first for the wheel's force
                 # feedback, so reuse one that is already running.
@@ -1033,6 +1074,11 @@ def main():
             # オプション、F5 切替後はそれまでにユーザーが開閉した状態）。
             windows.start_wanted(children)
 
+            if args.no_manual_control:
+                print("[pipeline] manual driving window off: the CarlaUE4 window is the "
+                      "main view (Q / E follow pods and drones); stop from the dashboard "
+                      "/ 手動運転ウィンドウなし：CARLA ウィンドウが主画面")
+                return NoDrivingWindow()
             cmd = mc_cmd(start_vehicle)
             mc = launch(cmd, BASE_DIR, "manual_control")
             children.append((mc, "manual_control"))
@@ -1165,6 +1211,10 @@ def main():
                     args.policy_nav = req["policy_nav"]
                 if req.get("policy_drive") in ("off", "latest"):
                     args.policy_drive = req["policy_drive"]
+                if req.get("paper1_recovery") in ("off", "B0", "B1", "B2", "B3", "B4", "B5"):
+                    args.paper1_recovery = req["paper1_recovery"]
+                if str(req.get("paper1_seed")) in ("0", "1", "2"):
+                    args.paper1_seed = str(req["paper1_seed"])
                 on = args.delivery > 0 or args.minipod_hubs > 0
                 restart_child("delivery", delivery_cmd() if on else None, 15.0)
                 if args.delivery > 0:
@@ -1175,6 +1225,8 @@ def main():
             elif a == "map" and req.get("map"):
                 pending["map"] = str(req["map"])
                 signal_group(mc, signal.SIGTERM)
+            elif a == "vehicle" and req.get("vehicle") and isinstance(mc, NoDrivingWindow):
+                start_vehicle = str(req["vehicle"])       # used when the window is turned on / 次回用
             elif a == "vehicle" and req.get("vehicle"):
                 start_vehicle = str(req["vehicle"])
                 stop_procs([(mc, "manual_control")], 10.0)
@@ -1396,7 +1448,7 @@ def main():
             current_map = target
             start_vehicle = req["hero"] or start_vehicle
 
-        print("[pipeline] manual_control exited rc=%d -> shutting down" % rc)
+        print("[pipeline] manual_control exited rc=%s -> shutting down" % rc)
         terminate_all()
         return rc
 

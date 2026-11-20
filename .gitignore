@@ -120,3 +120,11 @@ desktop.ini
 *.swo
 *~
 .claude/settings.local.json
+
+# ------------------------------------------------------------
+# Over GitHub's 100 MB limit (kept locally only; 2026-11-20)
+# GitHub の 100 MB 上限を超えるファイル（ローカルのみ）
+# ------------------------------------------------------------
+/CarlaUE4/Content/Japan/Maps/OitaKosen/OitaKosen.uexp
+# local safety copies / ローカルの安全用コピー
+/backup_*/

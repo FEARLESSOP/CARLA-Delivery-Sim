@@ -78,53 +78,104 @@ def test_nav_bridge():
 
 
 def test_drive_bridge():
-    print("Testing DriveBridge...")
-    bridge = DriveBridge(checkpoint_path="latest", map_name="OitaKosen")
-    assert bridge.model is not None, "Drive model should be loaded"
+    """DriveBridge builds the same route and the same 30-number observation as
+    rl_delivery/env_drive.py for the same pod state (parity), from lane pieces
+    and from CARLA-like waypoints; one bridge per pod; controls in range.
+    DriveBridge が env_drive と同じ経路・同じ観測を作ること（観測の一致）を確認。"""
+    import numpy as np
+    from rl_delivery.env_drive import DriveEnv
+    from delivery.rl_bridge import DrivePolicy
+    print("Testing DriveBridge (parity with env_drive)...")
+    policy = DrivePolicy("latest", "OitaKosen")
+    bridge = DriveBridge(policy=policy, map_name="OitaKosen")
+    other = DriveBridge(policy=policy, map_name="OitaKosen")
+    assert bridge.model is policy.model and other.model is policy.model, "brain loaded once"
 
-    # Mock CARLA waypoints along a 100m straight line
-    class MockTransform:
-        def __init__(self, x, y, z, yaw):
-            self.location = MockLoc(x, y, z)
-            self.rotation = MockRot(yaw)
-
-    class MockLoc:
-        def __init__(self, x, y, z):
+    class Loc:
+        def __init__(self, x, y, z=0.0):
             self.x, self.y, self.z = x, y, z
-        def distance(self, other):
-            return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2 + (self.z - other.z)**2)
 
-    class MockRot:
+    class Rot:
         def __init__(self, yaw):
             self.yaw = yaw
 
-    class MockWP:
-        def __init__(self, x, y, z, yaw=0.0):
-            self.transform = MockTransform(x, y, z, yaw)
-            self.lane_width = 3.5
-            self.is_junction = False
+    class Tf:
+        def __init__(self, x, y, yaw_deg):
+            self.location, self.rotation = Loc(x, y), Rot(yaw_deg)
 
-    wps = [MockWP(float(i), 0.0, 10.0, yaw=0.0) for i in range(0, 100, 5)]
-    bridge.build_from_waypoints(wps)
-    assert bridge.P is not None and len(bridge.P) > 0
+    class WP:
+        def __init__(self, x, y, road, lane):
+            self.transform = Tf(x, y, 0.0)
+            self.road_id, self.lane_id = road, lane
 
-    # Mock car actor
-    class MockCar:
+    class Car:
         id = 999
+
+        def __init__(self, x, y, yaw, v):
+            self.tf, self.v = Tf(x, y, math.degrees(yaw)), Loc(v * math.cos(yaw), v * math.sin(yaw))
+
         def get_transform(self):
-            return MockTransform(10.0, 0.2, 10.0, yaw=1.0)
+            return self.tf
+
         def get_velocity(self):
-            return MockLoc(5.0, 0.0, 0.0)
+            return self.v
 
-    car = MockCar()
-    ctrl = bridge.run_step(car)
-    print("  Control returned: steer=%.3f, throttle=%.3f, brake=%.3f" %
-          (ctrl.steer, ctrl.throttle, ctrl.brake))
-    assert -1.0 <= ctrl.steer <= 1.0
-    assert 0.0 <= ctrl.throttle <= 1.0
-    assert 0.0 <= ctrl.brake <= 1.0
+    env = DriveEnv("OitaKosen", seed=8080)
+    env.route_len, env.traffic = 250.0, 0
+    checked = 0
+    for seed in range(8080, 8086):
+        obs, _ = env.reset(seed=seed)
+        edges = env._route.__self__ and None
+        # rebuild the env route from its lane pieces: the edges are not stored, so
+        # take the route env just built and recover its edges from the points
+        # 環境の経路を車線片から再構成
+        env2 = DriveEnv("OitaKosen", seed=seed)
+        env2.route_len, env2.traffic = 250.0, 0
+        env2.rng = np.random.default_rng(seed)
+        edges = env2._route()
+        env2._build(edges)
+        bridge.build_from_edges(edges)
+        assert np.allclose(bridge.P, env2.P) and np.allclose(bridge.S, env2.S), "route points differ"
+        assert [round(m[0], 6) for m in bridge.marks] == [round(m[0], 6) for m in env2.marks], "stop lines differ"
+        # the same route from CARLA-like waypoints (road / lane ids) / 経路点からも同じ
+        wps = []
+        for ei in edges:
+            L = policy.lanes[ei]
+            wps += [WP(q[0], q[1], L["road"], L["lane"]) for q in L["pts"][::3] + L["pts"][-1:]]
+        other.build_from_waypoints(wps)
+        # same geometry (duplicate lane pieces in the data are interchangeable) / 同じ形状
+        n = min(len(other.P), len(env2.P))
+        assert abs(len(other.P) - len(env2.P)) <= 1 and np.allclose(other.P[:n, :2], env2.P[:n, :2], atol=0.05), \
+            "route from waypoints differs: %s vs %s" % (other.edges[:8], edges[:8])
+        # drive env2 with the brain and compare observations along the way / 走行中の観測を比較
+        env2.reset(seed=seed)
+        env2._build(edges)
+        q = env2.P[0]
+        env2.x, env2.y, env2.yaw, env2.v, env2.steer, env2.k, env2.s = q[0], q[1], q[2], 0.0, 0.0, 0, 0.0
+        bridge.build_from_edges(edges)
+        bridge.k, bridge.s = 0, 0.0
+        o_env = env2._obs()
+        for step in range(120):
+            a, _ = policy.model.predict(o_env, deterministic=True)
+            o_env, _r, te, tr, _i = env2.step(a)
+            if te or tr:
+                break
+            # bridge state = env state before this observation / ブリッジの状態を合わせる
+            bridge.steer, bridge.last_act = env2.steer, np.asarray(env2.last, np.float32)
+            for mb, me in zip(bridge.marks, env2.marks):
+                mb[3], mb[4] = me[3], me[4]
+            o_br, _v = bridge.observe(Car(env2.x, env2.y, env2.yaw, env2.v))
+            mask = np.ones(30, bool)
+            mask[20:23] = False                           # light colour: CARLA's lights, not env's timer / 信号色は除外
+            assert np.allclose(o_br[mask], o_env[mask], atol=1e-4), (
+                "observation differs at step %d: %s" % (step, np.nonzero(~np.isclose(o_br, o_env, atol=1e-4))[0]))
+            checked += 1
+    print("  %d observations identical to env_drive (6 routes)" % checked)
+    assert checked > 100
+    ctrl = bridge.run_step(Car(env2.x, env2.y, env2.yaw, env2.v))
+    print("  Control returned: steer=%.3f, throttle=%.3f, brake=%.3f" % (ctrl.steer, ctrl.throttle, ctrl.brake))
+    assert -1.0 <= ctrl.steer <= 1.0 and 0.0 <= ctrl.throttle <= 1.0 and 0.0 <= ctrl.brake <= 1.0
     print("PASS: DriveBridge\n")
-
 
 def test_fleet_recovery_bridge():
     print("Testing FleetRecoveryBridge...")

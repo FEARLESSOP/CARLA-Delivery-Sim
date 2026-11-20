@@ -38,6 +38,18 @@ MAX_STEER, STEER_RATE = 0.6, 1.2          # rad, rad/s / 最大舵角と舵角�
 MAX_ACC, MAX_BRAKE = 3.0, 3.0
 POD_MAX = 30.0 / 3.6                       # delivery_sim --speed / ポッド最高速
 CYCLE, GREEN, YELLOW = 60.0, 27.0, 3.0
+# 2026-11-16: every kerb strike of the 36.5 M brain came right after a bend
+# (~64 deg) at ~28 km/h, never at full lock: it took bends too fast and wide.
+# - tyre grip (world physics): sideways acceleration above A_LAT_MAX cannot be
+#   had; the pod turns less than asked (understeer), as a 3 t pod in CARLA would
+# - near the kerb: a graded cost from KERB_WARN metres before the edge
+# - in junctions (kerb check off there): a cost for drifting far off the route
+# 2026-11-16：36.5M の縁石衝突はすべてカーブ直後（約 64 度）・約 28 km/h で、
+# 舵は余っていた（速すぎ・膨らみ）。タイヤのグリップ限界（物理）、縁石接近の
+# 段階的コスト、交差点内でのコース外れコストを追加。
+A_LAT_MAX = 5.0                            # m/s2, tall 3 t delivery van (the curriculum ends here) / 横加速度の限界
+KERB_WARN, KERB_COST = 0.5, 0.3            # m before the kerb, cost per step at the edge / 縁石接近
+JUNC_OFF, JUNC_COST = 1.0, 0.1             # m off the route line in a junction, cost per metre / 交差点内
 AHEAD = (5.0, 10.0, 20.0, 30.0, 40.0)
 
 
@@ -194,7 +206,8 @@ class DriveEnv(gym.Env):
         self.last = np.zeros(2)
         self.clear_speeds = []
         self.k_stats = {"kerb": 0, "stop_violation": 0, "red_violation": 0, "centre_s": 0.0, "speeding_s": 0.0,
-                        "collision": 0, "reached": False, "end": "", "stalls": 0, "p10_speed": 0.0}
+                        "collision": 0, "reached": False, "end": "", "stalls": 0, "p10_speed": 0.0,
+                        "slide_s": 0.0, "kerb_near_s": 0.0}
         self.stopped_unprompted_t = 0.0
         self.limit_t = self.S[-1] / 2.0 + 90.0
         return self._obs(), {}
@@ -231,7 +244,12 @@ class DriveEnv(gym.Env):
         self.steer += float(np.clip(target - self.steer, -STEER_RATE * DT, STEER_RATE * DT))
         acc = a[1] * (MAX_ACC if a[1] > 0 else MAX_BRAKE)
         self.v = float(np.clip(self.v + acc * DT, 0.0, POD_MAX))
-        self.yaw = wrap(self.yaw + self.v / WHEELBASE * math.tan(self.steer) * DT)
+        yaw_rate = self.v / WHEELBASE * math.tan(self.steer)
+        a_lat = getattr(self, "a_lat_max", A_LAT_MAX)              # set by the grip curriculum / カリキュラム
+        if self.v * abs(yaw_rate) > a_lat:                          # past the tyres' grip / グリップ限界
+            yaw_rate = math.copysign(a_lat / max(self.v, 0.1), yaw_rate)
+            self.k_stats["slide_s"] = self.k_stats.get("slide_s", 0.0) + DT
+        self.yaw = wrap(self.yaw + yaw_rate * DT)
         self.x += self.v * math.cos(self.yaw) * DT
         self.y += self.v * math.sin(self.yaw) * DT
         self.t += DT
@@ -287,6 +305,14 @@ class DriveEnv(gym.Env):
         # which edge the pod's side is past / どちらの縁を越えたか
         over_a = self.off + HALF_W - half
         over_b = -self.off + HALF_W - half
+        if not q[7]:
+            # closing in on a kerb side: the cost rises before the strike / 縁石に近づくとコスト
+            for over, kind in ((over_a, int(q[4])), (over_b, int(q[5]))):
+                if kind == 0 and over > -KERB_WARN:
+                    r -= KERB_COST * ((over + KERB_WARN) / KERB_WARN) ** 2
+                    self.k_stats["kerb_near_s"] = self.k_stats.get("kerb_near_s", 0.0) + DT
+        elif abs(self.off) > JUNC_OFF:
+            r -= JUNC_COST * (abs(self.off) - JUNC_OFF)              # wide / cut in a junction / 交差点で外れ
         if not term and not q[7]:
             if (over_a > 0.25 and int(q[4]) == 0) or (over_b > 0.25 and int(q[5]) == 0):
                 self.k_stats["kerb"] += 1

@@ -5,7 +5,7 @@
 // 右列：電池ゲージ・高度/速度の推移・残り時間/帰還距離・位置と航跡の小地図
 import { useEffect, useState, type ReactNode } from 'react'
 import { Clock, Gauge, MapPin, Mountain, Route, Zap } from 'lucide-react'
-import { getJSON } from '@/lib/api'
+import { loadDeliveryMap } from '@/lib/deliveryMap'
 import { useCanvas } from '@/lib/canvas'
 import { C, FONT_MONO } from '@/lib/colors'
 import { useT } from '@/lib/i18n'
@@ -194,7 +194,7 @@ function useDeliveryMap(name: string | undefined) {
     if (!name) return
     if (MAP_CACHE && MAP_CACHE.name === name) { setM(MAP_CACHE); return }
     let alive = true
-    getJSON<DeliveryMap>('/delivery/map').then((mp) => {
+    loadDeliveryMap<DeliveryMap>(name).then((mp) => {
       if (!alive || !mp) return
       MAP_CACHE = buildMap(name, mp)
       setM(MAP_CACHE)

@@ -33,6 +33,8 @@ import numpy as np
 import pygame
 from pygame.locals import K_ESCAPE, K_F11, K_q
 
+from drone_hud import draw_tilt
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "data", "delivery_live", "state.json")
 AIRBORNE = ("delivering", "to_station", "to_van", "falling")
@@ -76,9 +78,27 @@ class DroneCam(object):
         if tick > 0.0:
             bp.set_attribute("sensor_tick", str(tick))
         self.body_id, self.size, self.surface = body.id, size, None
-        self.sensor = world.spawn_actor(bp, CAM_TF, attach_to=body)
+        self.body = body
+        # not attached: placed under the body each frame, always straight down, so the
+        # drone's pitch and roll never tilt the picture / 取り付けず毎フレーム真下に置く（機体の傾きを受けない）
+        self.sensor = world.spawn_actor(bp, self._pose())
         weak = weakref.ref(self)
         self.sensor.listen(lambda im: DroneCam._on_image(weak, im))
+
+    def _pose(self):
+        from delivery.drone_motion import nadir_mount
+        tf = self.body.get_transform()
+        (x, y, z), (p, yw, r) = nadir_mount((tf.location.x, tf.location.y, tf.location.z), tf.rotation.yaw,
+                                            (CAM_TF.location.x, CAM_TF.location.y, CAM_TF.location.z))
+        return carla.Transform(carla.Location(x, y, z), carla.Rotation(pitch=p, yaw=yw, roll=r))
+
+    def follow(self):
+        """Re-place the camera under the body (every frame). / 機体の下へ置き直す"""
+        try:
+            if self.body.is_alive:
+                self.sensor.set_transform(self._pose())
+        except RuntimeError:
+            pass
 
     @staticmethod
     def _on_image(weak, image):
@@ -164,6 +184,15 @@ class Wall(object):
         status = STATUS_TEXT.get(d["status"], d["status"].upper())
         if live and d.get("phase"):
             status += " / " + str(d["phase"]).upper()
+        if live:
+            # tilt indicator, bottom right above the footer / 傾き表示（右下）
+            try:
+                rot = cam.body.get_transform().rotation
+                rad = max(14, min(26, r.h // 9))
+                draw_tilt(self.display, (r.right - rad - 10, r.bottom - rad - 34), rad, rot.pitch, rot.roll,
+                          self.f_small)
+            except RuntimeError:
+                pass
         foot = "%s  ALT %.0fm  BAT %.0f%%" % (status, d.get("z", 0.0), bat)
         if d.get("order"):
             foot += "  #%d" % d["order"]
@@ -255,6 +284,8 @@ def main():
             gone = set(cams) - {d["id"] for d in drones}
             for k in gone:
                 cams.pop(k).destroy()
+            for cam in cams.values():
+                cam.follow()
             wall.display.fill((0, 0, 0))
             for i, d in enumerate(drones):
                 wall.draw_tile(i, cols, rows, d, cams.get(d["id"]), state.get("t", 0.0))

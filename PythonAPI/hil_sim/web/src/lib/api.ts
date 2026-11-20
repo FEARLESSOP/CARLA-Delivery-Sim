@@ -3,7 +3,9 @@
 // dashboard.py の API への型付きアクセス
 
 export async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const r = await fetch(url, { signal, cache: 'no-store' })
+  // "no-cache": the browser revalidates with the ETag, so unchanged data comes
+  // back as a body-less 304 and the cached copy is used / 変化なしは 304 で再利用
+  const r = await fetch(url, { signal, cache: 'no-cache' })
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`)
   return (await r.json()) as T
 }

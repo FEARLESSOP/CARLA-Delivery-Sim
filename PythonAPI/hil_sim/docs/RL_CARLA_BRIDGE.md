@@ -15,11 +15,39 @@ get to drive the pods and fly the drones in the real CARLA simulation.
 >   (it slowed the delivery loop to ~4 Hz and made the drones jump).
 > - **Pod driving** (`--policy-drive`, `DriveBridge`, SAC): on 2026-11-13 live it
 >   froze all three LastMile pods at full left lock, so no drone could launch.
+>   Causes found the same day and fixed in code (not yet tested in CARLA): one
+>   bridge was shared by all three pods (each drove by another pod's route);
+>   the observation used constants (kerb on both sides, limit 40, no stop lines
+>   or signals, any vehicle within 60 m counted as "the car ahead"); decisions
+>   ran every CARLA tick instead of 10 Hz; steering was scaled to 0.6 rad instead
+>   of the pod's real wheel angle. Now: `DrivePolicy` (brain + lane data, shared)
+>   and one `DriveBridge` per pod, the observation built from the training lane
+>   data (`tests/test_rl_bridge.py`: 636 observations identical to env_drive),
+>   light colour from CARLA's real lights, acceleration -> pedal through
+>   `DRIVE_ACTUATOR` (defaults until measured on the LMP-4:
+>   `rl_delivery/maps/drive_actuator.json`). The brain itself also learnt on
+>   speed limits 3.6x too low (m/s read as km/h, fixed 11-13); it is being
+>   retrained (run drive_v6_kmh).
 > - **Fleet recovery** (`--policy-recovery`, `FleetRecoveryBridge`): wires
 >   `rl_delivery/ramppo.py` + `delivery/feasibility_engine.py` into the drop
 >   (`D_AFTER`). Its hard-coded feasibility rules go against "nothing hardcoded"
 >   ([RL_DELIVERY.md](RL_DELIVERY.md)), and its benchmark is not valid (see
 >   [archive/antigravity_2026-11/README.md](archive/antigravity_2026-11/README.md)).
+> - **Paper 1 recovery** (`--paper1-recovery B0..B5 --paper1-seed 0..2`, launch option
+>   "Paper 1 recovery", 2026-11-17): `delivery/paper1_bridge.py` + `rl_delivery/paper1/snapshot.py`.
+>   At each LastMile drone drop it snapshots that pod (pod, its 4 drones, waiting orders,
+>   meeting point, next stop, wind), a worker process rebuilds a world-v2 practice world for
+>   the pod's zone (1, 2 or 3) and asks the method; the answer is applied from a later tick
+>   (after the delivery is recorded): "pod" = unchanged, "pod_next" = `Mission.meet` moves to
+>   the pod's next stop and `van.meets` with it, "station" = a free pad at the chosen station
+>   is reserved (`taken`, `pad_target`, `start_transfer`, `release_drone`, removed from
+>   `van.meets`). Answers that come late (> 25 s), are unreachable with the real battery or
+>   find the drone past its drop are skipped. Summary in the run's `summary.json`
+>   (`paper1_recovery`), every decision in `paper1_decisions.json`. Differences from the
+>   practice world: real flights and crashes; a drone sent to charge leaves its pod and the
+>   station's standby dispatch decides where it goes next. This replaces the old
+>   `--policy-recovery` (kept, not valid). Tests: `tests/test_paper1_bridge.py` (no CARLA).
+>   Paper 1 の回収手法を CARLA で動かす：投下ごとにポッドの状況を練習世界に移して手法に聞き、次の tick 以降に反映する。
 > - Checkpoint names `latest` / `auto` resolve to the newest file.
 > - Tests: `tests/test_rl_bridge.py` (no CARLA), `tests/test_bridge_live.py` (needs CARLA).
 

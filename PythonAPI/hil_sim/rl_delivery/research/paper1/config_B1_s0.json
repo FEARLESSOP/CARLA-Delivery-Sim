@@ -1,0 +1,74 @@
+{
+ "method": "B1",
+ "checkpoint": "rl_delivery/checkpoints/paper1/B1/s0/final.zip",
+ "scenarios": {
+  "S1_normal": {
+   "rate": 16.0
+  },
+  "S2_rush_hour": {
+   "rate": 16.0,
+   "traffic": 1.6
+  },
+  "S3_pod_delay": {
+   "rate": 16.0,
+   "delay_p": 0.3,
+   "delay_s": [
+    60.0,
+    300.0
+   ]
+  },
+  "S4_station_outage": {
+   "rate": 16.0,
+   "outage": [
+    3600.0,
+    7200.0
+   ]
+  },
+  "S5_high_wind": {
+   "rate": 16.0,
+   "wind_mean": 15.0,
+   "wind_gust": 18.0
+  },
+  "S6_burst_returns": {
+   "rate": 16.0,
+   "burst": 6
+  },
+  "S7_unseen_customers": {
+   "rate": 16.0,
+   "addresses": "heldout"
+  }
+ },
+ "seeds": [
+  1000,
+  1029
+ ],
+ "episode_s": 10800.0,
+ "zone": 1,
+ "ready_pct": 45.0,
+ "reserve_pct": 15.0,
+ "station_charge_to": 90.0,
+ "est_margin": 1.2,
+ "on_time_s": [
+  900.0,
+  1800.0,
+  3600.0
+ ],
+ "drones": 4,
+ "land_s": 15.0,
+ "params": {
+  "pod_kwh": 10.0,
+  "drone_wh": 500.0,
+  "station_kw": 50.0,
+  "pod_charge_to": 95.0,
+  "pod_drain_km": 5.0,
+  "pod_idle_drain": 0.02,
+  "pod_speed_kmh": 30.0,
+  "charge_fast": 1.5,
+  "charge_slow": 0.08,
+  "standby_drones": 2,
+  "drones_per_pod": 4,
+  "drone_speed": 12.0
+ },
+ "wall_s": 42.7,
+ "frozen_rules": "pod: fleet_rules.rule_pod; launch height: medium; hover: nearest feasible charger below 20 %"
+}

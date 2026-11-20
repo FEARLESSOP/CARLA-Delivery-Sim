@@ -118,6 +118,89 @@ class NavEnv(gym.Env):
         first = np.where(hit.any(1), hit.argmax(1), len(self.ray_d))
         return np.where(first < len(self.ray_d), self.ray_d[np.minimum(first, len(self.ray_d) - 1)], RANGE)
 
+    # -- progress around no-fly zones (2026-11-18) / 飛行禁止区域を回る距離
+    GEO_MARGIN = 1.0      # corners 1 m outside each zone: the path hugs the true edge, so it never jumps
+
+    def _seg_hits_rect(self, a, b, r, grow):
+        """Liang-Barsky: does the segment a-b pass through rectangle r (grown)?"""
+        x0, x1, y0, y1 = r["x0"] - grow, r["x1"] + grow, r["y0"] - grow, r["y1"] + grow
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t0, t1 = 0.0, 1.0
+        for p, q in ((-dx, a[0] - x0), (dx, x1 - a[0]), (-dy, a[1] - y0), (dy, y1 - a[1])):
+            if abs(p) < 1e-12:
+                if q < 0:
+                    return False
+                continue
+            t = q / p
+            if p < 0:
+                t0 = max(t0, t)
+            else:
+                t1 = min(t1, t)
+            if t0 > t1:
+                return False
+        return t1 - t0 > 1e-9
+
+    def _clear_seg(self, a, b):
+        # against the zones themselves (0.2 m inside their edge), not the 10 m corner margin: with
+        # the margin a drone near a zone saw no corner and fell back to the straight line,
+        # so the distance jumped by up to 60 m in one step (2026-11-19) / 区域そのものと判定
+        # （余白で判定すると区域付近で直線に戻り、1 ステップで最大 60 m 跳んでいた）
+        return not any(self._seg_hits_rect(a, b, r, -0.2) for r in self.nofly)
+
+    def _geo_prepare(self, goal):
+        """Shortest legal distances from the corners of the (grown) no-fly zones to
+        ``goal`` (Dijkstra on the visibility graph). / 角から目標までの最短距離"""
+        g = self.GEO_MARGIN
+        nodes = []
+        for r in self.nofly:
+            for x, y in ((r["x0"] - g, r["y0"] - g), (r["x1"] + g, r["y0"] - g),
+                         (r["x0"] - g, r["y1"] + g), (r["x1"] + g, r["y1"] + g)):
+                if not self._in_nofly((x, y), g - 1.5):
+                    nodes.append((x, y))
+        gx = (float(goal[0]), float(goal[1]))
+        dist = [float("inf")] * len(nodes)
+        for i, n in enumerate(nodes):
+            if self._clear_seg(n, gx):
+                dist[i] = math.dist(n, gx)
+        done = [False] * len(nodes)
+        for _ in range(len(nodes)):
+            i = min((k for k in range(len(nodes)) if not done[k]), key=lambda k: dist[k], default=None)
+            if i is None or dist[i] == float("inf"):
+                break
+            done[i] = True
+            for j in range(len(nodes)):
+                if not done[j] and self._clear_seg(nodes[i], nodes[j]):
+                    dist[j] = min(dist[j], dist[i] + math.dist(nodes[i], nodes[j]))
+        self._geo = (gx, nodes, dist)
+
+    def _dist(self, goal, p):
+        """Distance used by the progress reward: straight, or (geo_progress) the
+        horizontal shortest path round the no-fly zones, with the height difference.
+        報酬用の距離：直線、または飛行禁止区域を回る最短経路（高さの差を含む）。"""
+        if not getattr(self, "geo_progress", False) or not self.nofly:
+            return float(np.linalg.norm(goal - p))
+        gx = (float(goal[0]), float(goal[1]))
+        if getattr(self, "_geo", None) is None or self._geo[0] != gx:
+            self._geo_prepare(goal)
+        _g, nodes, dist = self._geo
+        q = (float(p[0]), float(p[1]))
+        if self._clear_seg(q, gx):
+            h = math.dist(q, gx)
+        else:
+            h = min((math.dist(q, n) + dist[i] for i, n in enumerate(nodes)
+                     if dist[i] < float("inf") and self._clear_seg(q, n)), default=None)
+            if h is None:                       # no corner in sight: via the nearest one, never straight
+                h = min((math.dist(q, n) + dist[i] for i, n in enumerate(nodes) if dist[i] < float("inf")),
+                        default=math.dist(q, gx))
+        return math.hypot(h, float(goal[2] - p[2]))
+
+    def _crosses_nofly(self, a, b):
+        """Does the straight line a -> b pass through a no-fly zone? / 直線が飛行禁止区域を通るか"""
+        for f in np.linspace(0.05, 0.95, 40):
+            if self._in_nofly((a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)):
+                return True
+        return False
+
     def _nofly_dist(self, p):
         out = np.full(NOFLY_DIRS, NOFLY_RANGE)
         steps = np.linspace(5.0, NOFLY_RANGE, 30)
@@ -145,6 +228,11 @@ class NavEnv(gym.Env):
                     self._zone_nodes.setdefault(z, []).append(q)
             self._zone_nodes = {z: np.array(v) for z, v in self._zone_nodes.items()}
         cap = self.max_dist
+        # detour_share: this share of trips is picked so the straight line from the
+        # take-off to the drop crosses a no-fly zone (the brain must fly round it, as on
+        # CARLA's pod 1 routes); 0 = the usual random trips (2026-11-18)
+        # この割合の飛行は、離陸点から投下点への直線が飛行禁止区域を横切るように選ぶ（迂回の練習）
+        detour = self.rng.random() < float(getattr(self, "detour_share", 0.0))
         for attempt in range(2000):
             if attempt and attempt % 200 == 0:
                 cap *= 1.2
@@ -156,7 +244,8 @@ class NavEnv(gym.Env):
             r = self.zones[z]
             cand = [b for b in self.drops if r["x0"] <= b["x"] <= r["x1"] and r["y0"] <= b["y"] <= r["y1"]
                     and not self._in_nofly((b["x"], b["y"]), 15.0)
-                    and 30.0 < math.dist((b["x"], b["y"]), start) < cap]
+                    and 30.0 < math.dist((b["x"], b["y"]), start) < cap
+                    and (not detour or attempt >= 1500 or self._crosses_nofly(start, (b["x"], b["y"])))]
             if not cand:
                 continue
             b = cand[int(self.rng.integers(len(cand)))]
@@ -176,20 +265,12 @@ class NavEnv(gym.Env):
         raise RuntimeError("no trip found / 経路が見つからない")
 
     def _update_goal(self):
-        dr_p = self.drone.p
-        if self.phase == 0:
-            self.goal = self.drop_goal
-        else:
-            target = self.meet_goal
-            hd = float(np.linalg.norm(dr_p[:2] - target[:2]))
-            z_cruise = max(self.gd, self.gm) + 40.0
-            z_final = self.meet_goal[2]
-            R_CONE = 25.0
-            if hd >= R_CONE:
-                eff_z = z_cruise
-            else:
-                eff_z = z_final + (z_cruise - z_final) * (hd / R_CONE)
-            self.goal = np.array([target[0], target[1], eff_z], dtype=float)
+        """The goal of the current leg: the drop hover point, then the pod roof.
+        No descent profile (2026-11-13: the goal-height cone of 11-11 was a
+        hand-written flight rule, against "nothing hardcoded"; the brain
+        learns its own climb and descent). / 現在の区間の目標（投下点、次にポッド屋根）。
+        降下プロファイルは与えない（11-11 の高度コーンは固定ルールのため削除）。"""
+        self.goal = self.drop_goal if self.phase == 0 else self.meet_goal
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -208,12 +289,17 @@ class NavEnv(gym.Env):
         self._update_goal()
         self.wind = Wind(self.rng, level=self.wind_level, grid=self.grid)
         self.n = 0
-        self.d_best = float(np.linalg.norm(self.goal - self.drone.p))
+        self._geo = None
+        self.d_best = self._dist(self.goal, self.drone.p)
+        self._d_last = self.d_best
         self.d0 = self.d_best
         self.phi_last = self._phi(self.d_best)
         self.last_act = np.zeros(4)
         self.stats = {"reached": False, "delivered": False, "crash": None, "min_clear": RANGE, "energy": 0.0,
-                      "deliver_t": None}
+                      "deliver_t": None, "path_m": 0.0, "dact": 0.0,
+                      # horizontal distance to each leg's target at its start / end (KPIs) / 区間ごとの距離
+                      "leg": [{"start": float(np.linalg.norm(self.drop_goal[:2] - self.drone.p[:2])), "end": None},
+                              {"start": None, "end": None}]}
         self.trail = []
         return self._obs(), {}
 
@@ -241,6 +327,7 @@ class NavEnv(gym.Env):
     def step(self, action):
         act = np.asarray(action, float)
         dr = self.drone
+        p_before = dr.p[:2].copy()
         agl = max(dr.p[2] - float(self.H.ground_at(dr.p[0], dr.p[1])), 0.5)
         self.wind.step(DT, agl)
         w = self.wind.at(dr.p[0], dr.p[1], agl)
@@ -248,12 +335,21 @@ class NavEnv(gym.Env):
         self.n += 1
         self._update_goal()
         obs = self._obs()
-        d = float(np.linalg.norm(self.goal - dr.p))
+        d = self._dist(self.goal, dr.p)
+        if getattr(self, "geo_progress", False) and self._in_nofly(dr.p):
+            d = getattr(self, "_d_last", d)     # inside a zone: no progress (the step crashes) / 区域内は進捗なし
+        self._d_last = d
         r = 0.0
-        # Monotonic high-water-mark progress reward (eliminates oscillation loops under discounting)
-        if d < self.d_best:
-            r += PROG_K * (self.d_best - d)
-            self.d_best = d
+        # closer = more reward, away = the same loss; steeper in the last ~15 m
+        # (potential-based). Restored 2026-11-13: the best-so-far reward of 11-11
+        # paid nothing while the drone was further than its best, so there was no
+        # signal to come back; with no exploration bonus the brain collapsed.
+        # 近づくと報酬、離れると同じだけ減る（ポテンシャル型）。11-11 の「最良更新のみ」
+        # は後退時に信号が無く、探索ゼロと重なって崩壊したため戻した。
+        phi = self._phi(d)
+        r += phi - self.phi_last
+        self.phi_last = phi
+        self.d_best = min(self.d_best, d)
         # circling the target: sideways speed round it within 30 m costs / 目的地の周回にコスト
         hv = self.goal[:2] - dr.p[:2]
         hd = float(np.linalg.norm(hv))
@@ -270,6 +366,8 @@ class NavEnv(gym.Env):
             r -= 0.002 * (agl_now - 60.0)                               # needlessly high / 高すぎ
         r -= 0.02 * max(0.0, float(self.drone.battery_drop))            # battery is a cost / 電池消費
         self.stats["min_clear"] = min(self.stats["min_clear"], self._clear)
+        self.stats["path_m"] += float(np.linalg.norm(dr.p[:2] - p_before))
+        self.stats["dact"] += float(np.abs(act - self.last_act).sum())
         self.last_act = act
         term = trunc = False
         top = float(self.H.top_at(dr.p[0], dr.p[1]))
@@ -306,7 +404,11 @@ class NavEnv(gym.Env):
             self.stats["delivered"], self.stats["deliver_t"] = True, self.n * DT
             self.phase = 1
             self._update_goal()
-            self.d_best = float(np.linalg.norm(self.goal - dr.p))
+            self.d_best = self._dist(self.goal, dr.p)
+            self._d_last = self.d_best
+            self.phi_last = self._phi(self.d_best)                     # new leg, new reference / 新区間の基準
+            self.stats["leg"][0]["end"] = hd_drop
+            self.stats["leg"][1]["start"] = float(np.linalg.norm(self.meet_goal[:2] - dr.p[:2]))
         elif self.n * DT >= MAX_S:
             # terminal penalty for airborne timeout to prevent "hover out the clock" exploit
             r -= 100.0
@@ -322,7 +424,12 @@ class NavEnv(gym.Env):
                             "deliver_t": self.stats["deliver_t"], "crash": self.stats["crash"] or "",
                             "time_s": self.n * DT, "battery_used": 100.0 - dr.battery,
                             "min_clear": self.stats["min_clear"], "start_dist": self.d0,
-                            "end_dist": d}}
+                            "end_dist": d, "path_m": self.stats["path_m"],
+                            "dact_mean": self.stats["dact"] / max(self.n, 1),
+                            "leg0_start": self.stats["leg"][0]["start"],
+                            "leg0_end": self.stats["leg"][0]["end"] if self.phase == 1 else hd_drop,
+                            "leg1_start": self.stats["leg"][1]["start"],
+                            "leg1_end": hd_meet if self.phase == 1 else None}}
         return obs, float(r), term, trunc, info
 
 

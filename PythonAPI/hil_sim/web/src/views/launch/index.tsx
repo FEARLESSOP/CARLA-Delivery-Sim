@@ -178,8 +178,11 @@ function Summary({ info, opts, placed }: { info: LauncherInfo; opts: LaunchOptio
     [label(t, spec('cyclists')), opts.traffic ? String(opts.cyclists) : '0'],
     [label(t, spec('delivery')), String(opts.delivery)],
     [t('l_cs_title'), chargeSummary(t, opts, placed.n)],
-    [label(t, spec('start_vehicle')), car?.name ?? String(opts.start_vehicle)],
-    [label(t, spec('control_res')), String(opts.control_res)],
+    [label(t, spec('manual_control')), opts.manual_control ? t('l_on') : t('l_off')],
+    ...(opts.manual_control ? [
+      [label(t, spec('start_vehicle')), car?.name ?? String(opts.start_vehicle)],
+      [label(t, spec('control_res')), String(opts.control_res)],
+    ] as [string, string][] : []),
   ]
   return (
     <dl className="mt-5 grid grid-cols-2 gap-3 border-t border-line pt-4 sm:grid-cols-4">

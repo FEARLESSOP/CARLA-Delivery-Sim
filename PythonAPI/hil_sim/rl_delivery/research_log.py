@@ -80,9 +80,30 @@ RUNS = [
     dict(run_id="nav_v5_twoleg", brain="drone_navigation", algorithm="RecurrentPPO", n_envs=12,
          world="env_nav v5: drop hover (+60) then land on the pod at a meeting point (+100); leg flag in observation; 480 s",
          reward="v4 per leg; pod crash -50", curriculum="as v4, on landings",
-         started="2026-11-09 16:51", ended="(running)", steps=None, status="running",
-         outcome="see progress; 41 % fallback-trip bug fixed 11-10 10:2x; landing rule loosened 11-10 11:4x; "
-                 "at 6.3 M steps: 200 m trips, 88 % delivered, 69 % landed",
+         started="2026-11-09 16:51", ended="2026-11-11 00:45", steps=28279812, status="superseded",
+         outcome="41 % fallback-trip bug fixed 11-10 10:2x; landing rule loosened 11-10 11:4x; "
+                 "at 6.3 M steps: 200 m trips, 88 % delivered, 69 % landed; best at 24 M (step_023992572): "
+                 "900 m trips, 69 % delivered, 50 % landed",
+         ended_why="8 h allocation ended; continued as nav_v6 with a changed reward",
+         progress="results/nav_progress_v5_twoleg.csv"),
+    dict(run_id="nav_v6_bestsofar", brain="drone_navigation", algorithm="RecurrentPPO (resumed from nav_v5, ent_coef 0)",
+         n_envs=6, world="env_nav v6 (Google Antigravity, 11-11): phase-1 goal height on a fixed cone (cruise +40 m, "
+         "linear descent inside 25 m); landing also needs tilt <= 12 deg",
+         reward="progress only for beating the best distance so far (0.3/m); time-out -100 (was -50)",
+         curriculum="as v5 to 900 m; pinned at 150 m from 11-11 15:46 (--dist)",
+         started="2026-11-11 09:17", ended="2026-11-12 (24 h run)", steps=99754348, status="failed",
+         outcome="policy collapse: landed 50 % -> 6 % by 30 M, 0 % from ~36 M; the action stopped depending on "
+                 "the observation (probe std 0.50 at 24 M, 0.003 at 99.7 M) and log_std fell -1 -> -6; "
+                 "the brain creeps at ~1 m/s into the first building or drifts until the battery is flat",
+         ended_why="nobody acted on 0 % landed for ~55 M steps; diagnosed 2026-11-13 (docs/NAV_FIX_BRIEF.md)",
+         progress="results/nav_progress_v6_bestsofar.csv"),
+    dict(run_id="nav_v7_fix", brain="drone_navigation",
+         algorithm="RecurrentPPO from step_023992572 (24 M), ent_coef 0.005, log_std floor -2.0",
+         n_envs=12, world="env_nav v7: v6 without the goal-height cone (goal = pod roof); tilt rule and time-out -100 kept",
+         reward="potential-based progress again (phi = -0.3 d + 25 exp(-d/15), the v5 reward)",
+         curriculum="from 300 m (--dist), +150 m at >= 70 % landed and no alarm, to 900 m, then wind",
+         started="2026-11-13 15:33", ended="(running)", steps=None, status="running",
+         outcome="see progress; new KPI + health columns and auto-stop alarms (docs/RL_DELIVERY.md section 13)",
          ended_why="", progress="results/nav_progress.csv"),
     dict(run_id="fleet_v1_idle", brain="fleet (pod+drone)", algorithm="MaskablePPO (net 256x256), turns of 200k steps",
          n_envs=6, world="env_fleet v1: 3 pods, 4 drones each, standbys, lockers, stations, EV batteries, crashes, recovery",
@@ -126,8 +147,25 @@ RUNS = [
          progress="old:drive_sac_asym/drive_progress.csv"),
     dict(run_id="drive_v4_sac_sym", brain="pod_driving", algorithm="SAC", n_envs=6,
          world="env_drive v3: symmetric pedal +-3 m/s2", reward="as drive_v3 (progress 0.3/m)",
-         curriculum="as v1", started="2026-11-10 13:0x", ended="(running)", steps=None, status="running",
-         outcome="see progress", ended_why="", progress="results/drive_progress.csv"),
+         curriculum="as v1", started="2026-11-10 13:0x", ended="2026-11-11 09:1x", steps=2100000, status="superseded",
+         outcome="2.1 M steps: 25 % reached, 19 % kerb, 2.1 m/s (150 m routes)",
+         ended_why="replaced by a fresh run with standstill costs (drive_v5)",
+         progress="results/drive_progress_v4_sac_sym.csv"),
+    dict(run_id="drive_v5_standstill", brain="pod_driving", algorithm="SAC (fresh)", n_envs=6,
+         world="env_drive v4 (Google Antigravity, 11-11): standing still without a reason -0.25/step, "
+         "aborted after 5 s (-35); forward-speed reward when the road is clear",
+         reward="v3 + standstill costs + forward-speed reward 0.05*min(v/target,1)",
+         curriculum="as v1", started="2026-11-11 09:18", ended="2026-11-12", steps=30102888, status="changed",
+         outcome="stuck at 250 m routes, no traffic, for ~28 M steps: 50-80 % reached, 12-37 % kerb, "
+                 "13-38 s speeding per route at ~3 m/s (speed limits were 3.6x too low, see changes 11-13); "
+                 "in CARLA all three pods froze at full lock (bridge faults, see changes 11-13)",
+         ended_why="speed-limit units bug found 2026-11-13", progress="results/drive_progress_v5_standstill.csv"),
+    dict(run_id="drive_v6_kmh", brain="pod_driving", algorithm="SAC resumed from drive_v5 (30.1 M), 4 envs",
+         world="env_drive v4 with speed limits in km/h (were m/s read as km/h)",
+         reward="as drive_v5", curriculum="as v1, from 250 m / no traffic",
+         started="2026-11-13 16:28", ended="(running)", steps=None, status="running",
+         outcome="see progress (rows after 30.1 M; earlier rows are drive_v5)", ended_why="",
+         progress="results/drive_progress.csv"),
 ]
 
 # Changes in time order (worlds, rewards, curricula, algorithms, bugs, evaluation).
@@ -180,6 +218,41 @@ CHANGES = [
      "user: train at a high rate, deploy to CARLA's lower rate; brains learn the conditions they practise in",
      "rule flow @30/47/72: 26.8/36.0/36.3 deliveries/h, waiting 12/33.5/105"),
     ("2026-11-10 14:2x", "roles", "infrastructure", "Antigravity runs the checks, Claude Code starts/restarts trainers (HANDOFF.md)", "two agents managing the same trainers", ""),
+    ("2026-11-11 09:1x", "nav", "reward", "(Antigravity) progress only for beating the best distance so far "
+     "(replaced the potential-based reward); time-out -50 -> -100; resumed on the same brain",
+     "stated: 'eliminates oscillation loops under discounting'", "landed 50 % (24 M) -> 6 % (30 M)"),
+    ("2026-11-11 09:1x", "nav", "world", "(Antigravity) phase-1 goal height on a fixed cone; landing also needs tilt <= 12 deg",
+     "stated: precision roof touchdown", ""),
+    ("2026-11-11 15:4x", "nav", "curriculum", "(Antigravity) trip distance pinned at 150 m (--dist)", "0 % landed at 900 m",
+     "still 0 % landed for the next ~55 M steps"),
+    ("2026-11-13 15:0x", "nav", "evaluation", "diagnosis: 300-observation probe and replays of every checkpoint",
+     "user: drones crash; 0 % landed since ~36 M",
+     "policy collapse: probe std 0.50 (24 M) -> 0.003 (99.7 M), log_std -1 -> -6; 24 M brain still 94 % delivered / "
+     "69 % landed (150 m) in both env versions; 'do nothing' scores -2.7 (discounted) vs +39.4 for the 24 M brain "
+     "and -13.5 for the collapsed one: lost exploration, not a better strategy"),
+    ("2026-11-13 15:3x", "nav", "world", "goal-height cone removed (goal = pod roof)",
+     "a hand-written flight rule (user rule: nothing hardcoded)", ""),
+    ("2026-11-13 15:3x", "nav", "reward", "potential-based progress restored (moving away costs again)",
+     "best-so-far reward gave no signal to come back", "smoke run from 24 M: 62-75 % landed at 300-450 m"),
+    ("2026-11-13 15:3x", "nav", "algorithm", "ent_coef 0 -> 0.005 (set after load), log_std floor -2.0, "
+     "--checkpoint; restart from step_023992572 at 300 m; collapsed checkpoints moved to checkpoints/nav_collapsed_20261111/",
+     "ent_coef 0 let exploration die", "first eval: 75 % delivered, 62 % landed, probe 0.34, explained variance 0.71"),
+    ("2026-11-13 15:3x", "nav", "evaluation", "KPIs per evaluation (return, gap to 'do nothing', per-leg progress, "
+     "useful speed, landing battery, clearance p10, command change, LSTM spread) + health probe (action spread over "
+     "300 fixed observations, log_std, explained variance, approx KL); auto-stop after 2 collapse alarms or 3 evals "
+     "with crash >= 80 %", "the 11-11 collapse ran unnoticed for ~55 M steps; KPI design started from Argon's proposal",
+     "probe alarm (< 0.12) would have fired at ~44 M"),
+    ("2026-11-11 09:1x", "drive", "reward", "(Antigravity) standing still without a reason -0.05 -> -0.25/step, "
+     "abort after 5 s (-35); forward-speed reward when clear; fresh brain", "pod stood still (full left lock + brake)",
+     "stuck at 250 m routes for 28 M steps"),
+    ("2026-11-13 16:2x", "drive", "bug", "speed limits were m/s read as km/h (OpenDRIVE <speed max> is m/s): 30 km/h roads "
+     "were 8.3 km/h to the brain; prepare_map.road_speeds converts, data files fixed in place",
+     "pod crawled at ~3 m/s and still 'sped' 13-38 s per route", "all 3992 lanes now 30 / 40 km/h as in the xodr"),
+    ("2026-11-13 16:5x", "drive", "bug", "CARLA bridge rebuilt: one bridge per pod (one was shared by all three), "
+     "observation from the training lane data (edge kinds, real limits, stop lines, signals with CARLA's light colour, "
+     "car ahead only in the pod's lane), decisions at the trained 10 Hz, steering scaled to the pod's real wheel angle, "
+     "acceleration -> pedal by a vehicle model (DRIVE_ACTUATOR, to be measured)",
+     "pods froze at full lock in CARLA", "tests/test_rl_bridge.py: 636 observations identical to env_drive on 6 routes"),
 ]
 
 BASELINES = [

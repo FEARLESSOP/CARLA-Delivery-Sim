@@ -111,6 +111,16 @@ the terminal stops everything. The pipeline's output is on the page
 (`data/pipeline.log`). Every option has a `live` / `map switch` / `restart`
 tag; the list is `launch_options.py`.
 
+**Manual driving window** (Launch page → Driving, on by default; flag
+`--no-manual-control` turns it off): off = no car of yours and no driving
+window. The CARLA window is the main view (Q / E follow the pods and drones),
+force feedback is not started, and the simulation runs until **Stop** on the
+dashboard (closing the CARLA window also ends it). Your-car and display
+options only apply with the window on.
+手動運転ウィンドウ（起動ページ → 運転、既定はオン）：オフにすると自分の車と運転
+ウィンドウを開かず、CARLA ウィンドウが主画面になります（Q / E でポッドやドローンを
+追従）。FFB は起動せず、ダッシュボードの停止で終了します。
+
 ランチャー: 引数なしで起動するとダッシュボードだけが立ち上がり、そこでマップ・
 交通量・配送車・自車などを選んで起動します。実行中は同じページでマップ切替・
 交通量・配送車・自車・各機能の入切を変更でき、再起動が必要な設定はボタン一つで

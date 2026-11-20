@@ -1,0 +1,194 @@
+{
+ "settings": {
+  "map": "OitaKosen",
+  "pods": 3,
+  "extra": "--drone-prob 0.9 --seed 7",
+  "minutes": 45.0
+ },
+ "runs": {
+  "B4": {
+   "run": "20261117_142356",
+   "sim_minutes": 38.9,
+   "delivered": 38,
+   "delivered_per_h": 58.57,
+   "delivered_drone": 36,
+   "drone_per_h": 55.48,
+   "failed": 0,
+   "crashes": 0,
+   "charge_trips": 23,
+   "mean_wait_s": 678.6,
+   "ready_n": 13,
+   "ready_mean_s": 48.3,
+   "paper1": {
+    "asked": 36,
+    "pod": 12,
+    "pod_next": 4,
+    "station": 19,
+    "skipped": 1,
+    "failed": 0,
+    "method": "B4",
+    "seed": 0
+   },
+   "kpi": {
+    "sim_hours": 0.649,
+    "pod": {
+     "deliveries": 2,
+     "per_hour": 3.08,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 455.6,
+     "lead_time_p95_s": 825.7,
+     "stranded": 0,
+     "out_of_zone_working_s": 4.0,
+     "per_pod": [
+      {
+       "pod": 1,
+       "deliveries": 1,
+       "utilisation": 1.0,
+       "charging_share": 0.312,
+       "stops": 10,
+       "mean_stop_s": 3.1,
+       "kwh_used": 5.834,
+       "kwh_per_delivery": 5.834,
+       "km_per_delivery": 3.107,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 0.0
+      },
+      {
+       "pod": 2,
+       "deliveries": 0,
+       "utilisation": 0.997,
+       "charging_share": 0.293,
+       "stops": 6,
+       "mean_stop_s": 2.5,
+       "kwh_used": 6.14,
+       "kwh_per_delivery": null,
+       "km_per_delivery": null,
+       "out_of_zone_working_s": 4.0,
+       "transit_other_zone_s": 1016.0
+      },
+      {
+       "pod": 3,
+       "deliveries": 1,
+       "utilisation": 0.999,
+       "charging_share": 0.283,
+       "stops": 9,
+       "mean_stop_s": 3.3,
+       "kwh_used": 5.738,
+       "kwh_per_delivery": 5.738,
+       "km_per_delivery": 2.67,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 360.4
+      }
+     ]
+    },
+    "drone": {
+     "deliveries": 36,
+     "per_hour": 55.48,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 691.0,
+     "lead_time_p95_s": 1901.2,
+     "flight_time_mean_s": 96.8,
+     "landing_battery_min": 10.9,
+     "landing_battery_mean": 71.9,
+     "crashes_per_100_trips": 0.0,
+     "weather_hold_s": 32.1,
+     "fleet_ready_share": 0.842,
+     "nofly_breach_samples": 1089,
+     "drops_outside_zone": 0
+    }
+   }
+  },
+  "off": {
+   "run": "20261117_142356",
+   "sim_minutes": 38.9,
+   "delivered": 38,
+   "delivered_per_h": 58.57,
+   "delivered_drone": 36,
+   "drone_per_h": 55.48,
+   "failed": 0,
+   "crashes": 0,
+   "charge_trips": 23,
+   "mean_wait_s": 678.6,
+   "ready_n": 13,
+   "ready_mean_s": 48.3,
+   "paper1": {
+    "asked": 36,
+    "pod": 12,
+    "pod_next": 4,
+    "station": 19,
+    "skipped": 1,
+    "failed": 0,
+    "method": "B4",
+    "seed": 0
+   },
+   "kpi": {
+    "sim_hours": 0.649,
+    "pod": {
+     "deliveries": 2,
+     "per_hour": 3.08,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 455.6,
+     "lead_time_p95_s": 825.7,
+     "stranded": 0,
+     "out_of_zone_working_s": 4.0,
+     "per_pod": [
+      {
+       "pod": 1,
+       "deliveries": 1,
+       "utilisation": 1.0,
+       "charging_share": 0.312,
+       "stops": 10,
+       "mean_stop_s": 3.1,
+       "kwh_used": 5.834,
+       "kwh_per_delivery": 5.834,
+       "km_per_delivery": 3.107,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 0.0
+      },
+      {
+       "pod": 2,
+       "deliveries": 0,
+       "utilisation": 0.997,
+       "charging_share": 0.293,
+       "stops": 6,
+       "mean_stop_s": 2.5,
+       "kwh_used": 6.14,
+       "kwh_per_delivery": null,
+       "km_per_delivery": null,
+       "out_of_zone_working_s": 4.0,
+       "transit_other_zone_s": 1016.0
+      },
+      {
+       "pod": 3,
+       "deliveries": 1,
+       "utilisation": 0.999,
+       "charging_share": 0.283,
+       "stops": 9,
+       "mean_stop_s": 3.3,
+       "kwh_used": 5.738,
+       "kwh_per_delivery": 5.738,
+       "km_per_delivery": 2.67,
+       "out_of_zone_working_s": 0.0,
+       "transit_other_zone_s": 360.4
+      }
+     ]
+    },
+    "drone": {
+     "deliveries": 36,
+     "per_hour": 55.48,
+     "success_rate": 1.0,
+     "lead_time_mean_s": 691.0,
+     "lead_time_p95_s": 1901.2,
+     "flight_time_mean_s": 96.8,
+     "landing_battery_min": 10.9,
+     "landing_battery_mean": 71.9,
+     "crashes_per_100_trips": 0.0,
+     "weather_hold_s": 32.1,
+     "fleet_ready_share": 0.842,
+     "nofly_breach_samples": 1089,
+     "drops_outside_zone": 0
+    }
+   }
+  }
+ }
+}
