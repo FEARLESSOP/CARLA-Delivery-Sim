@@ -1039,6 +1039,8 @@ class MarkingsJP(Markings):
                 break
             f = f2
             legs = self.leg_lanes(c, f, ref)
+        if not legs:
+            return None                  # the refined heading lost the lanes / 向きを直すと車線が無い
         n = np.array([-f[1], f[0]])
         t_l = [(float((q - c) @ n), l["pts"][min(len(l["pts"]) - 1, int(np.argmin([math.hypot(*(np.array(pt["c"]) - q))
                                                                                  for pt in l["pts"]])))]["w"])

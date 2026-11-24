@@ -27,7 +27,7 @@ driving window as one supervised process tree; the telemetry feeds the RL layer 
 This folder must be `<CARLA_ROOT>/PythonAPI/hil_sim`. `run_pipeline.py` derives
 `CARLA_ROOT = BASE_DIR.parent.parent`, starts every child with `<CARLA_ROOT>/carla-venv/bin/python`,
 the simulator with `<CARLA_ROOT>/CarlaUE4.sh` (PRIME offload env on this hybrid GPU), and loads
-maps with `load_world_map()` (a throwaway client, 120 s + a check of the loaded map name; the old
+maps with `load_world_map()` (a throwaway client, 120 s or the map's maps.json `load_timeout_s`, + a check of the loaded map name; the old
 `PythonAPI/util/config.py` gave up after 10 s and every client timed out on the big OitaStation).
 Nested one level deeper, the run dies with `ERROR: venv python not found`.
 

@@ -1,6 +1,8 @@
 """Road signs into the road logic, for CARLA to spawn its own sign models.
 
   python signs.py <out_dir>          (after build.py; edits <Name>.xodr)
+  python signs.py <out_dir> --lights-only   (Singapore LTA: lights to the painted lines only)
+  python signs.py <out_dir> --phases-only   (signal phases only, every light kept: xodr-only update of an imported map)
 
 CARLA makes its own sign props from OpenDRIVE signals of three types: give
 way (205), stop (206) and speed limit (274, 30-120 km/h). Singapore
@@ -15,8 +17,9 @@ practice:
 netconvert's keep-left roads have only negative lanes, with the reference
 line along the kerb, so t > 0 is beyond the kerb.
 
-maps.json "jartic_d" (Japan, police data, guide ch. 18): signal controllers
-split into phases (signal_phases.py; "phases": false keeps them); roads along JARTIC
+maps.json "jartic_d" (Japan, police data, guide ch. 18) or "signal_phases": true
+(other countries, e.g. PasirRisTampines): signal controllers split into phases
+(signal_phases.py; jartic "phases": false keeps them); roads along JARTIC
 最高速度 lines get that lane speed (crossings.pkl "speed_set"), and stops are
 named "Stencil_STOP": CARLA then spawns no octagonal STOP model for them
 (TrafficLightManager skips that name) while the traffic manager still stops
@@ -70,7 +73,29 @@ def stop_setback(lanes, crossings):
     return best
 
 
-def light_stops(root, crossings, lanes_json):
+def painted_backs(out):
+    """Singapore LTA maps (markings.pkl "style": "sg_lta", markings_sg.py): {road: distance of
+    the painted stop line's front edge from the lane end}, so the lights go where the paint
+    is (the JP rule below put CARLA's stop 2.5 m past 415 LTA lines). Empty elsewhere.
+    LTA 式の地図: 実際に描いた停止線の位置（日本の規則で計算すると 415 本で停止位置がずれた）。"""
+    import pickle
+    p = os.path.join(out, "markings.pkl")
+    if not os.path.exists(p):
+        return {}
+    m = pickle.load(open(p, "rb"))
+    if m.get("style") != "sg_lta":
+        return {}
+    backs = {}
+    for e in m["elements"]:
+        if e["kind"] == "stop_signal" and e.get("back") is not None:
+            backs[int(e["road"])] = max(backs.get(int(e["road"]), 0.0), float(e["back"]))
+    return backs
+
+
+SG_STOP_W = 0.30       # LTA J line / LTA の停止線幅
+
+
+def light_stops(root, crossings, lanes_json, painted=None):
     """Each traffic light (netconvert put it 4 m before the junction: CARLA's stop
     waypoint landed ~2.5 m past the painted line, on the crossing) moves along its
     road so the stop waypoint is STOP_BEHIND m behind the painted stop line. Keep-left
@@ -95,10 +120,29 @@ def light_stops(root, crossings, lanes_json):
             continue
         last = max(l["section"] for l in lanes)
         lanes = [l for l in lanes if l["section"] == last]
-        back = stop_setback(lanes, crossings)
-        s_new = max(0.5, L - back - STOP_W - STOP_BEHIND)
+        if painted:
+            # Singapore LTA: the painted line; a road without one had its line moved upstream
+            # (short approach, markings_sg): the light at the road's start
+            # LTA: 描いた停止線へ（線が手前の道路に移った短い進入路は道路の始点へ）
+            import numpy as np
+            back = painted.get(int(road.get("id")), L)
+            # along the lane, not the reference line (they differ by up to 0.7 m on bends)
+            # 参照線ではなく車線に沿って（曲線で最大 0.7 m 違う）
+            s_new = L
+            for ln_ in lanes:                  # behind the line on every lane / 全車線で停止線の手前
+                C = np.array([q["c"] for q in ln_["pts"]])
+                if len(C) < 2:
+                    continue
+                cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(C, axis=0).T))])
+                sx = np.array([q["s"] for q in ln_["pts"]])
+                want = max(0.0, cum[-1] - back - SG_STOP_W - STOP_BEHIND)
+                s_new = min(s_new, float(np.interp(want, cum, sx)) if sx[-1] >= sx[0] else L - want)
+            s_new = min(max(0.0, L - 0.05), max(min(0.5, L / 2), s_new))
+        else:
+            back = stop_setback(lanes, crossings)
+            s_new = max(0.5, L - back - STOP_W - STOP_BEHIND)
         for s in sigs:
-            if float(s.get("s")) < L / 2:
+            if float(s.get("s")) < L / 2 and not painted:
                 continue                       # faces the start of its road (not on keep-left netconvert roads) / 始点向き
             log.append((road.get("id"), round(float(s.get("s")), 2), round(s_new, 2), round(back, 2)))
             # the pole stays where netconvert stood it (the junction corner, past
@@ -117,7 +161,69 @@ def light_stops(root, crossings, lanes_json):
     return moved
 
 
+def phases_wanted(meta, jc):
+    """Split the junction controllers into phases? JARTIC maps (unless "phases": false) and
+    maps.json "signal_phases": true. netconvert's one controller per junction makes every
+    approach green at once. / 現示に分けるか（JARTIC 地図、または maps.json "signal_phases"）。"""
+    import jartic
+    if jc:
+        return bool(jc.get("phases", True))
+    return bool(meta.get("signal_phases") or jartic.entry(meta.get("name")).get("signal_phases"))
+
+
+def phases_only(out):
+    """--phases-only: split the signal controllers of an already signed xodr into phases
+    (signal_phases.py) and redo lanes.json; both written to a temp file and renamed
+    (atomic: other agents copy from the build dir). / 現示の分割だけ（一時ファイル→改名）。"""
+    import json
+    import subprocess
+    import signal_phases
+    meta = json.load(open(os.path.join(out, "meta.json")))
+    xodr = os.path.join(out, meta["name"] + ".xodr")
+    tree = ET.parse(xodr)
+    root = tree.getroot()
+    # every light stays (the imported level's light actors need their signal ids)
+    # 信号は消さない（取込み済みのレベルの信号機が ID を参照する）
+    done = signal_phases.split(root, os.path.join(out, "lanes.json"), drop_stubs=False)
+    print("signal phases: %d junction controllers split (no light removed)" % len(done))
+    tmp = xodr + ".tmp"
+    tree.write(tmp, encoding="utf-8", xml_declaration=True)
+    py = os.path.join(HERE, "..", "..", "..", "..", "carla-venv", "bin", "python")
+    py = py if os.path.exists(py) else sys.executable
+    lt = os.path.join(out, "lanes.json.tmp")
+    subprocess.check_call([py, os.path.join(HERE, "lanes.py"), tmp, lt])
+    os.replace(tmp, xodr)
+    os.replace(lt, os.path.join(out, "lanes.json"))
+
+
+def lights_only(out):
+    """--lights-only: only move the lights to the painted stop lines of an already signed
+    xodr (Singapore LTA maps, painted_backs), then lht_poles and lanes.py, in minutes
+    instead of the whole signs pass. / 信号の位置だけを描いた停止線へ（標識は触らない）。"""
+    import json
+    import subprocess
+    meta = json.load(open(os.path.join(out, "meta.json")))
+    xodr = os.path.join(out, meta["name"] + ".xodr")
+    painted = painted_backs(out)
+    if not painted:
+        raise SystemExit("--lights-only: no Singapore LTA markings.pkl in %s" % out)
+    tree = ET.parse(xodr)
+    root = tree.getroot()
+    extra = pickle.load(open(os.path.join(out, "crossings.pkl"), "rb"))
+    moved = light_stops(root, extra.get("crossings", []), os.path.join(out, "lanes.json"), painted)
+    tree.write(xodr, encoding="utf-8", xml_declaration=True)
+    py = os.path.join(HERE, "..", "..", "..", "..", "carla-venv", "bin", "python")
+    py = py if os.path.exists(py) else sys.executable
+    if moved and meta.get("lefthand"):
+        subprocess.check_call([py, os.path.join(HERE, "lht_poles.py"), xodr, xodr], stdout=subprocess.DEVNULL)
+    subprocess.check_call([py, os.path.join(HERE, "lanes.py"), xodr, os.path.join(out, "lanes.json")])
+
+
 def main():
+    if "--lights-only" in sys.argv:
+        return lights_only(sys.argv[1])
+    if "--phases-only" in sys.argv:
+        return phases_only(sys.argv[1])
     out = sys.argv[1]
     import json
     meta = json.load(open(os.path.join(out, "meta.json")))
@@ -202,7 +308,8 @@ def main():
             road.remove(sigs)
     import jartic
     jc = jartic.config(meta)
-    if jc and jc.get("phases", True):
+    phases = phases_wanted(meta, jc)
+    if phases:
         # one controller per junction makes every approach green at once: phases by axis
         # 交差点に 1 つのコントローラだと全方向同時に青: 軸ごとの現示に分ける
         import signal_phases
@@ -212,7 +319,7 @@ def main():
                   % ", ".join("%s road %d" % q for q in signal_phases.split.removed))
         print("signal phases: %d junction controllers split: %s" % (
             len(done), ", ".join("%s %s" % (k[-12:], "/".join(str(len(g)) for g in v)) for k, v in done.items())))
-    moved = light_stops(root, extra.get("crossings", []), os.path.join(out, "lanes.json"))
+    moved = light_stops(root, extra.get("crossings", []), os.path.join(out, "lanes.json"), painted_backs(out))
     tree.write(xodr, encoding="utf-8", xml_declaration=True)
     if moved and meta.get("lefthand"):
         # the pole's keep-left side is chosen for its s: lht_poles again, then the lanes
@@ -221,7 +328,7 @@ def main():
         py = os.path.join(HERE, "..", "..", "..", "..", "carla-venv", "bin", "python")
         py = py if os.path.exists(py) else sys.executable
         subprocess.check_call([py, os.path.join(HERE, "lht_poles.py"), xodr, xodr], stdout=subprocess.DEVNULL)
-    if jc and jc.get("phases", True) or moved:
+    if phases or moved:
         import subprocess
         py = os.path.join(HERE, "..", "..", "..", "..", "carla-venv", "bin", "python")
         py = py if os.path.exists(py) else sys.executable

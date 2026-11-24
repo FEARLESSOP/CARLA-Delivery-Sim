@@ -30,7 +30,8 @@ VENV_PY    = CARLA_ROOT / "carla-venv" / "bin" / "python"
 
 and it launches every child process with `VENV_PY` and the simulator via
 `CARLA_ROOT/CarlaUE4.sh`. Maps are loaded by `load_world_map()` (a throwaway
-client: 120 s, then it checks the loaded map's name). It replaced
+client: 120 s or the map's maps.json `load_timeout_s` (PasirRisTampines 300 s),
+then it checks the loaded map's name). It replaced
 `PythonAPI/util/config.py`, whose 10 s wait made every client time out on the
 big extended OitaStation (2026-11-09; `tests/test_map_switch.py`,
 `tests/test_pipeline_control.py`).

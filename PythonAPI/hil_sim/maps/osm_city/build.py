@@ -2,6 +2,12 @@
 
   python build.py <osm> <out_dir>        (after roadnet.py and lanes.py)
 
+Opt-in for iterating on one site (landmark work on a scratch copy only):
+BUILD_AREA="x0,y0,x1,y1" (map frame) builds and saves only the tiles that
+meet the box and the generic buildings inside it; the plan preview is
+skipped. Never use it for a real build (the other tiles are missing).
+1 か所だけ試す時（作業用コピーのみ）: BUILD_AREA で範囲内のタイルと建物だけ作る。
+
 Writes <out_dir>/meshes/*.npz (one per object: per material vertices,
 normals, UVs, triangles), <out_dir>/meshes/manifest.json, the textures,
 <out_dir>/buildings.csv (for delivery_sim: the map's buildings are
@@ -24,9 +30,10 @@ sys.path.insert(0, HERE)
 import buildings  # noqa: E402
 import extras  # noqa: E402
 import sitefeatures  # noqa: E402
-from landmarks import akeno, dorm, kosen, lvss, prcs, seven  # noqa: E402
+from landmarks import akeno, coral, dorm, dte, kosen, lvss, prcs, prcs_v2, prs11, seven, tp, wsm, wsps  # noqa: E402
 from shapely.geometry import Point  # noqa: E402
 from shapely.ops import unary_union  # noqa: E402
+import flyover  # noqa: E402
 import ground  # noqa: E402
 import layout  # noqa: E402
 import markings  # noqa: E402
@@ -78,12 +85,23 @@ def main():
     osm, out = sys.argv[1:3]
     t0 = time.time()
     meta = json.load(open(os.path.join(out, "meta.json")))
+    area = None
+    if os.environ.get("BUILD_AREA"):
+        # opt-in: one site only, for landmark iteration on a scratch copy / 1 か所だけ（作業用）
+        from shapely.geometry import box as _box
+        area = _box(*[float(v) for v in os.environ["BUILD_AREA"].split(",")])
+        print("BUILD_AREA %s: only the tiles meeting it are built (scratch use only)" % (area.bounds,), flush=True)
     name = meta["name"]
     style = road_style(name)
     if style:
         meta["road_style"] = style
     if road_style(name, "ring_guardrail"):
         meta["ring_guardrail"] = True      # props.py: guardrail on the ring's outer kerb / 外周ガードレール
+    sg = road_style(name, "sg_lta")
+    if sg:
+        # Singapore LTA markings and road surfaces (markings_sg, surfaces_sg, textures_sg;
+        # guide ch. 51); other maps build exactly as before / シンガポール LTA 式の標示と路面
+        meta["sg_lta"] = sg if isinstance(sg, dict) else {}
     L = layout.Layout(meta, os.path.join(out, "lanes.json"), osm, write_bays=True)   # -> bus_bays.json
     print(L.summary(), flush=True)
     # hilly maps: the ground follows the elevated road logic and the terrain
@@ -97,7 +115,13 @@ def main():
     # the class, write_textures() / 各詳細モデル: 名前・タグ・トレース・クラス
     marks = []
     for mod, cls in ((prcs, prcs.PRCS), (lvss, lvss.LVSS), (kosen, kosen.KOSEN), (seven, seven.SEVEN),
-                     (dorm, dorm.DORM), (akeno, akeno.AKENO)):
+                     (dorm, dorm.DORM), (akeno, akeno.AKENO), (dte, dte.DTE),
+                     (coral, coral.CORAL), (prs11, prs11.PRS11), (prcs_v2, prcs_v2.PRCS2),
+                     (wsm, wsm.WSM), (tp, tp.TP), (wsps, wsps.WSPS)):
+        # PasirRisTampines: PRCS from prcs_v2 (same trace file name); prcs.py
+        # stays for PasirRis / この地図の PRCS は prcs_v2（PasirRis は prcs.py のまま）
+        if mod is prcs and prcs_v2.enabled(out, meta):
+            continue
         # a module with enabled(): switched on by its maps.json entry (akeno:
         # "area_features"), the others by their trace file / maps.json で有効化するモジュール
         if (mod.enabled(out, meta) if hasattr(mod, "enabled") else os.path.exists(os.path.join(out, mod.TRACE))):
@@ -151,9 +175,30 @@ def main():
         surfaces = surfaces_jp.partition(L, M)
         print("road surfaces: %s" % ", ".join("%s %.0f m2" % (k, float(np.sum(shapely_area(v))))
                                                for k, v in surfaces.items()), flush=True)
+    elif sg:
+        import markings_sg
+        import surfaces_sg
+        from shapely import area as shapely_area
+        M = markings_sg.MarkingsSG(L, os.path.join(out, name + ".xodr"), meta["sg_lta"])
+        print("markings (singapore, LTA): %s" % M.report(), flush=True)
+        L.kerb_paint_zone = M.bw_zone()     # ground.py: black-and-white kerbs only there / 白黒縁石の範囲
+        for src, c, why in getattr(M, "left_out", []):
+            print("  crossing left out (%s): %s at %s" % (why, src, c), flush=True)
+        surfaces = surfaces_sg.partition(L, M)
+        print("road surfaces: %s" % ", ".join("%s %.0f m2" % (k, float(np.sum(shapely_area(v))))
+                                               for k, v in surfaces.items()), flush=True)
     else:
         M = markings.Markings(L)
     print("markings: %d pieces, crossings %d" % (len(M.out), len(M.crossings)), flush=True)
+    if meta.get("roadnet") and style != "japan":
+        # large maps: a paved landing at every crossing end (pads + paths to the footpaths)
+        # 大きな地図: 横断歩道の両端に取付け歩道
+        land = layout.crossing_landings(L, M.crossings)
+        L.aprons = layout.clean(unary_union([L.aprons, land]), 0.05)
+        for nm in ("islands", "parks", "forest", "pitches", "playgrounds"):
+            # one surface per spot (two at 0.15 m render black) / 同じ高さの重複を作らない
+            setattr(L, nm, layout.clean(getattr(L, nm).difference(land), 0.05))
+        print("crossing landings: %.0f m2" % land.area, flush=True)
     # what imagery adds: colours, courts, fences, playgrounds, boards / 画像から読んだ情報
     S = sitefeatures.Sites(out, meta)
     lanes_data = json.load(open(os.path.join(out, "lanes.json")))
@@ -195,6 +240,18 @@ def main():
         L.terraces = unary_union(([lot_terraces] if lot_terraces is not None else [])
                                  + [lm.ground_taken() for lm in draped])
     G = ground.Ground(L, M.out, M.crossings, drape=D, surfaces=surfaces)
+    # flat maps with flyovers (maps.json "roadnet", grade_sep.py): decks, parapets,
+    # embankments, piers on the raised lanes / 平坦な地図の立体交差（橋面・高欄・擁壁・橋脚）
+    FO = flyover.Flyovers(L) if meta.get("layer_elevation") and D is None else None
+    if FO is not None:
+        print(FO.summary(), flush=True)
+    MD = None
+    if sg and FO is not None and FO.decks:
+        # the flyover lanes get the same LTA markings, draped on the deck mesh below
+        # (in place of flyover.py's plain lane lines) / 高架の車線にも LTA 式の標示（橋面に貼る）
+        MD = markings_sg.MarkingsSG(L, os.path.join(out, name + ".xodr"), meta["sg_lta"], level="deck",
+                                    cw=FO.footprint)
+        print("markings on decks: %s" % MD.report(), flush=True)
     if draped:
         L.terraces = lot_terraces                # only the grass base leaves the sites out / 芝の除外のみ
         for nm, v in before.items():
@@ -210,6 +267,10 @@ def main():
         keep.append(lm.keepout())
     if getattr(L, "terraces", None) is not None:
         keep.append(L.terraces.buffer(0.3))
+    if FO is not None and FO.decks:
+        # no tree crown or lamp head in a flyover deck's lanes (crowns stood 2.6 m over
+        # them: check_drive blocked) / 橋面の車線に樹冠・街灯が入らないように
+        keep.append(FO.footprint.buffer(flyover.TREE_CLEAR))
     L.drape = D                  # props.py: lamps by dead-end heads not on lower ground / 低い地面に置かない
     P = props.Props(L, M.crossings, keepout=unary_union(keep))
     P.drape = D
@@ -233,6 +294,15 @@ def main():
                 P.trees = [t for t in P.trees if not tc.contains(Point(t[0], t[1]))] + lm.trees()
             P.items = [it for it in P.items if not (ko.intersects(it[1]) if hasattr(it[1], "geom_type")
                                                     else ko.contains(Point(it[1][0], it[1][1])))]
+    for lm in marks_old:
+        if hasattr(lm, "items_clear"):
+            # generic furniture of the kinds a landmark replaces (prs11: bus shelters,
+            # covered walks) / 詳細モデルが置き換える種類の汎用の小物
+            ic, kinds = lm.items_clear, lm.items_kinds
+            P.items = [it for it in P.items if it[0] not in kinds or not (
+                ic.intersects(it[1]) if hasattr(it[1], "geom_type") else ic.contains(Point(it[1][0], it[1][1])))]
+        if hasattr(lm, "tree_filter"):
+            P.trees = lm.tree_filter(P.trees)    # crowns that would sag over its street / 樹冠が道路に垂れる木
     print("trees %d, furniture %d" % (len(P.trees), len(P.items))
           + (", lamps left out (pinched mouths, dead ends, narrow islands) %d" % P.lamps_skipped
              if getattr(P, "lamps_skipped", 0) else "")
@@ -249,11 +319,17 @@ def main():
         os.remove(os.path.join(mesh_dir, f))
     manifest = {"name": name, "objects": [], "materials": {k: list(v[:1]) + [list(v[1]) if v[1] else None]
                                                            + list(v[2:]) for k, v in textures.materials(style).items()}}
+    if sg:
+        import textures_sg
+        manifest["materials"].update({k: list(v[:1]) + [list(v[1]) if v[1] else None] + list(v[2:])
+                                      for k, v in textures_sg.MATERIALS.items()})
     # buildings, grouped into the ground tiles / 建物はタイルごとにまとめる
     btile = {}
     rows = []
     plinths = []
     for i, (poly, t) in enumerate(L.buildings):
+        if area is not None and not area.intersects(poly):
+            continue
         m = B.build(poly, t, i)
         if m is None:
             continue
@@ -292,6 +368,9 @@ def main():
                   "school": lv * 3.5 + 1.0, "worship": max(2, lv) * 3.8 + 4.0}.get(st, lv * 3.6 + 1.0)
         if B.jp:
             height = getattr(it, "height", height)
+        if i in B.made:
+            # maps.json building options: the style, storeys and height built / 実際に建てた様式・階数・高さ
+            st, lv, height = B.made[i]
         rows.append({"id": "b%d" % i, "name": t.get("name") or ("Blk %s" % t["addr:housenumber"]
                                                                if t.get("addr:housenumber") else ""),
                      "height_m": round(height, 1), "x_east_m": round(c.x, 2), "y_north_m": round(c.y, 2),
@@ -300,6 +379,8 @@ def main():
         if D is not None:
             rows[-1]["z_base_m"] = round(zb, 2)
     print("buildings built: %s" % B.count, flush=True)
+    if B.geo is not None:
+        print("buildings_geojson: %s" % B.geo_stats, flush=True)
     if B.jp:
         J = B.jp_styles()
         # the shop / office entrances buildings_jp drew, for the shop-front props
@@ -319,7 +400,27 @@ def main():
         print("plinths: %d buildings on slopes, height %.1f m median, %.1f m max"
               % (len(plinths), float(np.median(plinths)), max(plinths)), flush=True)
     for tn, tb in ground.tiles(meta):
-        for kind, m in G.build(tb).items():
+        if area is not None and not area.intersects(tb):
+            continue
+        gb = G.build(tb)
+        for lm in marks:
+            if hasattr(lm, "walk_mesh"):
+                # a landmark's paths, plaza decks and ramps walkers use (tp, ch. 49): into the
+                # tile's Road_Sidewalk / 詳細モデルの小道・デッキ・スロープを歩道として
+                wm = lm.walk_mesh(tb)
+                if wm.ntris():
+                    gb.setdefault("Road_Sidewalk", Mesh()).merge(wm)
+        for kind, m in gb.items():
+            save(mesh_dir, "%s_%s_%s" % (kind, name, tn), m, manifest, kind)
+        fb = FO.build(tb) if FO is not None else {}
+        if MD is not None and "Road_RoadDeck" in fb:
+            fb["Road_MarkingDeck"] = Mesh()
+            on_deck = ground.RoadSurface(fb["Road_RoadDeck"])
+            for g, col in MD.out:
+                if g.intersects(tb):
+                    on_deck.paint(fb["Road_MarkingDeck"], "line_white_sg" if col == "w" else "line_yellow_sg",
+                                  g.intersection(tb), ground.PAINT_Z, uv_scale=1.0)
+        for kind, m in fb.items():
             save(mesh_dir, "%s_%s_%s" % (kind, name, tn), m, manifest, kind)
         # leaf objects are shared by the generic trees and the landmarks' own
         # trees: merged per tile, saved once (a second save overwrote the first
@@ -349,6 +450,12 @@ def main():
             save(mesh_dir, "%s_%s_%s" % (kind, name, tn), lm_, manifest, kind)
         save(mesh_dir, "Terrain_Sites_%s_%s" % (name, tn), X.props_mesh(tb), manifest, "sites")
     tex_dir = textures.write_all(out, style)
+    if sg:
+        textures_sg.write(tex_dir)          # Singapore road surfaces and paint / 路面・標示
+    # Street View paints with weathering (colour_notes.json "palette_sg"; none on other maps)
+    # 観測色の風化テクスチャ（palette_sg がある地図のみ）
+    for k, v in textures.write_palette(out, tex_dir).items():
+        manifest["materials"][k] = [v[0], None, v[2], v[3], v[4]]
     for lm in marks:
         for k, v in lm.mod.write_textures(tex_dir).items():
             manifest["materials"][k] = [v[0], None, v[2], v[3], v[4]]
@@ -375,8 +482,8 @@ def main():
     road = L.carriageway.buffer(-0.02)
     bad = 0
     for o in manifest["objects"]:
-        if o["kind"] in ("Road_Road", "Road_Marking"):
-            continue
+        if o["kind"] in ("Road_Road", "Road_Marking", "Road_RoadDeck", "Road_MarkingDeck", "Terrain_Flyover"):
+            continue                # (flyovers: check_drive.py / check_roads.py measure them)
         d = np.load(os.path.join(mesh_dir, o["name"] + ".npz"))
         for k in d.files:
             if not k.endswith("|V") or k == "asphalt_rosoku|V":
@@ -394,7 +501,8 @@ def main():
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
-    layout.preview(L, os.path.join(out, "plan.png"), 1.0)
+    if area is None:
+        layout.preview(L, os.path.join(out, "plan.png"), 1.0)
     extra = {"crossings": M.crossings, "giveway": M.giveway}
     if getattr(M, "stops", None) is not None:
         extra["stop"] = M.stops            # Japan: 止まれ approaches get stop signs / 止まれの進入路に一時停止標識
@@ -408,8 +516,11 @@ def main():
     if hasattr(M, "elements"):
         # Japan: every marking as an element (kind, geometry, road / junction /
         # lane) for osm_city/check_markings.py / 標示の要素記録（check_markings.py 用）
-        pickle.dump({"elements": M.elements, "cls": getattr(M, "cls", {})},
-                    open(os.path.join(out, "markings.pkl"), "wb"))
+        els = M.elements + ([dict(e, level="deck") for e in MD.elements] if MD is not None else [])
+        rec = {"elements": els, "cls": getattr(M, "cls", {})}
+        if sg:
+            rec["style"] = "sg_lta"        # check_markings.py: the Singapore rule set / 検査規則の切替
+        pickle.dump(rec, open(os.path.join(out, "markings.pkl"), "wb"))
     tot = sum(o["tris"] for o in manifest["objects"])
     if getattr(P, "dropped_over_road", 0):
         print("trees left out, built crown over a road below %.1f m: %d" % (props.CLEAR_OVER_ROAD, P.dropped_over_road))

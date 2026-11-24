@@ -80,9 +80,13 @@ class Sites(object):
     def of_type(self, *types):
         return [f for f in self.features if f["type"] in types]
 
-    def colours(self, poly, style, max_dist=260.0):
+    def colours(self, poly, style, max_dist=None):
         """The colours seen on the nearest observed building of a like kind
-        (HDB-like or condo-like), or None. / 最寄りの観測建物の配色。"""
+        (HDB-like or condo-like), or None. max_dist: colour_notes.json
+        "obs_max_dist" (sparse samples over a large map), else 260 m.
+        最寄りの観測建物の配色（距離の上限は obs_max_dist、既定 260 m）。"""
+        if max_dist is None:
+            max_dist = float(self.notes.get("obs_max_dist", 260.0))
         c = poly.centroid
         kinds = {"hdb": ("hdb", "carpark"), "carpark": ("hdb", "carpark"), "condo": ("condo",),
                  "worship": ("worship",), "house": ("house", "condo")}.get(style, (style,))

@@ -242,7 +242,28 @@ def world_map_name(host, port, timeout=10.0):
     return None
 
 
-def load_world_map(host, port, name, timeout=120.0):
+MAP_LOAD_TIMEOUT = 120.0
+
+
+def map_load_timeout(map_name):
+    """Seconds to wait for a map load: maps.json "load_timeout_s" of your own map
+    (a 24 km2 map loads for minutes), else MAP_LOAD_TIMEOUT. / マップ読込の待ち時間
+    （自作マップの maps.json "load_timeout_s"、無ければ既定 120 秒）。"""
+    short = map_switch.short_name(map_name)
+    try:
+        maps = json.load(open(BASE_DIR / "maps" / "maps.json"))
+    except (OSError, ValueError):
+        return MAP_LOAD_TIMEOUT
+    for m in maps.values():
+        if isinstance(m, dict) and m.get("name") == short:
+            try:
+                return float(m.get("load_timeout_s") or MAP_LOAD_TIMEOUT)
+            except (TypeError, ValueError):
+                return MAP_LOAD_TIMEOUT
+    return MAP_LOAD_TIMEOUT
+
+
+def load_world_map(host, port, name, timeout=None):
     """Load a map in a throwaway client and confirm it is the one loaded.
 
     util/config.py gives load_world only 10 s; a big own map (OitaKosen)
@@ -256,7 +277,10 @@ def load_world_map(host, port, name, timeout=120.0):
     （OitaKosen）では読込中なのに失敗を返す。ここでは ``timeout`` まで待ち、
     タイムアウト後も読込済みマップ名を確認してから失敗と判断する。別プロセス
     なので libcarla の abort もパイプラインに及ばない。
+    ``timeout`` None = map_load_timeout(name) (maps.json "load_timeout_s").
     """
+    if timeout is None:
+        timeout = map_load_timeout(name)
     code = ("import carla\n"
             "c = carla.Client('%s', %d)\n"
             "c.set_timeout(%.1f)\n"
@@ -620,6 +644,18 @@ def main():
                         "するまでの秒数。町全体の交通生成には時間がかかる"
                         "（既定 90）")
     args = p.parse_args()
+
+    # "NPC traffic off" = an empty world, but generate_traffic still runs as the
+    # tick master with 0 cars / walkers / cyclists. Without it nothing stepped the
+    # synchronous world unless the delivery sim started and took over, so the
+    # driving window opened black (no frames) and stayed black with 0 pods or
+    # while the sim was still loading a big map. Cars can then be added live.
+    # 交通オフ＝空のワールドだが、tick マスタ（generate_traffic、0 台）は動かす。
+    # 以前は配送シムが tick を引き継がない限りワールドが進まず、運転ウィンドウが
+    # 黒いままだった。
+    if args.no_traffic:
+        args.vehicles = args.walkers = args.cyclists = 0
+        args.no_traffic = False
 
     if not VENV_PY.exists():
         print("[pipeline] ERROR: venv python not found at %s" % VENV_PY)

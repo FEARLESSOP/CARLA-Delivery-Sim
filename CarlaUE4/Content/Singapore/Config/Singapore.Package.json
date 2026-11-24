@@ -5,6 +5,11 @@
             "name": "PasirRis",
             "path": "/Game/Singapore/Maps/PasirRis",
             "use_carla_materials": false
+        },
+        {
+            "name": "PasirRisTampines",
+            "path": "/Game/Singapore/Maps/PasirRisTampines",
+            "use_carla_materials": false
         }
     ]
 }

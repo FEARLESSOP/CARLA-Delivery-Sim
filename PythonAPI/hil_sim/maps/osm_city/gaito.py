@@ -11,7 +11,14 @@ rebuilding the map. Output, in CARLA's frame (x east, y south, metres):
 build_map.sh step 2g spawns BP_JpGaito (CARLA's street-light BP with our
 glowing plate, guide ch. 28) at each.
 
+maps.json "gaito_lit" (opt-in per map, by meta.json's name; maps without it light
+every head as before): only heads within ``reach_m`` of a non-junction lane whose
+OSM way (xodr sumoId -> <Name>.ring.osm) has one of ``highways`` (or the Ring Road
+with ``ring``), at least ``spacing_m`` apart (grown 10 % at a time until <= ``max``),
+get a light; the rest stay unlit lamp meshes (PasirRisTampines: 13.6 k heads).
+
 街灯の灯具位置をメッシュから取り出す（lamp_head の 0.7 x 0.3 m 上面）。
+maps.json "gaito_lit": 幹線沿いの灯具のみ点灯（間隔・上限付き）、他は消灯のまま。
 """
 
 import collections
@@ -20,6 +27,7 @@ import json
 import math
 import os
 import sys
+import xml.etree.ElementTree as ET
 
 import numpy as np
 
@@ -74,6 +82,83 @@ def find_heads(build):
     return rows
 
 
+def lit_options(build):
+    """maps.json "gaito_lit" of this build's map (first entry of its name), or None.
+    / この地図の点灯条件。"""
+    try:
+        name = json.load(open(os.path.join(build, "meta.json")))["name"]
+        maps = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "maps.json")))
+    except (OSError, ValueError, KeyError):
+        return None
+    for v in maps.values():
+        if isinstance(v, dict) and v.get("name") == name:
+            return v.get("gaito_lit")
+    return None
+
+
+def main_lanes(build, opt):
+    """CARLA-frame (x, y) samples of the non-junction lanes whose OSM way is in
+    opt["highways"] (or named Ring Road), and of all other non-junction lanes.
+    / 幹線の車線点と、その他の車線点（CARLA 座標）。"""
+    name = json.load(open(os.path.join(build, "meta.json")))["name"]
+    hw = {}
+    for _, el in ET.iterparse(os.path.join(build, name + ".ring.osm")):
+        if el.tag == "way":
+            t = {c.get("k"): c.get("v") for c in el.findall("tag")}
+            if "highway" in t:
+                hw[el.get("id")] = t["highway"]
+            el.clear()
+        elif el.tag == "node":
+            el.clear()
+    way = {}
+    for r in ET.parse(os.path.join(build, name + ".xodr")).getroot().findall("road"):
+        u = r.find("userData[@code='sumoId']")
+        if u is not None:
+            way[int(r.get("id"))] = u.get("value").lstrip("-").split("#")[0]
+    keep = set(opt.get("highways", ()))
+    main, other = [], []
+    for l in json.load(open(os.path.join(build, "lanes.json")))["lanes"]:
+        if l.get("junction", -1) != -1:
+            continue
+        lit = hw.get(way.get(l["road"], ""), "") in keep or (opt.get("ring") and l.get("name") == "Ring Road")
+        (main if lit else other).extend((p["c"][0], -p["c"][1]) for p in l["pts"])
+    return np.array(main, float).reshape(-1, 2), np.array(other, float).reshape(-1, 2)
+
+
+def spaced(P, d):
+    """Indices of a greedy subset of points P at least d apart (grid hash). / 間隔 d 以上の部分集合。"""
+    grid, out = {}, []
+    for i, (x, y) in enumerate(P):
+        gx, gy = int(math.floor(x / d)), int(math.floor(y / d))
+        if any((x - P[j][0]) ** 2 + (y - P[j][1]) ** 2 < d * d
+               for a in (-1, 0, 1) for b in (-1, 0, 1) for j in grid.get((gx + a, gy + b), ())):
+            continue
+        grid.setdefault((gx, gy), []).append(i)
+        out.append(i)
+    return out
+
+
+def lit_heads(build, rows, opt):
+    """The heads that get a light under opt (see the module doc). / 点灯する灯具。"""
+    from scipy.spatial import cKDTree
+    main, other = main_lanes(build, opt)
+    if not len(rows) or not len(main):
+        return []
+    H = np.array([[r[0], r[1]] for r in rows])
+    dm, _ = cKDTree(main).query(H)
+    do = cKDTree(other).query(H)[0] if len(other) else np.full(len(H), np.inf)
+    reach = float(opt.get("reach_m", 12.0))
+    cand = [i for i in np.lexsort((H[:, 1], H[:, 0])) if dm[i] <= reach and dm[i] <= do[i]]
+    d, cap = float(opt.get("spacing_m", 30.0)), int(opt.get("max", 3000))
+    while True:
+        pick = spaced(H[cand], d)
+        if len(pick) <= cap:
+            break
+        d *= 1.1
+    print("[gaito] lit: %d candidates by main roads, spacing %.1f m -> %d" % (len(cand), d, len(pick)))
+    return [rows[cand[i]] for i in pick]
+
+
 def self_test():
     # one head, rotated 30 deg, top at z 10: two triangles, unshared vertices
     a = math.radians(30.0)
@@ -94,6 +179,16 @@ def main():
         return
     build = sys.argv[1]
     rows = find_heads(build)
+    opt = lit_options(build)
+    if opt:
+        # maps.json "gaito_lit": lights only by the main roads / 幹線沿いのみ点灯
+        n_all = len(rows)
+        rows = lit_heads(build, rows, opt)
+        json.dump({"heads": rows, "frame": "carla", "note": "x, y, z of the head's underside (m), yaw (deg)",
+                   "all_heads": n_all, "unlit": n_all - len(rows)},
+                  open(os.path.join(build, "gaito.json"), "w"))
+        print("[gaito] %d lamp heads lit of %d -> %s" % (len(rows), n_all, os.path.join(build, "gaito.json")))
+        return
     json.dump({"heads": rows, "frame": "carla", "note": "x, y, z of the head's underside (m), yaw (deg)"},
               open(os.path.join(build, "gaito.json"), "w"))
     print("[gaito] %d lamp heads -> %s" % (len(rows), os.path.join(build, "gaito.json")))

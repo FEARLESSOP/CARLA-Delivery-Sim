@@ -71,6 +71,51 @@ def polys(g):
     return [q for q in getattr(g, "geoms", []) if isinstance(q, Polygon) and not q.is_empty]
 
 
+LANDING_W, LANDING_REACH = 2.0, 25.0   # crossing landings: path width, longest link to a footpath / 横断歩道の取付け
+
+
+def crossing_landings(L, crossings):
+    """Large maps (maps.json "roadnet"): every crossing end gets a landing -- a paved
+    pad just behind the kerb and, when the nearest footpath is within LANDING_REACH m,
+    a LANDING_W m path to it -- so walkers reach the crossing (check_paths found 152 of
+    1,056 Singapore crossing ends on grass). Never on the road, islands or buildings.
+    Returns the pads/paths added. / 横断歩道の両端に歩道への取付けを作る。"""
+    import numpy as np
+    # what ground.py will draw walkable: on large maps no footpath on the islands (footpaths_draw);
+    # counting them left every refuge-island crossing end on grass (check_paths: 80 of 1,118 on
+    # the full build, all with the band on the kerb) / 描かれる歩行面だけを数える（島の歩道は描かれない）
+    fp = L.footpaths.difference(L.islands) if L.meta.get("roadnet") else L.footpaths
+    walk = unary_union([fp, L.aprons, L.cycleways])
+    block = unary_union([L.road_all.buffer(0.05), L.building_area.buffer(0.5), L.pools])
+    out = []
+    for cr in crossings:
+        c, n = np.array(cr["c"]), np.array(cr["n"])
+        f = np.array(cr.get("f", (-n[1], n[0])))
+        w = float(cr.get("width", 4.0))
+        for t, sg in ((cr["t0"], -1.0), (cr["t1"], 1.0)):
+            q0 = c + n * t
+            q = Point(*(q0 + n * sg * 1.0))
+            # skip only when the drawn walkway already lies where walkers step off (0.3-0.9 m
+            # past the end, as check_paths looks), not just somewhere within 0.4 m of 1 m out
+            # 歩道が実際に踏み出す位置（0.3-0.9 m）にある時だけ省く
+            if any(walk.distance(Point(*(q0 + n * sg * d))) < 0.05 for d in (0.5, 0.7)):
+                continue
+            a = q0 + n * sg * 0.15
+            b = q0 + n * sg * 2.4
+            pad = Polygon([tuple(a - f * w / 2), tuple(a + f * w / 2), tuple(b + f * w / 2), tuple(b - f * w / 2)])
+            piece = [pad]
+            if not walk.is_empty and walk.distance(q) < LANDING_REACH:
+                from shapely.ops import nearest_points
+                e = nearest_points(walk, q)[0]
+                piece.append(LineString([(q.x, q.y), (e.x, e.y)]).buffer(LANDING_W / 2, cap_style="flat"))
+            g = unary_union(piece).difference(block)
+            g = unary_union([p for p in polys(g) if p.area > 0.3 and p.distance(q) < 1.5 or p.intersects(pad)])
+            if not g.is_empty:
+                out.append(g)
+    # only where nothing is paved yet (pavers and concrete at one height z-fight) / 既存の舗装とは重ねない
+    return clean(unary_union(out).difference(walk), 0.3) if out else Polygon()
+
+
 def clean(g, min_area=0.5):
     g = make_valid(g)
     return unary_union([p for p in polys(g) if p.area >= min_area])
@@ -217,6 +262,11 @@ class Layout(object):
         sites = self.landmark_sites(lambda lm: True)
         lm_zone = sites.buffer(BUILD_CLEAR + FACADE_DEPTH + 0.5) if sites is not None else None
         self.heads_in_landmarks = 0
+        # maps.json "roadnet" no_loops_in_sites: the landmark sites of the build dir
+        # (<site>_photos/index.json bounds; roadnet.py made no loops there) keep only
+        # the lanes as drawn -- the round head over netconvert's turnaround cut a
+        # 287 m2 notch into the Downtown East car park / 写真索引の敷地内は車線のみ
+        photo = self.photo_sites() if (self.meta.get("roadnet") or {}).get("no_loops_in_sites") else None
         tree = shapely.STRtree(lp)
         keepout = []
         self.heads_clipped = 0
@@ -291,7 +341,10 @@ class Layout(object):
                 gap = ou.buffer(HEAD_CLEAR - 0.6, quad_segs=4).intersection(hull.buffer(HEAD_CLEAR, quad_segs=4)) \
                     .difference(ou.buffer(GUTTER + 0.05, quad_segs=4)).difference(hull.buffer(GUTTER + 0.05, quad_segs=4))
                 keepout.append(gap)
-            if lm_zone is not None and hull.intersects(lm_zone):
+            if photo is not None and hull.intersects(photo):
+                hull = body                          # the lanes as drawn / 車線のまま
+                self.heads_in_landmarks += 1
+            elif lm_zone is not None and hull.intersects(lm_zone):
                 plain = body.convex_hull.intersection(body.buffer(3.0, quad_segs=4))
                 rest = hull.difference(lm_zone).buffer(-1.2, quad_segs=6).buffer(1.2, quad_segs=6)
                 hull = unary_union([plain] + [q for q in polys(rest) if q.intersects(head)])
@@ -793,6 +846,25 @@ class Layout(object):
                     if g.intersects(cut) else [g]
             keep = out
         self.footpaths = MultiPolygon(keep)
+
+    def photo_sites(self):
+        """Union of every <site>_photos/index.json "bounds" (lat/lon) in the build dir,
+        read each time (later sites count as soon as their index exists), or None.
+        写真索引の敷地範囲の和（無ければ None）。"""
+        import glob
+        import os
+        bd = os.path.dirname(os.path.abspath(self.lanes_json))
+        fr = geo.Frame(self.meta)
+        out = []
+        for f in sorted(glob.glob(os.path.join(bd, "*_photos", "index.json"))):
+            try:
+                b = json.load(open(f)).get("bounds") or {}
+                x0, y0 = fr.xy(float(b["west"]), float(b["south"]))
+                x1, y1 = fr.xy(float(b["east"]), float(b["north"]))
+                out.append(box(x0, y0, x1, y1))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return unary_union(out) if out else None
 
     def landmark_sites(self, test, each=False):
         """Union of the areas of this map's maps.json "landmarks" entries that

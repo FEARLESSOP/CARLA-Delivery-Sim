@@ -1278,6 +1278,15 @@ only if asked.** The brief is in `maps/queue/01_pasir_ris_large.md` and
 `~/Downloads/pasir_ris_large_osm`. Build it as a new map; never overwrite
 `build/PasirRis`.
 
+**Built 2026-11-22 as `PasirRisTampines`** (`pasir_ris_tampines`, package `Singapore`): the
+user asked for it on 2026-11-20 with a bigger box (4.7 × 5.1 km, Pasir Ris + Tampines + Temasek
+Polytechnic), built from scratch beside `build/PasirRis`. Expressways kept with a ring on land,
+flyovers on the flat map (`grade_sep.py`, `flyover.py`), Singapore LTA markings (`sg_lta`),
+seven landmarks (Downtown East, Coral Primary, Pasir Ris St 11, Pasir Ris Crest v2, White Sands
+mall and primary, Temasek Polytechnic), 18.9 M triangles. **Not yet imported.** Build log and
+decisions: `maps/build/PasirRisTampines/PROGRESS.md`; map guide ch. 40-51.
+2026-11-22、大きい版を `PasirRisTampines` として新規ビルド（4.7 × 5.1 km、高速道路と立体交差、LTA 式標示、ランドマーク 7 件、1,890 万三角形）。未インポート。経過は PROGRESS.md、マップガイド 40-51 章。
+
 #### 5.13.5 Oita Kosen (`oita_kosen`, package `Japan`): terrain, landmarks, signs, trees
 
 The first **hilly** map. Imported 2026-11-02 and updated through 2026-11-04.
@@ -2068,6 +2077,7 @@ Dates are JST.
 | 2026-11-09 | kept-wall gate `check_keep_walls.py` + osm_fixes, drive patch `core_patch.py`, cut 止まれ removed, `core_hard` triangle union → agent-checker APPROVED; **OitaStation extended imported**; all 12 cars rebuilt incl. the NPC-only Oita bus; `load_world_map` (120 s) replaces config.py's 10 s map load; road logic overlay (`road_overlay.py`, O key); lane-change marks from the paint (`lane_change_jp.py`, installed on OitaStation); commits `5c1c7d2` (rig) and `6c48e5f` (skills); `AGENTS.md` + `.agents/skills` for Google Antigravity; this document updated |
 | 2026-11-09..13 | Google Antigravity ran the RL work (pod/drone brains, FA-RAMPPO recovery planner, CARLA bridge, hero autopilot cornering, Q/E camera); its write-ups are archived in `PythonAPI/hil_sim/docs/archive/antigravity_2026-11/` with the claims that do not match the logs |
 | 2026-11-13 | drone judder fixed: delivery loop 4 Hz → 27-30 Hz (data-returning CARLA calls wait ~30 ms when first in a tick; cached boxes, `RayWorker`, torch 1 thread; `docs/TROUBLESHOOTING.md`), `[loop]` timing lines, smoother follow camera; docs organised: index `PythonAPI/hil_sim/docs/README.md` |
+| 2026-11-22 | PasirRisTampines large map built (not yet imported): Singapore, 4.7 × 5.1 km, expressways + flyovers, LTA markings, 7 landmarks; map guide ch. 40-51 / PasirRisTampines（大きい地図）ビルド完了、未インポート |
 
 ---
 

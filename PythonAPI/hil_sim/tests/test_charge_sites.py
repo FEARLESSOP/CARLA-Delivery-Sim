@@ -157,5 +157,22 @@ for bp_, tf in placed:
             worst = max(worst, bump(x, o) - zp)
 check("a hump under the path never pokes through (pieces lifted over it)", worst < 0.02, round(worst, 3))
 
+print("=== surface grid: crowns as overhead clearance (opt-in maps) / 樹冠は上空の余裕 ===")
+import tempfile  # noqa: E402
+import numpy as np  # noqa: E402
+kinds = ["none", "lawn", "lot", "court", "site", "walk", "kerb", "road", "marking", "street", "tree", "building"]
+over = np.full((4, 4), np.inf, np.float16)
+over[1, 2] = 5.0                                   # a crown 5 m up over map cell (row 1, col 2) / 5 m の樹冠
+with tempfile.TemporaryDirectory() as td:
+    for name, extra in (("old.npz", {}), ("opt.npz", {"over": over})):
+        np.savez(os.path.join(td, name), free=np.ones((4, 4), np.uint8), kind=np.ones((4, 4), np.uint8),
+                 x0=0.0, y0=0.0, res=0.5, kinds=np.array(kinds), **extra)
+    old, opt = cs.SurfaceGrid(os.path.join(td, "old.npz")), cs.SurfaceGrid(os.path.join(td, "opt.npz"))
+x, y = 1.25, -0.75                                 # CARLA point in that cell (y south) / そのセルの点
+check("lawn under the crown stays free ground", opt.taken(x, y) is None)
+check("crown lower than a 6.2 m station -> low_over", opt.low_over(x, y, 6.2))
+check("crown higher than a 2.2 m footpath -> clear", not opt.low_over(x, y, 2.2))
+check("grids without 'over' (other maps) never report crowns", old.over is None and not old.low_over(x, y, 99.0))
+
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(1 if FAILS else 0)

@@ -275,6 +275,104 @@
   "buildings_csv": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/build/PasirRis/buildings.csv",
   "keep_left": true
  },
+ "pasir_ris_tampines": {
+  "_doc": "Pasir Ris + Tampines + Temasek Polytechnic, Singapore (about 4.7 x 5.1 km, flat), built from scratch 2026-11-20; building heights from OSM + data.gov.sg HDB register (OneMap 3-D needs registration: used only as a visual reference for landmarks), landmarks hand-modelled. Keep-left.",
+  "name": "PasirRisTampines",
+  "package": "Singapore",
+  "osm": "~/Downloads/pasir_ris_large/pasir_ris_large.osm",
+  "speed_kmh": 50,
+  "start": {
+   "x": 1150.9,
+   "y": -291.2,
+   "z": 0.5,
+   "yaw": -156.4
+  },
+  "buildings_csv": "~/Downloads/CARLA_0.9.16/PythonAPI/hil_sim/maps/build/PasirRisTampines/buildings.csv",
+  "surface_grid": {"_doc": "osm_city/surface_grid.py: the leaves of Terrain_Trees (rain trees over every verge) and the lamp heads are overhead clearance (grid 'over'), not taken ground; charge_sites checks 6.2 m over a station, the vehicle height over a waiting bay or drive-in strip, 2.2 m over the footpath (charge-station-builder 2026-11-22: 102 -> 146 passing kerb-lane points)", "crowns": "overhead"},
+  "keep_left": true,
+  "road_fixes": true,
+  "signal_phases": true,
+  "_signal_phases": "netconvert writes one controller per junction (every approach green at once, live 2026-11-24): signs.py splits it into phases (osm_city/signal_phases.py, as on the JARTIC maps)",
+  "osm_fixes": {
+   "_doc": "White Sands Primary: estate road 173469062 was mapped across the school hall; moved 4 m NW onto the asphalt (lanes 5.6 m: kerb ~1.2 m off the roof edge) seen on the z20 tiles (wsps_photos, 0.183 m/px, profile across the road 2026-11-21)",
+   "_corners": "two 90-degree estate corners mapped as 3 nodes within 0.6 m: both directions' lanes crossed at the corner (netconvert offset fold); nodes spread to a ~4 m round corner",
+   "move_nodes": {"1842779860": [-2.77, 2.88], "5282970144": [-2.77, 2.88],
+                  "6937775142": [0.0, -3.6], "6937775141": [1.0, -1.0], "960387022": [3.2, 0.1],
+                  "973847073": [0.0, 3.5], "3495933603": [0.8, 0.8], "6932242246": [3.2, 0.3],
+                  "5177214020": [0.0, -5.0],
+                  "6971947893": [-1.5, 0.0], "6971947892": [-2.0, 0.0], "6971947891": [-2.0, 0.0],
+                  "6971947890": [-2.0, 0.0], "6971947889": [-2.0, 0.0], "6971947888": [-1.5, 0.0],
+                  "6971947887": [-0.5, 0.0]},
+   "_ucre_slip": "Upper Changi Road East southbound slip lane 744871267/793695858/744871268 (by the TPE bridges): on the z19 imagery (2026-11-21) its centre is ~1.5-3 m west of the OSM line, separate from the main carriageway; OSM put its lane on the main road's outer lane, so the two climbed toward the PIE flyover at different heights on top of each other; moved 1.5-2 m west",
+   "_slip": "Tampines Ave 2 slip road 472651670: its first node lay inside the main road's 4 lanes (netconvert bent the link into a hairpin across them); moved 5 m clear"
+  },
+  "roadnet": {
+   "_doc": "osm_city/roadnet.py roadnet_opts: the TPE/PIE stay in the map and end into the ring (no 12 km2 expressway cut); the ring keeps off the sea and the reservoir; bridges that cross a lower road raised 6.5 m per layer, ramps <= 8 %, all else z = 0 (guide ch. 40).",
+   "keep_expressways": true,
+   "ring_on_land": true,
+   "layer_elevation": 6.5,
+   "layer_max_grade": 8.0,
+   "detach_crossings": true,
+   "halve_dual_lanes": false,
+   "dual_lane_w": 3.4,
+   "ring_lane_drop": true,
+   "fill_missing_lanes": true,
+   "join_crossings": true,
+   "connect_lane_ends": true,
+   "no_loops_in_sites": true
+  },
+  "buildings_geojson": "~/Downloads/pasir_ris_large/onemap/buildings_open.geojson",
+  "building_detail": {
+   "_doc": "osm_city/buildings.py (guide ch. 46): HDB storeys 2.8 m (standard floor-to-floor) + 3.2 m void deck; executive-only blocks (register exec + multigen = all units) 2.6 m as prs11 measured on its maisonettes; facade_lod: walls merged over the floors, window reveals only on facades a road sees within seen_near_m, ledges / AC units within seen_m, party walls plain (triangle budget of a 24 km2 single level).",
+   "storey_m": 2.8,
+   "void_deck_m": 3.2,
+   "exec_storey_m": 2.6,
+   "hdb_register_csv": "~/Downloads/pasir_ris_large/onemap/raw/hdb/HDBPropertyInformation.csv",
+   "facade_lod": true,
+   "seen_near_m": 30.0,
+   "seen_m": 60.0
+  },
+  "tree_detail": {
+   "_doc": "osm_city/props.py (guide ch. 46): low-poly crowns (2 blobs, finer within near_m of a road), no trees beyond the ring (the ring is on land: outside is sea).",
+   "lod": true,
+   "edge_m2": 0,
+   "near_m": 15.0
+  },
+  "nav": {
+   "_doc": "osm_city/nav_obj.py (guide ch. 7): walkable_only = no road / block faces in the navmesh input (this 4.7 x 5 km box has ~9,600 Recast tiles, so tile + poly ids leave 256 polys per tile; dense estates had up to 348 with those faces, 250 without); grass_materials = the only Road_Grass faces walkers may use ([] = none: with the park lawns one tile had > 256 polys and was dropped, DT_INVALID_PARAM; walkers keep to footpaths and crossings); clip_to_box = nothing from the ground skirt beyond the map box (it made 151 x 158 tiles > 16384 slots). / 歩行者ナビメッシュ: 車道・不可領域・芝を省き、地図の枠外も省く。",
+   "walkable_only": true,
+   "grass_materials": [],
+   "clip_to_box": true
+  },
+  "gaito_lit": {
+   "_doc": "osm_city/gaito.py (guide ch. 28): 13.6 k lamp heads are too many CARLA lights for the frame rate; only heads within reach_m of a lane of these OSM highway classes (or the Ring Road), at least spacing_m apart, get a lit BP_JpGaito (spacing grows until <= max); the other lamps stay unlit meshes. / 点灯する街灯は幹線沿いのみ（間隔・上限付き）。",
+   "highways": ["trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link", "tertiary", "tertiary_link", "motorway_link"],
+   "ring": true,
+   "reach_m": 12.0,
+   "spacing_m": 30.0,
+   "max": 3000
+  },
+  "load_timeout_s": 300,
+  "sg_lta": {
+   "_doc": "osm_city/markings_sg.py + surfaces_sg.py + textures_sg.py (guide ch. 51): Singapore markings after LTA SDRE14/8 (lane lines B/B1/C, double white centre H on main roads, broken E on estate roads, double yellow kerb lines on main roads, white edge lines on estate roads (Street View, Tampines St 45, 2024) and slip roads / flyovers (LTA note 1), J stop lines 2 m before signalised crossings, zebras with K zig-zags on main and slip roads, estate-road zebras without zig-zags but with a hatched centre taper (Street View), no SLOW, A4 stud crossings, D give-way lines, RMS4 arrows at 10/25/40 m, bus lanes from OSM lanes:bus, bus-bay yellow boxes, RMS8 chevrons), also on the flyover decks; asphalt cut into main/expressway/estate/wheel-path/patch/cracked-edge pieces, concrete kerbs and footpaths. yellow_box: [{lon, lat, where}] junctions with a yellow box seen in imagery (OSM has no tag); crossings: [{lon, lat, signal, where}] marked crossings OSM lacks; bus_lanes: [{lon, lat, where}] a point on a kerb lane that imagery shows as a bus lane (OSM lacks lanes:bus). / シンガポール LTA 式の標示と路面。",
+   "main_kerb": "double_yellow",
+   "estate_kerb": "white",
+   "yellow_box": [],
+   "crossings": [],
+   "bus_lanes": [
+    {
+     "lon": 103.9315,
+     "lat": 1.37465,
+     "where": "Tampines Ave 10 south-west-bound kerb lane past the IKEA Tampines stop, under the TPE: yellow L line with 1.2 m bars, Street View Mar 2025 (no lanes:bus in OSM)"
+    },
+    {
+     "lon": 103.9315912,
+     "lat": 1.3754173,
+     "where": "Tampines Ave 10 north-east-bound kerb lane (road 28563) approaching Pasir Ris Dr 12 under the TPE: broken yellow bus-lane line, Street View Mar 2025 at 1.37540,103.93164 heading 24"
+    }
+   ]
+  }
+ },
  "oita_kosen": {
   "_doc": "Oita Kosen (Akeno, Oita, Japan): generated from OpenStreetMap by the carla-map-generator skill, with terrain elevation from topoexport (GSI/PLATEAU) GLB. Keep-left. Landmarks: Oita Kosen school, its Akeno dormitory, the 7-Eleven down the road. OSM = the user's export (map (5).osm) merged with an OSM API strip to 33.2288 N for the 7-Eleven (osm_south/south.osm, 2026-11-02); terrain south of the main topoexport comes from the user's add-on export (238C9F, 33.2255-33.2316 N, 131.6475-131.6554 E).",
   "name": "OitaKosen",

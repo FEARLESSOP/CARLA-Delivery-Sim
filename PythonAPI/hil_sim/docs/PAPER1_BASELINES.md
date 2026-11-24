@@ -536,7 +536,7 @@ almost every drone). One run per arm: indicative, not conclusive.
 CARLA では処理量はほぼ同等、注文の待ち時間は B4 が約 3 分短い。一方 B4 は満充電に近いドローンも充電器へ送った（B0/B2 は送らない）。原因は橋渡しではなく、先読みと評価関数の誤差。B2 が確信している時はその選択を保つと解消する。
 
 **Repeat, seed 8 (2026-11-20,** same settings, other orders, `carla_ab_typical_20261120_1051_seed8.json`;
-the planned seeds 9 and 10 were cancelled by the user):
+seeds 9 and 10 followed later the same day, below):
 
 | | Sim minutes | Delivered/h | Drone/h | Failed | Crashes | Charger trips | Order wait | Drop → landed (n) |
 |---|---|---|---|---|---|---|---|---|
@@ -549,6 +549,34 @@ slower drop → landed (+10 s). Caveat: the Unreal editor was opened on the same
 (38.3 vs 41.5) and may have been slowed. Two days (seeds 7, 8): B4 +3.8 and +9.4 deliveries/h,
 order wait −57 and −219 s: same direction both days, still too few runs for a significance test.
 seed 8 の再試行でも B4 が配達数・待ち時間で上回った（ただし規則側の走行中に UE エディタを同じ GPU で開いていた）。
+
+**Seeds 9 and 10 (2026-11-20,** same settings, nothing else on the GPU,
+`carla_ab_typical_20261120_1555_seed9.json`, `carla_ab_typical_20261120_1727_seed10.json`):
+
+| | Sim minutes | Delivered/h | Drone/h | Failed | Crashes | Charger trips | Order wait | Drop → landed (n) |
+|---|---|---|---|---|---|---|---|---|
+| seed 9 revised B4 | 44.5 | 70.1 | 62.0 | 1 | 3 | 1 | **492 s** | 65 s (43) |
+| seed 9 sim's rule | 45.0 | **82.6** | **71.9** | 0 | 0 | 0 | 558 s | 63 s (52) |
+| seed 10 revised B4 | 38.7 | **86.7** | **79.0** | 1 | 4 | 0 | **458 s** | 52 s (48) |
+| seed 10 sim's rule | 44.8 | 79.0 | 65.6 | 2 | 2 | 0 | 533 s | 50 s (48) |
+
+**Four days combined (seeds 7-10, paired t-test, n = 4):**
+
+| Measure (B4 − rule) | Per seed | Mean | p |
+|---|---|---|---|
+| Delivered/h | +3.8, +9.4, −12.5, +7.8 | +2.1 | 0.70 |
+| Drone deliveries/h | +5.0, +12.8, −9.9, +13.4 | +5.3 | 0.40 |
+| Order wait | −57, −219, −66, −76 s | **−105 s** | 0.07 |
+| Drop → landed | +3.0, +10.3, +2.0, +1.4 s | +4.2 s | 0.14 |
+| Crashes | −2, +2, +3, +2 | +1.3 | 0.34 |
+
+The one consistent result: **customers wait less with B4 on all four days** (about 1¾ min on
+average), close to but not yet significant at 5 %. Throughput is mixed (B4 lost seed 9 by
+12.5/h), drones come back slightly later with B4 every day (+1 to +10 s), and B4 had more
+crashes on three of the four days. Seed 10's B4 arm got fewer sim minutes (38.7 vs 44.8;
+per-hour figures are normalised). To make the wait result firm, about 4 more seeds would be
+needed. 4 日間の合計：注文の待ち時間は 4 日とも B4 が短い（平均 −105 秒、p = 0.07）。
+配達数は日によって勝ち負けがあり、ドローンの帰還は B4 がわずかに遅く、墜落は 4 日中 3 日で B4 が多い。
 
 ## 4. Existing data (2026-11-12) and why it is not valid / 既存データと無効な理由
 

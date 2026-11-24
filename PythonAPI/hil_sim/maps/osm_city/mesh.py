@@ -80,9 +80,15 @@ class Mesh(object):
         part[4] += len(P)
 
     def merge(self, other):
+        # Indices are global per part: make them local by the chunk's vertex offset, never by
+        # ii.min() (wrong once triangles were dropped and a chunk's first vertex is unused, e.g.
+        # after a landmark drop_over: the kept triangles slid onto other vertices).
+        # 頂点オフセットで局所化する（ii.min() は三角形削除後に誤る）。
         for mat, (V, N, UV, I, n) in other.parts.items():
+            off = 0
             for v, nn, uv, ii in zip(V, N, UV, I):
-                self.tris(mat, v, nn, uv, ii - (ii.min() if len(ii) else 0) + 0, raw=True)
+                self.tris(mat, v, nn, uv, ii - off, raw=True)
+                off += len(v)
 
     def shift_z(self, dz):
         """Move everything up by dz (a rigid thing onto the ground). / 全体を dz 上げる。"""
@@ -266,6 +272,39 @@ class Mesh(object):
             for k in range(seg):
                 a = j * (seg + 1) + k
                 b = a + seg + 1
+                I += [a, b, a + 1, a + 1, b, b + 1]
+        self.tris(mat, P, N, UV, I)
+
+    def blob(self, mat, cx, cy, cz, rx, ry, rz, seg=6, rings=3, jitter=None):
+        """A low-poly ellipsoid without the zero-area triangles sphere() leaves at
+        the poles: seg * (2 * rings - 2) triangles (6 x 3: 24 instead of 36). Used
+        by maps.json "tree_detail" crowns. / 極の面積ゼロの三角形が無い楕円体（樹冠用）。"""
+        P, N, UV, I = [(cx, cy, cz + rz)], [(0.0, 0.0, 1.0)], [(0.5, 0.0)], []
+        # one jitter per ring point: the seam column (k = seg) repeats k = 0, else a
+        # random jitter opens a crack there (sphere() has it) / 継ぎ目は同じ値（割れ目を作らない）
+        jit = {}
+        for j in range(1, rings):
+            th = math.pi * j / rings
+            for k in range(seg + 1):
+                ph = 2 * math.pi * k / seg
+                n = (math.sin(th) * math.cos(ph), math.sin(th) * math.sin(ph), math.cos(th))
+                if jitter is not None and (j, k % seg) not in jit:
+                    jit[(j, k % seg)] = jitter(j, k % seg)
+                f = 1.0 if jitter is None else jit[(j, k % seg)]
+                P.append((cx + rx * n[0] * f, cy + ry * n[1] * f, cz + rz * n[2] * f))
+                N.append(n)
+                UV.append((k / seg, j / rings))
+        P.append((cx, cy, cz - rz))
+        N.append((0.0, 0.0, -1.0))
+        UV.append((0.5, 1.0))
+        bot = len(P) - 1
+        row = lambda j, k: 1 + (j - 1) * (seg + 1) + k
+        for k in range(seg):
+            I += [0, row(1, k), row(1, k + 1)]
+            I += [bot, row(rings - 1, k + 1), row(rings - 1, k)]
+        for j in range(1, rings - 1):
+            for k in range(seg):
+                a, b = row(j, k), row(j + 1, k)
                 I += [a, b, a + 1, a + 1, b, b + 1]
         self.tris(mat, P, N, UV, I)
 

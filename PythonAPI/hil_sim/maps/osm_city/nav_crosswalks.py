@@ -6,10 +6,14 @@ widened over the kerb (crosswalk), the dropped-kerb aprons across estate junctio
 mouths and the kerb connectors (sidewalk), and the park / playground lawns that
 stay grass; faces on the built road surface (z from the nearest road vertex).
 Otherwise: crosswalk hulls from the zebra paint (line_white pieces ~0.45 x 4 m,
-grouped, hulled), as before.
+grouped, hulled), as before. Maps with no such bars at all (Singapore LTA paint,
+markings_sg.py: "paint_white", signalised crossings marked by studs) take the
+crossing bands of <build>/crossings.pkl ("band", else "segs" + "width", as
+check_paths.py does), widened NAV_HULL over the kerb (2026-11-21, ch. 7).
 npz: V, I, hulls (crosswalk faces), SV, SI (sidewalk faces), lawns (wkt list).
-横断歩道・交差点口の帯・芝生（公園）をナビメッシュ用に作る。"""
-import glob, json, os, sys
+横断歩道・交差点口の帯・芝生（公園）をナビメッシュ用に作る。
+縞模様の無い地図（シンガポール）は crossings.pkl の横断帯を使う。"""
+import glob, json, os, pickle, sys
 import numpy as np
 import shapely
 from shapely import wkt
@@ -19,6 +23,8 @@ from shapely.geometry.polygon import orient
 from shapely import STRtree
 mesh_dir, out = sys.argv[1], sys.argv[2]
 areas_f = os.path.join(os.path.dirname(os.path.abspath(mesh_dir.rstrip("/"))), "nav_areas.json")
+cross_f = os.path.join(os.path.dirname(os.path.abspath(mesh_dir.rstrip("/"))), "crossings.pkl")
+NAV_HULL = 0.4      # past the band, over the 0.2 m kerb (pavements.NAV_HULL) / 縁石を越える余裕
 
 
 def surface(fams, mats=None):
@@ -92,6 +98,20 @@ for p in pieces:
     lo, hi = min(a, b), max(a, b)
     if 0.3 < lo < 0.6 and 2.5 < hi < 4.5 and p.area > 0.7 * r.area:
         bars.append(p)
+if not bars and os.path.exists(cross_f):
+    # no zebra bars anywhere (Singapore LTA paint): the crossings' own bands
+    # 縞が無い地図（シンガポール）: crossings.pkl の横断帯（縁石越しまで）
+    cr = pickle.load(open(cross_f, "rb")).get("crossings", [])
+    bands = [c["band"] if "band" in c else
+             unary_union([g.buffer(c.get("width", 4.0) / 2, cap_style="flat") for g in c.get("segs", [])])
+             for c in cr]
+    cw = [b.buffer(NAV_HULL, join_style="mitre") for b in bands if not b.is_empty]
+    V = surface(("Road_Road", "Road_Sidewalk"))
+    tree = STRtree(shapely.points(V[:, 0], V[:, 1]))
+    HV, HI = faces(cw, V, tree, 0.005)
+    np.savez(out, V=HV, I=HI, hulls=np.array([h.wkt for h in cw]))
+    print(len(cw), "crosswalks from crossings.pkl (no zebra bars),", len(HI), "faces")
+    sys.exit(0)
 groups = list(getattr(g := unary_union([b.buffer(0.35) for b in bars]), "geoms", [g]))
 V = np.concatenate(zs)
 tree = STRtree([shapely.Point(v[:2]) for v in V])

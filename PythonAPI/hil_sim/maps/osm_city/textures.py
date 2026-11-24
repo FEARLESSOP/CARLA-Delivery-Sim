@@ -487,5 +487,109 @@ def write_all(out_dir, style=None):
     return d
 
 
+# -- Street View palette with weathering (General Painter; colour_notes.json "palette_sg") --
+# One shared texture set per observed paint (a tint of the same pattern), used by every
+# building of that colour on the map, never one set per building. Each paint: render grain,
+# faint mottling and narrow rain streaks (2-8 cm, soft tops) from a height field in metres,
+# normal + roughness from that field; "<paint>_base" for the void deck: v = 0..1 over the deck
+# height, a darker foot band with splashes and a faint green-grey tint at the bottom.
+# Own random stream: write_all's textures are unchanged; maps without the key get nothing.
+# 観測色ごとに 1 組の共有テクスチャ（同じ模様の色違い）。雨だれ・汚れは控えめ。
+PAL_N = 256                 # px per tile: paint tile 2 m (128 px/m), base tile 3.2 m / 1 タイルの画素数
+
+
+def _pal_noise(rng, n, scales, amps):
+    """Seamless noise in [0, 1]: white noise low-passed in the Fourier domain (periodic, no
+    seams or blocks); scales = features per tile. / 継ぎ目のないノイズ（周波数領域の低域通過）。"""
+    f = np.fft.fftfreq(n) * n
+    r = np.hypot(f[:, None], f[None, :])
+    out = np.zeros((n, n))
+    for sc, a in zip(scales, amps):
+        g = np.real(np.fft.ifft2(np.fft.fft2(rng.standard_normal((n, n))) * np.exp(-(r / max(sc, 1)) ** 2)))
+        out += a * g / max(g.std(), 1e-9)
+    out -= out.min()
+    return out / max(out.max(), 1e-6)
+
+
+def _streaks(rng, n, count, tile_m):
+    """Narrow vertical rain streaks (rows: z up), soft top, fading down; wraps in u.
+    細い雨だれ（上端はぼかし、下へ薄れる）。"""
+    s = np.zeros((n, n))
+    px = n / tile_m
+    for _ in range(count):
+        w = max(1, int(rng.uniform(0.02, 0.08) * px))
+        x0 = int(rng.integers(0, n))
+        top = rng.uniform(0.35, 1.0)                    # start height (fraction of the tile) / 始点の高さ
+        length = rng.uniform(0.25, 0.8)
+        k = rng.uniform(0.4, 1.0)
+        zs = np.arange(n) / n
+        t = (top - zs) / length                         # 0 at the top, 1 at the end / 上端 0、終端 1
+        prof = np.where((t >= 0) & (t <= 1), np.minimum(t / 0.12, 1.0) * np.clip(1 - t, 0.0, 1.0) ** 1.5, 0.0) * k
+        xs = (x0 + np.arange(-w, w + 1)) % n
+        fall = np.exp(-(np.arange(-w, w + 1) / max(w * 0.6, 0.5)) ** 2)
+        s[:, xs] = np.maximum(s[:, xs], prof[:, None] * fall[None, :])
+    return s
+
+
+def _save_maps(d, name, rgb_zup, h, rough, var, strength):
+    """Albedo, normal (DirectX green), roughness (sRGB-encoded) and metallic, flipped so
+    v = 0 is the bottom row. / 色・法線・粗さ・金属度（v=0 が下）。"""
+    Image.fromarray(np.flipud(rgb_zup).clip(0, 255).astype(np.uint8)).save(os.path.join(d, name + ".png"))
+    hh = np.flipud(h)
+    normal_map(hh / max(np.abs(hh).max(), 1e-6), strength).save(os.path.join(d, name + "_n.png"))
+    r = rough + var * (hh / max(np.abs(hh).max(), 1e-6))
+    Image.fromarray((srgb_encode(r) * 255).astype(np.uint8)).save(os.path.join(d, name + "_r.png"))
+    Image.fromarray((srgb_encode(np.zeros((8, 8))) * 255).astype(np.uint8)).save(os.path.join(d, name + "_m.png"))
+
+
+def pal_paint(rng, c, n=PAL_N, tile_m=2.0, streak=0.05):
+    """Painted render (z-up array): grain + mottling + rain streaks. / 塗装壁（雨だれ付き）。"""
+    grain = _pal_noise(rng, n, (n // 4, n // 2, n), (0.3, 0.4, 0.3))
+    mott = _pal_noise(rng, n, (3, 7, 16), (0.5, 0.3, 0.2))
+    st = _streaks(rng, n, 18, tile_m)
+    dirt = np.array([70.0, 72.0, 62.0])                 # grey-green grime / 灰緑の汚れ
+    k = 1.0 - 0.035 * (mott - 0.5) - 0.02 * (grain - 0.5)
+    a = np.asarray(c, np.float64)[None, None, :] * k[..., None]
+    a = a + (dirt - a) * (streak * st)[..., None]
+    h = 0.6 * (grain - 0.5) * 0.002 - st * 0.0005       # metres: 2 mm grain, streaks a hair lower / 高さ（m）
+    return a, h, st
+
+
+def pal_base(rng, c, n=PAL_N, tile_m=3.2):
+    """Void-deck wall / column paint (z-up, v = 0..1 over the deck): a darker irregular
+    foot band (splashes, rising damp) and the streaks. / ピロティの壁: 足元の汚れ帯。"""
+    a, h, st = pal_paint(rng, c, n, tile_m, streak=0.035)
+    z = (np.arange(n) / n * tile_m)[:, None]
+    edge = 0.32 + 0.12 * (_pal_noise(rng, n, (6, 24), (0.7, 0.3))[0:1, :] - 0.5)   # band top, m / 帯の上端
+    band = np.clip((edge - z) / 0.18 + 0.5, 0.0, 1.0)
+    splash = _pal_noise(rng, n, (32, 96, n), (0.3, 0.4, 0.3)) * np.exp(-z / 0.18)
+    damp = np.array([82.0, 84.0, 74.0])
+    w = (0.14 * band + 0.14 * splash * np.clip((splash - 0.4) / 0.3, 0.0, 1.0))[..., None]
+    a = a + (damp - a) * w
+    h = h - 0.0008 * band
+    return a, h, st
+
+
+def write_palette(out_dir, tex_dir):
+    """Textures for colour_notes.json "palette_sg" {paint: [r, g, b]} (sRGB albedo read from
+    Street View samples, normalised to lit render); returns {material: table row}. Nothing
+    without the key. / パレットの各色と _base のテクスチャを書き、材質表の行を返す。"""
+    p = os.path.join(out_dir, "colour_notes.json")
+    pal = {}
+    if os.path.exists(p):
+        import json
+        pal = json.load(open(p)).get("palette_sg") or {}
+    mats = {}
+    for i, (name, c) in enumerate(sorted(pal.items())):
+        rng = np.random.default_rng(7000 + i)
+        a, h, st = pal_paint(rng, c)
+        _save_maps(tex_dir, name, a, h, 0.82, 0.06, 1.2)
+        mats[name] = (name, None, 0.82, 0.0, False)
+        a, h, st = pal_base(rng, c)
+        _save_maps(tex_dir, name + "_base", a, h, 0.86, 0.06, 1.2)
+        mats[name + "_base"] = (name + "_base", None, 0.86, 0.0, False)
+    return mats
+
+
 if __name__ == "__main__":
     print(write_all(sys.argv[1]))

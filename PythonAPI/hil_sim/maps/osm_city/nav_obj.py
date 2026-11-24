@@ -13,8 +13,19 @@ which stay grass (CARLA's walker filter allows grass: walkers wandered off the
 pavements onto it), Terrain_Street -> block. The road faces under crosswalk and
 apron faces are left out. RecastBuilder marks every face's area over a 5 m prism
 above its lowest vertex, faces later in the file winning, so crosswalks go last.
+maps.json "nav" (opt-in per map, read by meta.json's name; maps without it are
+unchanged): "walkable_only" leaves the road and block faces out (walkers never use
+them; a 4.7 x 5 km box has ~9,600 tiles of 51.2 m, so tile + poly ids leave 256
+polys per tile, and dense estates had up to 348 with them, 250 without);
+"grass_materials" [...]: only Road_Grass faces of these materials are grass,
+the rest block (verges and medians: no walkers stranded on islands; [] = none:
+PasirRisTampines' park lawns pushed one tile over 256 polys, DT_INVALID_PARAM);
+"clip_to_box": only faces whose centre lies inside meta.json's half_x / half_y box
+(the ground skirt beyond it reached 7.7 x 8.1 km: 23.9 k tiles > 16384 slots, the
+north rows failed with DT_OUT_OF_MEMORY).
+maps.json "nav"（地図ごと）: 車道・不可領域の面を省く／芝として扱う材質を限定。
 歩行者ナビメッシュ用 OBJ を書き出す。"""
-import glob, os, sys
+import glob, json, os, sys
 import numpy as np
 mesh_dir, out = sys.argv[1], sys.argv[2]
 crop = list(map(float, sys.argv[4:7])) if len(sys.argv) > 6 else None
@@ -33,6 +44,30 @@ lawns = shapely.union_all([wkt.loads(h) for h in CW["lawns"]]) if "lawns" in CW.
 lawn_mode = "lawns" in CW.files          # Japanese maps (nav_areas.json): grass is block outside lawns / 芝は公園のみ
 if lawns is not None:
     shapely.prepare(lawns)
+
+
+def nav_opts():
+    """maps.json "nav" of this build's map (meta.json name; the first entry of that
+    name wins, as everywhere), {} when none. / この地図の maps.json "nav"。"""
+    bd = os.path.dirname(os.path.abspath(mesh_dir.rstrip("/")))
+    try:
+        name = json.load(open(os.path.join(bd, "meta.json")))["name"]
+        maps = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "maps.json")))
+    except (OSError, ValueError, KeyError):
+        return {}
+    for v in maps.values():
+        if isinstance(v, dict) and v.get("name") == name:
+            return v.get("nav") or {}
+    return {}
+
+
+OPTS = nav_opts()
+SKIP = {"road", "block"} if OPTS.get("walkable_only") else set()
+GRASS_MATS = set(OPTS["grass_materials"]) if "grass_materials" in OPTS else None    # [] = no grass / 芝なし
+BOX = None
+if OPTS.get("clip_to_box"):
+    _m = json.load(open(os.path.join(os.path.dirname(os.path.abspath(mesh_dir.rstrip("/"))), "meta.json")))
+    BOX = (float(_m["half_x"]), float(_m["half_y"]))
 AREA = {"Road_Road": "road", "Road_Curb": "road", "Road_Crosswalk": "crosswalk",
         "Road_Sidewalk": "sidewalk", "Road_Grass": "grass", "Terrain_Street": "block"}
 ORDER = ("block", "grass", "road", "sidewalk", "crosswalk")
@@ -49,6 +84,8 @@ verts, faces, off = [], {}, 0
 
 def add(area, V, I):
     global off
+    if area in SKIP:
+        return
     used = np.unique(I)
     if not len(used):
         return
@@ -60,6 +97,9 @@ def add(area, V, I):
 
 
 def cropped(V, I):
+    if BOX is not None and len(I):
+        c = V[I].mean(1)
+        I = I[(abs(c[:, 0]) <= BOX[0]) & (abs(c[:, 1]) <= BOX[1])]
     if not crop:
         return I
     c = V[I].mean(1)
@@ -79,6 +119,9 @@ for f in sorted(glob.glob(os.path.join(mesh_dir, "*.npz"))):
         if area == "road":
             c = V[I].mean(1)
             I = I[~shapely.contains_xy(cw_union, c[:, 0], c[:, 1])]
+        if area == "grass" and GRASS_MATS is not None and k[:-2] not in GRASS_MATS:
+            add("block", V, I)
+            continue
         if area == "grass" and lawn_mode:
             c = V[I].mean(1)
             on = shapely.contains_xy(lawns, c[:, 0], c[:, 1]) if lawns is not None else np.zeros(len(I), bool)

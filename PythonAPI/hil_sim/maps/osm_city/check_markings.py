@@ -22,6 +22,18 @@ painted element) and the Road_Marking meshes, and reports, with CARLA x/y
   notes        (not counted) a light whose stop waypoint lies past the painted
                line (cars would stop on the crossing): road logic, not paint
 
+Singapore maps (maps.json "sg_lta", markings_sg.py; markings.pkl "style":
+"sg_lta") get the LTA rule set instead (check_sg, guide ch. 51): crossings as
+above; J stop lines 0.30 m, 1-3 m before the signalised crossing (or 0.3-1.5 m
+before the junction mouth), one per lane, none without a light, the light's s
+(CARLA's stop, set by signs.py) not past the line and its pole (pole_s) not
+before it; give-way lines off signalised roads; every zebra approach lane
+with room has its zig-zag, and no zig-zag over yellow paint (RMS9 note 5); no
+white over yellow paint; arrows only on 2+ lane approaches and never on
+expressways; kerb and centre lines present by class; paint off the road.
+--area x0,y0,x1,y1 (map frame; default BUILD_AREA) audits only what lies inside
+(crop builds: the crop's edge is cut). Deck paint (Road_MarkingDeck) counts.
+
 Without markings.pkl (a build before 2026-11-06) the stop lines, 止まれ and
 arrows are reconstructed the way the old generator placed them (from the
 crossings.pkl stop list and the lights), so old builds can be audited too.
@@ -42,7 +54,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import shapely
 from shapely.geometry import LineString, Point, Polygon
-from shapely.ops import unary_union
+from shapely.ops import substring, unary_union
 from shapely.strtree import STRtree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,11 +86,11 @@ def ang180(a, b):
 class Paint(object):
     """The painted triangles of the Road_Marking meshes, per colour. / 塗装メッシュ。"""
 
-    def __init__(self, out):
+    def __init__(self, out, kinds=("Road_Marking",)):
         self.tri = {"w": [], "y": []}
         man = json.load(open(os.path.join(out, "meshes", "manifest.json")))
         for o in man["objects"]:
-            if o["kind"] != "Road_Marking":
+            if o["kind"] not in kinds:
                 continue
             d = np.load(os.path.join(out, "meshes", o["name"] + ".npz"))
             for k in d.files:
@@ -180,6 +192,9 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--json")
     ap.add_argument("--no-mesh", action="store_true")
+    ap.add_argument("--area", default=os.environ.get("BUILD_AREA"),
+                    help="x0,y0,x1,y1 (map frame) or 'tiles' (the built tiles): Singapore rule set only, "
+                         "audit only inside (crop builds) / 範囲内のみ検査（シンガポール規則）")
     a = ap.parse_args()
     out = os.path.abspath(a.out)
     meta = json.load(open(os.path.join(out, "meta.json")))
@@ -225,6 +240,9 @@ def main():
     else:
         elements = legacy_elements(extra, data, lanes_by, sig_roads)
         source = "legacy reconstruction (%d elements; no markings.pkl)" % len(elements)
+    if os.path.exists(mp) and pickle.load(open(mp, "rb")).get("style") == "sg_lta":
+        # Singapore (LTA) rule set / シンガポール（LTA）の規則で検査
+        sys.exit(check_sg(a, out, meta, data, extra, L, elements, lanes, lanes_by, lane_lines, tree, x, s_light))
     problems, notes = [], []
 
     def bad(cat, p, msg, **kw):
@@ -234,6 +252,12 @@ def main():
         problems.append(rec)
 
     # -- crossings / 横断歩道
+    # Singapore-style crossings (markings.py) carry no "band": from their pieces and width
+    # band の無い横断歩道（markings.py）は区間と幅から作る
+    from shapely.ops import unary_union as _uu
+    for cr in crossings:
+        if "band" not in cr:
+            cr["band"] = _uu([g.buffer(cr.get("width", 4.0) / 2, cap_style="flat") for g in cr.get("segs", [])])
     bands = []
     for k, cr in enumerate(crossings):
         c, f, n = np.array(cr["c"]), np.array(cr["f"]), np.array(cr["n"])
@@ -515,6 +539,461 @@ def main():
         json.dump({"pass": not problems, "problems": problems, "notes": notes, "summary": dict(cats)},
                   open(a.json, "w"), indent=1, ensure_ascii=False)
     sys.exit(1 if problems else 0)
+
+
+def check_sg(a, out, meta, data, extra, L, elements, lanes, lanes_by, lane_lines, tree, x, s_light):
+    """The LTA rule set (markings_sg.py, guide ch. 51). Returns the exit status.
+    LTA 規則での検査（終了コードを返す）。"""
+    import markings_sg as MS
+    name = meta["name"]
+    crossings = extra["crossings"]
+    cw, jl = L.carriageway, L.junction_lanes
+    area = None
+    if a.area == "tiles":
+        # the ground tiles this build made (BUILD_AREA builds whole 250 m tiles), 30 m in
+        # この ビルドが作ったタイル（30 m 内側）
+        import ground
+        man = json.load(open(os.path.join(out, "meshes", "manifest.json")))
+        made = {o["name"].rsplit("_", 1)[1] for o in man["objects"] if o["kind"] == "Road_Road"}
+        area = unary_union([tb for tn, tb in ground.tiles(meta) if tn in made]).buffer(-30.0)
+    elif a.area:
+        from shapely.geometry import box as _box
+        x0, y0, x1, y1 = [float(v) for v in a.area.split(",")]
+        area = _box(x0 + 30.0, y0 + 30.0, x1 - 30.0, y1 - 30.0)      # 30 m in from the crop edge / 端から 30 m 内側
+    inside = (lambda p: True) if area is None else (lambda p: area.contains(Point(float(p[0]), float(p[1]))))
+    paint = None if a.no_mesh else Paint(out, ("Road_Marking", "Road_MarkingDeck"))
+    ground_paint = None if a.no_mesh else Paint(out)
+    sig_roads = set(s_light)
+    problems, notes = [], []
+    # each light's s and pole s (signs.py userData pole_s) / 信号の s と柱の s
+    light_s = {}
+    for r_ in ET.parse(os.path.join(out, name + ".xodr")).getroot().findall("road"):
+        for sg_ in r_.findall("signals/signal"):
+            if sg_.get("type") == "1000011":
+                ps_ = [u.get("value") for u in sg_.findall("userData") if u.get("code") == "pole_s"]
+                light_s[int(r_.get("id"))] = (float(sg_.get("s")), float(ps_[0]) if ps_ else None)
+    import build as _build
+    cfg = _build.road_style(name, "sg_lta") or {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    # the ground parts of the lanes (flyover parts are checked on their own level)
+    # 車線の地上部分（高架部分は別扱い）
+    glines = [(LineString([q["c"] for q in l["pts"]]), l) for l in MS.ground_runs(lanes) if len(l["pts"]) >= 2]
+    gtree = STRtree([g for g, _ in glines])
+
+    def bad(cat, p, msg, **kw):
+        if not inside(p):
+            return
+        rec = {"cat": cat, "carla": [round(float(p[0]), 1), round(-float(p[1]), 1)],
+               "map": [round(float(p[0]), 1), round(float(p[1]), 1)], "msg": msg}
+        rec.update(kw)
+        problems.append(rec)
+
+    # classes as the generator saw them / 生成時の道路の格
+    cls = pickle.load(open(os.path.join(out, "markings.pkl"), "rb")).get("cls", {})
+    sections = collections.defaultdict(list)
+    for l in lanes:
+        sections[(l["road"], l["section"])].append(l)
+    # -- crossings: square, kerb to kerb, off junction lanes, no overlap / 横断歩道
+    bands = []
+    for k, cr in enumerate(crossings):
+        c, f, n = np.array(cr["c"]), np.array(cr["f"]), np.array(cr["n"])
+        band = cr["band"]
+        bands.append(band)
+        tag = {"crossing": k, "src": cr.get("src", ""), "kind": cr.get("kind")}
+        hs = []
+        for i in gtree.query(band):
+            ln, l = glines[int(i)]
+            hit = ln.intersection(band)
+            if hit.is_empty:
+                continue
+            q = hit.centroid if hit.geom_type != "Point" else hit
+            hs.append(MJ.tangent(ln, ln.project(q)))
+        if hs:
+            fm = MJ.heading_mean(hs, f)
+            if ang180(fm, f) > SKEW_DEG:
+                bad("crossing skew", c, "band %.1f deg off the lanes it crosses" % ang180(fm, f), **tag)
+            if max(ang180(h, fm) for h in hs) > 30.0:
+                bad("crossing lanes", c, "band crosses lanes of a side street or the junction", **tag)
+        else:
+            bad("crossing lanes", c, "band crosses no road lane", **tag)
+        for t in (cr["t0"], cr["t1"]):
+            e = c + n * t
+            d = cw.boundary.distance(Point(e))
+            if d > KERB_TOL:
+                bad("crossing span", e, "band end %.2f m from the kerb line" % d, **tag)
+        # junction share: in all, and over junction lanes that turn across the band (not a
+        # dead-end loop's neck); caps as markings_sg (50 % / 20 %) / 交差点車線上の割合（全体・転回）
+        inj = band.intersection(jl).area / band.area if band.area else 0.0
+        if inj > 0.0:
+            dead = set(getattr(L, "dead_end_junctions", []) or [])
+            turning = []
+            for m in L.lanes:
+                if m["junction"] < 0 or len(m["pts"]) < 2 or m["junction"] in dead:
+                    continue
+                g = LineString([q["c"] for q in m["pts"]])
+                if g.intersects(band) and abs(float(MJ.tangent(g, g.project(band.centroid)) @ f)) < \
+                        math.cos(math.radians(15.0)):
+                    turning.append(MS.lane_poly(m))
+            tshare = unary_union(turning).intersection(band).area / band.area if turning else 0.0
+            if inj > MS.JUNCTION_TOTAL_MAX or tshare > MS.JUNCTION_TURN_MAX:
+                bad("crossing in junction", c, "%.0f%% of the band over junction lanes, %.0f%% over turning ones "
+                    "(max %.0f / %.0f)" % (100 * inj, 100 * tshare, 100 * MS.JUNCTION_TOTAL_MAX,
+                                           100 * MS.JUNCTION_TURN_MAX), **tag)
+            elif inj > 0.1 and inside(c):
+                notes.append({"cat": "crossing at a junction", "carla": [round(float(c[0]), 1), round(-float(c[1]), 1)],
+                              "msg": "%.0f%% over junction lanes, %.0f%% over turning ones" % (100 * inj, 100 * tshare)})
+    for i in range(len(bands)):
+        for k in range(i + 1, len(bands)):
+            ov = bands[i].intersection(bands[k]).area
+            if ov > 0.2:
+                bad("crossing overlap", bands[i].intersection(bands[k]).centroid.coords[0],
+                    "crossings %d and %d overlap by %.1f m2" % (i, k, ov))
+    # lights on short roads (< 8 m: a stub, or the crossing sits on it) are served by the
+    # line on the roads entering the small junction before them (markings_sg)
+    # 短い道路（8 m 未満）の信号は手前の小交差点に入る道路の停止線で
+    short_pred, frontier = set(), [r for r in sig_roads if x["len"].get(r, 99.0) < 12.0]
+    appr_at = collections.defaultdict(set)
+    for ap_ in data["approaches"]:
+        appr_at[ap_["junction"]].add(ap_["road"])
+    for _ in range(4):                       # up to 4 hops, as markings_sg / 最大 4 段
+        nxt = []
+        for r in frontier:
+            j0 = x["pred"].get(r)
+            if j0 is None or j0 in short_pred:
+                continue
+            short_pred.add(j0)
+            nxt += [r2 for r2 in appr_at[j0] if x["len"].get(r2, 99.0) < 12.0]
+        frontier = nxt
+    # -- stop and give-way lines / 停止線・譲れ線
+    per_lane = collections.Counter()
+    lined = set()
+    for e in elements:
+        if e["kind"] not in ("stop_signal", "giveway"):
+            continue
+        l = lanes_by.get((e["road"], e.get("lane")))
+        g = e["geom"]
+        if g is None or g.is_empty or l is None:
+            continue
+        zz = np.array([q.get("z", 0.0) for q in l["pts"]])
+        on = (zz > MS.Z0) if e.get("level") == "deck" else (zz <= MS.Z0)
+        if on.sum() >= 2:
+            l = dict(l, pts=[q for q, ok in zip(l["pts"], on) if ok])      # this level's part / この階の部分
+        P = np.array([q["c"] for q in l["pts"]])
+        ln = LineString(P)
+        ctr, u, length, thick = rect_axes(g.convex_hull if e["kind"] == "giveway" else g)
+        s_c = ln.project(Point(ctr))
+        skew = abs(90.0 - ang180(u, MJ.tangent(ln, s_c)))
+        tag = {"road": e["road"], "lane": e.get("lane"), "junction": e.get("junction"), "kind": e["kind"]}
+        if skew > SKEW_DEG:
+            bad("stop skew", ctr, "%s %.1f deg off square to its lane" % (e["kind"], skew), **tag)
+        if e["kind"] == "giveway":
+            if e["road"] in sig_roads:
+                bad("giveway at signal", ctr, "give-way line on a signalised approach", **tag)
+            continue
+        lined.add(e["road"])
+        lined.update(e.get("serves") or [])        # lights of short roads beyond (markings_sg) / 先の短い道路の信号
+        per_lane[(e["road"], e.get("lane"), e.get("junction"))] += 1
+        if not (0.28 <= thick <= 0.32):
+            bad("stop thickness", ctr, "stop line %.2f m thick (LTA J: 0.30)" % thick, **tag)
+        if e["road"] not in sig_roads and (e.get("junction") in short_pred or set(e.get("serves") or []) & sig_roads):
+            pass                    # serves the light of a short road beyond the junction / 先の短い道路の信号
+        elif e["road"] not in sig_roads:
+            if e["road"] in {lt["road"] for lt in data["lights"]} and inside(ctr):
+                notes.append({"cat": "light dropped", "carla": [round(float(ctr[0]), 1), round(-float(ctr[1]), 1)],
+                              "msg": "lanes.json light no longer in the xodr (signs.py ran after build.py)"})
+            else:
+                bad("signal line without light", ctr, "stop line on a road with no light", **tag)
+        s_front = s_c + thick / 2.0
+        gap_end = ln.length - s_front
+        fe = P[-1] - P[-2]
+        fe = fe / (np.linalg.norm(fe) or 1.0)
+        ext = LineString(list(map(tuple, P)) + [tuple(P[-1] + fe * 3.0)])
+        gap_cross = None
+        for cr in crossings:
+            hit = ext.intersection(cr["band"])
+            if hit.is_empty:
+                continue
+            ss = [ext.project(Point(q)) for gg in getattr(hit, "geoms", [hit]) for q in gg.coords]
+            s_min, s_max = min(ss), max(ss)
+            if ln.length - s_min <= MS.STOP_NEAR_CROSS and not (s_min < 2.0 and ln.length - s_max >= 3.0):
+                gc = s_min - s_front
+                gap_cross = gc if gap_cross is None else min(gap_cross, gc)
+        # one straight line across the approach: a crossing that only some of its lanes
+        # run through sets every lane's line back (generator: max over the lanes)
+        # 停止線は進入路で 1 本: 一部の車線だけが通る横断歩道でも全車線を下げる
+        cross_back = 0.0
+        for m in lanes:
+            if m["road"] != e["road"] or len(m["pts"]) < 3:
+                continue
+            Pm = np.array([q["c"] for q in m["pts"] if (q.get("z", 0.0) > MS.Z0) == (e.get("level") == "deck")])
+            if len(Pm) < 3:
+                continue
+            fm_ = Pm[-1] - Pm[-3]
+            fm_ = fm_ / (np.linalg.norm(fm_) or 1.0)
+            em = LineString(list(map(tuple, Pm)) + [tuple(Pm[-1] + fm_ * 3.0)])
+            for cr in crossings:
+                hit = em.intersection(cr["band"])
+                if hit.is_empty:
+                    continue
+                ss = [em.project(Point(q)) for gg in getattr(hit, "geoms", [hit]) for q in gg.coords]
+                s_min, s_max = min(ss), max(ss)
+                gap = (em.length - 3.0) - s_min
+                if gap <= MS.STOP_NEAR_CROSS and not (s_min < 2.0 and (em.length - 3.0) - s_max >= 3.0):
+                    cross_back = max(cross_back, gap + MS.STOP_BACK)
+        # the generator keeps one line across the approach before the pole of ANY of its lanes
+        # 停止線は進入路全車線の信号柱の手前（全車線で最大）
+        # the light as signs.py left it: its s (CARLA's stop) and the pole (userData pole_s);
+        # markings_sg places no line by the pole (netconvert's light s is a placeholder)
+        # signs.py が置いた信号の s（停止位置）と柱（pole_s）で判定
+        light_back = pole_back = None
+        if e["road"] in light_s:
+            cum_ = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(P, axis=0).T))])
+            sx_ = np.array([q["s"] for q in l["pts"]])
+            back_of = lambda s_: float(cum_[-1] - np.interp(s_, sx_, cum_)) if sx_[-1] >= sx_[0] else \
+                float(np.interp(s_, sx_[::-1], cum_[::-1]))
+            light_back = back_of(light_s[e["road"]][0])
+            if light_s[e["road"]][1] is not None:
+                pole_back = back_of(light_s[e["road"]][1])
+        hi = max(1.5, cross_back + 1.0)       # RMS9 note 3: further back where a crossing needs it / 必要なら更に手前
+        if e["road"] not in sig_roads and (e.get("junction") in short_pred or set(e.get("serves") or []) & sig_roads):
+            hi = max(hi, 8.0)       # moved up from a short road beyond (its crossing / setback) / 先の短い道路から移動
+        # no crossing between the line and the mouth (cars would stop past it) / 停止線と交差点の間に横断歩道が無いこと
+        ahead = substring(ln, min(ln.length, s_front + 0.05), ln.length)
+        for cr in crossings:
+            if ahead.length > 0.1 and ahead.intersects(cr["band"]) and gap_cross is None and \
+                    ln.project(ahead.intersection(cr["band"]).centroid) > 2.0:
+                bad("stop after crossing", ctr, "a crossing lies between the stop line and the junction", **tag)
+                break
+        if gap_cross is not None and gap_cross < 1.0:
+            bad("stop position", ctr, "stop line %.1f m before the crossing (LTA: 2 m)" % gap_cross, **tag)
+        elif gap_cross is not None and gap_cross > 3.0 and gap_end > hi:
+            bad("stop position", ctr, "stop line %.1f m before the crossing (LTA: 2 m)" % gap_cross, **tag)
+        elif gap_cross is None and not (0.3 <= gap_end <= hi):
+            bad("stop position", ctr, "stop line %.1f m before the junction mouth (want 0.3-%.1f)" % (gap_end, hi),
+                **tag)
+        if pole_back is not None and pole_back > gap_end - 0.2:
+            bad("stop after pole", ctr, "light pole %.1f m before the stop line" % (pole_back - gap_end), **tag)
+        if light_back is not None and light_back < gap_end - 0.3:
+            bad("light past line", ctr, "CARLA stops %.1f m past the painted line (light s; run signs.py)"
+                % (gap_end - light_back), **tag)
+        if paint is not None and not paint.hits([ctr])[0]:
+            bad("stop unpainted", ctr, "stop line centre not on white paint", **tag)
+    for key, nline in per_lane.items():
+        if nline > 1:
+            l = lanes_by.get(key[:2])
+            bad("stop double", l["pts"][-1]["c"], "%d stop lines on one approach lane" % nline, road=key[0])
+    # a light on a stub road (< 3 m) is served by the line of the road entering the small
+    # junction before it / 短い分割道路の信号は手前の道路の停止線で
+    pred_of_line = {}
+    for e in elements:
+        if e["kind"] == "stop_signal" and e.get("junction") is not None:
+            pred_of_line.setdefault(e["junction"], set()).add(e["road"])
+    for rid in sig_roads:
+        if rid in lined:
+            continue
+        if x["len"].get(rid, 99.0) < 12.0:
+            # walk up the short roads before it (as markings_sg moved the line) / 手前の短い道路をたどる
+            seen, front, served = set(), [rid], False
+            for _ in range(4):
+                nxt = []
+                for r in front:
+                    j0 = x["pred"].get(r)
+                    if j0 is None or j0 in seen:
+                        continue
+                    seen.add(j0)
+                    if pred_of_line.get(j0):
+                        served = True
+                    nxt += [r2 for r2 in appr_at[j0] if x["len"].get(r2, 99.0) < 12.0]
+                front = nxt
+            if served:
+                continue
+        l = next((l for l in lanes if l["road"] == rid), None)
+        if l is not None and LineString([q["c"] for q in l["pts"]]).length > 3.0:
+            bad("signal without line", l["pts"][-1]["c"], "traffic light on road %d but no stop line" % rid, road=rid)
+    # -- zebras: zig-zags on every approach with room, none over yellow / ジグザグ線
+    zz = collections.defaultdict(set)
+    for e in elements:
+        if e["kind"] == "zigzag":
+            zz[e["crossing"]].add((e["road"], e["lane"], e["side"]))
+    for k, cr in enumerate(crossings):
+        if cr.get("kind") != "zebra":
+            continue
+        for i in gtree.query(cr["band"].buffer(0.3)):
+            ln, l = glines[int(i)]
+            if ln.distance(cr["band"]) > 0.3:
+                continue
+            hit = ln.intersection(cr["band"])
+            if hit.is_empty:
+                continue
+            s0 = min(ln.project(Point(q)) for g in getattr(hit, "geoms", [hit]) for q in getattr(g, "coords", []))
+            ids = sorted({abs(m["lane"]) for m in sections[(l["road"], l["section"])]})
+            if cls.get((l["road"], l["section"])) in (MS.ESTATE, MS.NARROW):
+                continue            # estate-road zebras have no zig-zags (Street View) / 団地内はジグザグ無し
+            if s0 - 1.0 >= MS.ZZ_LEG + 0.6 and abs(l["lane"]) == ids[0] and (l["road"], l["lane"], "kerb") not in zz[k]:
+                bad("zigzag missing", ln.interpolate(s0 - 3.0).coords[0], "zebra %d: kerb lane approach without its "
+                    "zig-zag" % k, road=l["road"])
+    if paint is not None and len(paint.tri["y"]):
+        ytree = STRtree(paint.tri["y"])
+        for e in elements:
+            if e["kind"] != "zigzag":
+                continue
+            idx = ytree.query(e["geom"], predicate="intersects")
+            ov = sum(paint.tri["y"][int(i)].intersection(e["geom"]).area for i in idx)
+            if ov > 0.01:
+                bad("zigzag over yellow", e["geom"].centroid.coords[0], "zig-zag over %.2f m2 of yellow paint" % ov)
+    # -- white over yellow (overlapping paint z-fights) / 白と黄の重なり
+    if paint is not None and len(paint.tri["y"]) and len(paint.tri["w"]):
+        wtree = STRtree(paint.tri["w"])
+        yc = paint.centroids("y")
+        i, j = wtree.query(yc, predicate="intersects")
+        if len(i):
+            p0 = shapely.get_coordinates(yc[i[0]])[0]
+            bad("paint overlap", p0, "%d yellow paint triangles lie on white paint" % len(np.unique(i)))
+    # -- every painted element in its own colour (bus lanes, bays, BUS, yellow boxes yellow; the
+    # rest white) / 各要素の色（バスレーン・停車帯・BUS・黄色ボックスは黄、他は白）
+    if paint is not None:
+        yellow_kinds = {"bus_lane", "bus_word", "bus_bay", "yellow_box"}
+        for e in elements:
+            g = e.get("geom")
+            if g is None or g.is_empty or e["kind"] in ("stop_signal",):
+                continue
+            want = "y" if e["kind"] in yellow_kinds else "w"
+            if e.get("col", want) != want:
+                bad("element colour", g.centroid.coords[0], "%s generated %s (LTA: %s)" % (e["kind"], e.get("col"), want))
+                continue
+            ps = [q.representative_point() for q in getattr(g, "geoms", [g]) if q.area > 0.02][:6]
+            if not ps:
+                continue
+            xy = [(p.x, p.y) for p in ps]
+            ok, other = paint.hits(xy, want), paint.hits(xy, "w" if want == "y" else "y")
+            if ok.sum() == 0 and other.sum() > 0:
+                bad("element colour", ps[0].coords[0], "%s painted %s in the mesh (LTA: %s)"
+                    % (e["kind"], "yellow" if want == "w" else "white", "yellow" if want == "y" else "white"))
+    # -- arrows / 矢印
+    for e in elements:
+        if e["kind"] != "arrow":
+            continue
+        l = lanes_by.get((e["road"], e.get("lane")))
+        if l is None:
+            continue
+        n = len({abs(m["lane"]) for m in sections[(l["road"], l["section"])]})
+        c0 = e["geom"].centroid.coords[0]
+        if n < 2:
+            bad("arrow single lane", c0, "lane arrow on a single-lane approach", road=e["road"])
+        if cls.get((l["road"], l["section"])) == MS.EXPWY:
+            bad("arrow expressway", c0, "lane arrow on an expressway", road=e["road"])
+    # -- kerb and centre lines by class / 格ごとの外側線・中央線
+    lh = meta.get("lefthand", False)
+    if ground_paint is not None:
+        cedges = []
+        for key, ls in sections.items():
+            ls = sorted(ls, key=lambda l: abs(l["lane"]))
+            cedges.append((LineString([p["r" if lh else "l"] for p in ls[-1 if lh else 0]["pts"]]), ls[-1]))
+        ctree = STRtree([g for g, _ in cedges])
+        bayz = unary_union([b["poly"].buffer(1.0) for b in getattr(L, "bus_bays", []) if "poly" in b])
+        skip = unary_union([cr["band"].buffer(14.0) for cr in crossings] + [bayz, jl.buffer(2.0)])
+        for key, ls in sections.items():
+            c = cls.get(key)
+            if c is None or c == MS.NARROW:
+                continue
+            ls = sorted(ls, key=lambda l: abs(l["lane"]))
+            kl = ls[0]
+            if max(q.get("z", 0.0) for q in kl["pts"]) > MS.Z0:
+                continue
+            ke = LineString([p["l" if lh else "r"] for p in kl["pts"]])
+            if ke.length < 12.0:
+                continue
+            pts = [ke.interpolate(t, normalized=True) for t in np.linspace(0.1, 0.9, 9)]
+            pts = [p for p in pts if not skip.contains(p)]
+            if len(pts) >= 4:
+                xy = []
+                for p in pts:
+                    s_ = ke.project(p)
+                    v = MJ.tangent(ke, s_)
+                    nrm = np.array([-v[1], v[0]]) * (1.0 if lh else -1.0)
+                    xy += [(p.x + nrm[0] * d, p.y + nrm[1] * d) for d in (0.15, 0.2, 0.3)]
+                hw = ground_paint.hits(xy, "w").reshape(-1, 3).any(axis=1)
+                hy = ground_paint.hits(xy, "y").reshape(-1, 3).any(axis=1)
+                hit = hw | hy
+                if hit.sum() < len(pts) // 2:
+                    bad("edge missing", pts[len(pts) // 2].coords[0], "kerb line missing on a %s section (%d/%d)"
+                        % (MS.CLASS_NAME.get(c, c), hit.sum(), len(pts)), road=key[0])
+                else:
+                    # the colour the class wants: main roads double yellow (white on flyover
+                    # ramps), estate white (maps.json estate_kerb), slip roads / expressways white
+                    # 格の色: 幹線は黄、団地内・導流路・高速は白
+                    want = "y" if (c == MS.MAIN and cfg.get("main_kerb", "double_yellow") == "double_yellow") or \
+                        (c == MS.ESTATE and cfg.get("estate_kerb", "white") != "white") else "w"
+                    good = hy if want == "y" else hw
+                    if good.sum() < (hit.sum() + 1) // 2:
+                        bad("kerb colour", pts[len(pts) // 2].coords[0], "kerb line on a %s section is %s, LTA wants %s "
+                            "(%d/%d samples)" % (MS.CLASS_NAME.get(c, c), "white" if want == "y" else "yellow",
+                                                 "yellow" if want == "y" else "white", good.sum(), hit.sum()),
+                            road=key[0])
+            ce_l = ls[-1]
+            ce = LineString([p["r" if lh else "l"] for p in ce_l["pts"]])
+            if ce.length < 12.0:
+                continue
+            probes = [ce.interpolate(t, normalized=True) for t in np.linspace(0.1, 0.9, 12)]
+            opp = None
+            for i in ctree.query(ce.buffer(0.6)):
+                e2, l2 = cedges[int(i)]
+                if l2["road"] != key[0] and sum(1 for p in probes if e2.distance(p) <= 0.5) >= 6:
+                    opp = l2
+                    break
+            if opp is None or cls.get((opp["road"], opp["section"])) == MS.NARROW:
+                continue
+            probes = [p for p in probes if not skip.contains(p)]
+            if len(probes) < 4:
+                continue
+            xy = [(p.x, p.y) for p in probes]
+            # the E line is broken: a probe hits a dash or the side of a pair / 破線: 半分程度
+            near = []
+            for p in probes:
+                v = MJ.tangent(ce, ce.project(p))
+                near += [(p.x + v[0] * d, p.y + v[1] * d) for d in (-2.0, -1.0, 0.0, 1.0, 2.0)]
+                nrm = np.array([-v[1], v[0]])
+                near += [(p.x + nrm[0] * 0.1, p.y + nrm[1] * 0.1), (p.x - nrm[0] * 0.1, p.y - nrm[1] * 0.1)]
+            hit = ground_paint.hits(near, "w").reshape(len(probes), -1).any(axis=1)
+            if hit.sum() < len(probes) // 2:
+                bad("centre missing", probes[len(probes) // 2].coords[0], "centre line missing on a two-way %s section"
+                    % MS.CLASS_NAME.get(c, c), road=key[0])
+    # -- ground paint over kerbs / islands / off the road / 縁石・島・車道外の塗装
+    if ground_paint is not None:
+        over = unary_union([L.kerb, L.islands]).buffer(-0.02)
+        lots = unary_union([L.parking, L.driveways]).buffer(0.05)
+        for col in ("w", "y"):
+            cen = ground_paint.centroids(col)
+            if not len(cen):
+                continue
+            xy = shapely.get_coordinates(cen)
+            on_off = shapely.contains_xy(over, xy[:, 0], xy[:, 1])
+            outside = ~shapely.contains_xy(cw.buffer(0.03), xy[:, 0], xy[:, 1]) & ~shapely.contains_xy(lots, xy[:, 0],
+                                                                                                         xy[:, 1])
+            for mask, what in ((on_off, "over the kerb or an island"), (outside & ~on_off, "off the carriageway")):
+                pts_ = [p for p in xy[mask] if inside(p)]
+                if pts_:
+                    bad("paint off road", pts_[0], "%d %s paint triangles %s" % (len(pts_), col, what), count=len(pts_))
+    cats = collections.Counter(p["cat"] for p in problems)
+    kinds = collections.Counter(e["kind"] for e in elements)
+    print("check_markings (Singapore, LTA): %s; %d crossings (%d zebra, %d signalised), %d lights%s; elements %s"
+          % (name, len(crossings), sum(1 for c in crossings if c.get("kind") == "zebra"),
+             sum(1 for c in crossings if c.get("kind") == "signal"), len(sig_roads),
+             ("; area %s" % (area.bounds,)) if area is not None else "",
+             ", ".join("%s %d" % kv for kv in sorted(kinds.items()))))
+    if paint is not None:
+        print("  paint: %d white / %d yellow triangles (ground + decks)" % (paint.n["w"], paint.n["y"]))
+    for p in sorted(problems, key=lambda p: (p["cat"], p["carla"])):
+        print("  FAIL %-24s CARLA %s: %s" % (p["cat"], carla(p["map"]), p["msg"]))
+    for q in notes[:20]:
+        print("  note %-24s CARLA (%.1f, %.1f): %s" % (q["cat"], q["carla"][0], q["carla"][1], q["msg"]))
+    print("summary: " + (", ".join("%s %d" % kv for kv in sorted(cats.items())) if cats else "clean")
+          + "; notes %d" % len(notes))
+    print("markings check: %s (%d problems)" % ("PASS" if not problems else "FAIL", len(problems)))
+    if a.json:
+        json.dump({"pass": not problems, "problems": problems, "notes": notes, "summary": dict(cats),
+                   "rules": "sg_lta"}, open(a.json, "w"), indent=1, ensure_ascii=False)
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

@@ -92,6 +92,8 @@ if [ -d "$SRC/meshes" ] && [ -x "$RECAST" ] && [ ! -f "$CONTENT/$PKG/Maps/$NAME/
     # the navmesh only depends on the road/pavement/grass/street meshes; a full
     # map takes ~2 h, so it is cached by a hash of exactly those inputs
     # 入力メッシュのハッシュでキャッシュ（全体で約 2 時間かかる）
+    # (+ the map's maps.json "nav" options when it has them: maps without keep their keys)
+    # （maps.json "nav" がある地図はその設定もキーに含める）
     NAVKEY="$("$MV" -c "
 import glob, hashlib, os, sys, numpy as np
 keys = ('Road_Road', 'Road_Curb', 'Road_Crosswalk', 'Road_Sidewalk', 'Road_Grass', 'Terrain_Street')
@@ -103,7 +105,11 @@ for f in sorted(glob.glob(os.path.join(sys.argv[1], '*.npz'))):
         for k in sorted(d.files):
             if k.endswith(('|V', '|I')):
                 h.update(k.encode()); h.update(np.ascontiguousarray(d[k]).tobytes())
-print(h.hexdigest())" "$SRC/meshes")"
+import json
+nav = json.load(open(sys.argv[2])).get(sys.argv[3], {}).get('nav')
+if nav:
+    h.update(json.dumps(nav, sort_keys=True).encode())
+print(h.hexdigest())" "$SRC/meshes" "$HERE/maps.json" "$KEY")"
     NAVCACHE="$SRC/nav_cache/$NAVKEY.bin"
     if [ -s "$NAVCACHE" ]; then
         echo "navmesh inputs unchanged ($NAVKEY): cached navmesh reused"

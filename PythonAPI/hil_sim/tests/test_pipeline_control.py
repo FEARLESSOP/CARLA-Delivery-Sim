@@ -162,5 +162,12 @@ check("manual: every placed spot, the stepper ignored",
       rp.charge_station_args(0, "manual", "Japan/Maps/OitaKosen/OitaKosen", zp) == ["--charge-stations", "2", "--charge-mode", "manual"])
 check("manual without spots on this map: nothing", rp.charge_station_args(6, "manual", "Town03", zp) == [])
 check("unknown mode falls back to random", rp.charge_station_args(3, "bogus", "Town03", zp)[-1] == "random")
+
+print("=== map load wait / マップ読込の待ち時間 ===")
+# maps.json "load_timeout_s" (PasirRisTampines 300 s, 2026-11-21); others keep 120 s
+check("big map waits its maps.json load_timeout_s",
+      rp.map_load_timeout("/Game/Singapore/Maps/PasirRisTampines/PasirRisTampines") == 300.0)
+check("own map without the key: 120 s", rp.map_load_timeout("OitaKosen") == 120.0)
+check("CARLA town: 120 s", rp.map_load_timeout("Town10HD_Opt") == 120.0)
 print("\n%d failure(s)" % len(FAILS))
 sys.exit(1 if FAILS else 0)

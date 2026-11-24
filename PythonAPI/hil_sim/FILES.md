@@ -94,7 +94,13 @@ A map of the important files, by topic. Paths are relative to
 | `maps/maps.json` | one entry per map (package, OSM, keep_left, road_style, signal_timing, ...) |
 | `maps/make_osm_city.sh` | the whole chain: OSM → road logic → model → FBX |
 | `maps/build_map.sh` | import, cook, install (steps 2d/2e/2f: Japanese signals, speed posts, pedestrian heads) |
-| `maps/osm_city/` | generators: `roadnet.py`, `lanes.py`, `layout.py`, `markings.py`, `buildings*.py`, `props.py`, `terrain.py`, `elevate.py` |
+| `maps/osm_city/` | generators: `roadnet.py`, `lanes.py`, `layout.py`, `markings.py`, `markings_sg.py` + `surfaces_sg.py` + `textures_sg.py` (Singapore LTA markings and road surfaces, maps.json "sg_lta", ch. 51 / シンガポール LTA 式の標示と路面), `buildings*.py`, `props.py`, `terrain.py`, `elevate.py`, `grade_sep.py` (flyovers on flat maps, maps.json "roadnet" / 平坦な地図の立体交差), `flyover.py` (their decks in the model / 橋面の3D), `lane_ends.py` (no dead lanes / 行き止まり車線の解消) |
+| `maps/osm_city/test_buildings_sg.py` | Singapore building options + tree crowns: face direction, merged walls, roof boxes inside the footprint (map guide ch. 46) / シンガポールの建物オプションと樹冠の試験 |
+| `maps/osm_city/crop_build.py` | scratch: a square crop of a build dir round one site, frame re-centred (never import it) / 作業用: 1 か所の周りを切り出す（座標系を移す） |
+| `maps/osm_city/crop_inputs.py` | scratch: OSM + lanes cropped to a box, frame kept, for `BUILD_AREA` builds (never import it) / 作業用: OSM と車線を範囲で切り出す（座標系はそのまま） |
+| `maps/osm_city/landmarks/` | hand-modelled landmarks, most with a `test_*.py`: `prcs.py`, `lvss.py` (PasirRis), `kosen.py`, `dorm.py`, `seven.py`, `akeno.py` (OitaKosen), `onterrain.py` (shared helper), and for PasirRisTampines `dte.py`, `coral.py`, `prs11.py`, `prcs_v2.py`, `wsm.py`, `wsps.py`, `tp.py` (map guide ch. 41-49) / 手作りのランドマーク（PasirRisTampines 用 7 件を含む） |
+| `maps/osm_city/test_mesh_merge.py` | `Mesh.merge` keeps triangles on their own vertices after a landmark `drop_over` (ch. 38) / drop_over 後の merge の試験 |
+| `maps/build/PasirRisTampines/` | the large Singapore map (4.7 x 5.1 km, keep-left, flyovers, 7 landmarks; maps.json `pasir_ris_tampines`), built 2026-11-22, not yet imported; `PROGRESS.md` = build log and decisions (map guide ch. 40-51) / シンガポールの大きな地図（2026-11-22 ビルド済み、未インポート）。経過は PROGRESS.md |
 | `maps/osm_city/jp_signs.py`, `signs.py`, `speed_spot.py`, `lht_poles.py` | road signs, sign positions, signal poles |
 | `maps/osm_city/jp_shingo.py` + `maps/ue_jp_shingo*.py` | Japanese traffic signal model BP_JpShingo (ch. 24) |
 | `maps/osm_city/jp_sokudo.py` + `maps/ue_jp_sokudo*.py` | blue-number speed posts BP_JpSokudo (ch. 25) |
@@ -106,9 +112,10 @@ A map of the important files, by topic. Paths are relative to
 | `maps/osm_city/shopfront_jp.py` + `test_shopfront_jp.py` | Japan maps: shop entrances (自動ドア, 格子戸 + 暖簾) drawn by buildings_jp and recorded (`shopfronts.json`), then vending machines + recycling box, A-frame / stand kanban, pots, planters, のぼり in front of them after core_merge (`Terrain_JpShopfront_*`, `shopfront_props.json`; ch. 10) |
 | `maps/osm_city/jp_speeds.py` | speed limits: ring 100, real limits, legal 60/30 (ch. 29) |
 | `maps/osm_city/lane_change_jp.py` + `tests/test_lane_change_jp.py` | Japan maps: every xodr `<roadMark>` (type, colour, laneChange) from the painted lines (marking meshes, core tile included): yellow solid between lanes = no lane change, white solid / broken = allowed, solid kerb / centre = none; only roadMark lines change (`.xodr.prelanechange`, `lane_change.json`); make_osm_city.sh after core_merge (map guide ch. 39) |
-| `maps/osm_city/gaito.py`, `jp_gaito.py` + `maps/ue_jp_gaito.py` | street lamps that light up, BP_JpGaito (ch. 28) |
+| `maps/osm_city/gaito.py`, `jp_gaito.py` + `maps/ue_jp_gaito.py` | street lamps that light up, BP_JpGaito; maps.json `gaito_lit` lights only main-road heads (ch. 28) / 点灯する街灯 |
+| `maps/osm_city/check_navmesh.py` | navmesh .bin within Detour's tile / poly id limits (big maps, ch. 7) / ナビメッシュの ID 上限確認 |
 | `maps/osm_city/check_roads.py`, `check_signal_poles.py` | checks: nothing on the road, poles where CARLA puts them |
-| `maps/osm_city/check_drive.py`, `check_paths.py`, `check_markings.py`, `check_stop_poles.py` | checks: built road vs road logic (0 spots in every class, ch. 30), walkable network (ch. 31), markings (0 problems, ch. 32) |
+| `maps/osm_city/check_drive.py`, `check_paths.py`, `check_markings.py`, `check_stop_poles.py` | checks: built road vs road logic (0 spots in every class, ch. 30), walkable network (ch. 31), markings (0 problems, ch. 32; Singapore LTA rule set + `--area tiles` for crops, ch. 51 / シンガポール規則) |
 | `maps/osm_city/test_*.py`, `landmarks/test_*.py` | model-side tests (`maps/.venv/bin/python`) |
 | `maps/build/<Map>/` | build output (git-ignored): xodr, FBX, photos, logs |
 | `maps/queue/` | queued map requests and handoffs |

@@ -44,9 +44,13 @@ APRON_GRID = 50.0      # hilly maps: the apron beyond the map's edge, cut on thi
 def tiles(meta):
     hx, hy = meta["half_x"], meta["half_y"]
     nx, ny = int(math.ceil(2 * hx / TILE)), int(math.ceil(2 * hy / TILE))
+    # more than 10 tiles a side: "%d%d" made (1, 11) and (11, 1) both "111" (one tile's
+    # meshes overwrote the other's); two digits each there, small maps keep their names
+    # 1 辺 10 タイル超では 2 桁ずつ（"%d%d" では (1,11) と (11,1) が同名で上書き）
+    fmt = "%02d%02d" if max(nx, ny) > 10 else "%d%d"
     for i in range(nx):
         for j in range(ny):
-            yield "%d%d" % (i, j), box(-hx + i * TILE, -hy + j * TILE, min(hx, -hx + (i + 1) * TILE),
+            yield fmt % (i, j), box(-hx + i * TILE, -hy + j * TILE, min(hx, -hx + (i + 1) * TILE),
                                        min(hy, -hy + (j + 1) * TILE))
 
 
@@ -139,6 +143,9 @@ class Ground(object):
         # carriageway into asphalt pieces, textures_jp.py), plain concrete kerbs,
         # asphalt footways / 日本式: 車道の材質分割・無塗装の縁石・アスファルト歩道
         self.jp = L.meta.get("road_style") == "japan"
+        # maps.json "sg_lta" (guide ch. 51): Singapore kerbs, footpaths and road paint
+        # (textures_sg.py) / シンガポールの縁石・歩道・標示の材質
+        self.sg = bool(L.meta.get("sg_lta")) and not self.jp
         self.surf = surfaces
         self.drape = drape          # terrain.Drape on hilly maps, None on flat ones / 起伏のある地図のみ
         self.driveways = L.driveways
@@ -165,6 +172,10 @@ class Ground(object):
                                                                      "construction")}
         self.marks = marks
         self.crossings = crossings
+        # large maps (maps.json "roadnet"): the pavement band reached into the medians, so
+        # pavers and island grass lay at one height there (black strips): islands win
+        # 大きな地図: 中央分離帯に歩道帯が重なり同じ高さで重複（黒い帯）: 島を優先
+        self.footpaths_draw = L.footpaths.difference(L.islands) if L.meta.get("roadnet") else L.footpaths
         cw = L.carriageway
         # dropped kerbs at driveway mouths and crossing ends / 進入路・横断歩道の縁石切り下げ
         bands = []
@@ -221,6 +232,8 @@ class Ground(object):
         main = [_P([q["l"] for q in l["pts"]] + [q["r"] for q in l["pts"]][::-1]).buffer(0)
                 for l in L.lanes if (l["speed"] or 0) >= 13.8 and l["junction"] < 0]
         main = unary_union(main).buffer(0.95) if main else _P()
+        if self.sg and getattr(L, "kerb_paint_zone", None) is not None:
+            main = L.kerb_paint_zone            # LTA: slip roads, islands, junction corners (markings_sg) / 白黒縁石
         fm = self.face[2]
         self.painted = shapely.contains_xy(main, fm[:, 0], fm[:, 1]) if not main.is_empty else np.zeros(len(fm), bool)
         if self.jp:
@@ -375,7 +388,8 @@ class Ground(object):
             road.flat("asphalt", T(L.carriageway), 0.0, uv_scale=6.0)
         out["Road_Road"] = road
 
-        kmat, fmat, fuv = ("kerb_jp", "kerb_face_jp", 1.2) if self.jp else ("kerb", "kerb", 1.0)
+        kmat, fmat, fuv = ("kerb_jp", "kerb_face_jp", 1.2) if self.jp else \
+            (("kerb_sg", "kerb_face_sg", 2.0) if self.sg else ("kerb", "kerb", 1.0))
         kerb = Mesh()
         kerb.flat(kmat, T(self.kerb_flat), KERB_H, uv_scale=1.0)
         rp = T(self.ramps)
@@ -410,7 +424,8 @@ class Ground(object):
         out["Road_Curb"] = kerb
 
         paint = Mesh()
-        pw, py = ("line_white", "line_yellow") if self.jp else ("paint_white", "paint_yellow")
+        pw, py = ("line_white", "line_yellow") if self.jp else \
+            (("line_white_sg", "line_yellow_sg") if self.sg else ("paint_white", "paint_yellow"))
         on_road = RoadSurface(road) if self.drape is not None else None
         for g, col in self.marks:
             if g.intersects(tile):
@@ -456,14 +471,25 @@ class Ground(object):
             if "asphalt_rosoku" in road.parts:
                 side.parts["asphalt_rosoku"] = road.parts.pop("asphalt_rosoku")
         else:
-            side.flat("pavers", T(L.footpaths), RAISED_Z, uv_scale=2.0)
+            if self.sg:
+                side.flat("footpath_sg", T(self.footpaths_draw), RAISED_Z, uv_scale=3.0)   # in-situ concrete / コンクリート
+            else:
+                side.flat("pavers", T(self.footpaths_draw), RAISED_Z, uv_scale=2.0)
             side.flat("concrete_path", T(L.aprons), RAISED_Z, uv_scale=2.0)
             side.flat("park_connector", T(L.cycleways), RAISED_Z, uv_scale=3.0)
         out["Road_Sidewalk"] = side
 
         grass = Mesh()
         if self.drape is None:
-            base = T(L.bounds.difference(L.carriageway).difference(L.pools))
+            if L.meta.get("roadnet"):
+                # large maps (maps.json "roadnet"): no base under the grass islands and
+                # medians -- the same grass twice 1 cm apart rendered black strips
+                # (PasirRisTampines medians); cut per tile / 大きな地図: 島・中央分離帯の下に芝の下地を張らない
+                # (cut globally first, as below: cutting the tile's own pieces left grass
+                # slivers over the carriageway at tile seams) / 先に全体で切る（タイル境界の細片）
+                base = T(L.bounds.difference(L.carriageway).difference(L.pools)).difference(T(L.islands))
+            else:
+                base = T(L.bounds.difference(L.carriageway).difference(L.pools))
             grass.flat("grass", base, BASE_Z, uv_scale=4.0)
         else:
             # draped: the grass only where no other surface is, at their height --

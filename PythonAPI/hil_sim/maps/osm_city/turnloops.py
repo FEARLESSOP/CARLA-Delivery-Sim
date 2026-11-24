@@ -377,6 +377,9 @@ def kinked(m, rid, s_from, s_to):
     return max([abs((math.degrees(b - a) + 180) % 360 - 180) for a, b in zip(ys, ys[1:])] or [0.0])
 
 
+LOOP_SITE_CLEAR = 40.0     # first pass: no loop for a head this near a landmark site / 敷地からこの距離内はループ無し
+
+
 def fix(xodr_in, xodr_out, log=print, buildings=None, refine=False, sites=None):
     """buildings: footprints (map frame) the loops should keep clear of. refine
     (after elevate.py, the xodr has heights): only the loops whose head would
@@ -446,6 +449,12 @@ def fix(xodr_in, xodr_out, log=print, buildings=None, refine=False, sites=None):
         if not ends.backs:
             ends.backs = [0.0]
         P0 = ends(0)[0]
+        if not refine and sites is not None and sites.distance(shapely.Point(P0)) < LOOP_SITE_CLEAR:
+            # roadnet.py with maps.json "roadnet" no_loops_in_sites: a loop would cut into
+            # the landmark (Downtown East car park, D'Resort wings): netconvert's head kept
+            # 詳細モデル敷地内（と近く）にはループを作らない: netconvert の転回部のまま
+            failed.append(int(j.get("id")))
+            continue
         idx = [i for i in tree.query(shapely.Point(P0).buffer(45.0)) if polys[i][0] not in own]
         if refine:
             # lanes at another height count CLR_APART - CLR_GOOD m nearer / 高さの違う車線は近いとみなす

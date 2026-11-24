@@ -124,7 +124,8 @@ def main():
         EXTRA = EXTRA + " " + TYPICAL
     o = L.load_saved()
     o.update(map="OitaKosen", delivery=3, minipod_hubs=0, charge_mode="random", charge_stations=4,
-             policy_nav="off", policy_drive="off", delivery_args=EXTRA)
+             policy_nav="off", policy_drive="off", delivery_args=EXTRA,
+             sim_fps=30)        # same frame rate as the first runs (seeds 7, 8) / 最初の試行と同じ FPS
     o = L.clean(o)
     old = {p for p, _ in delivery_procs()}
     pc.request(pc.LAUNCH_PATH, "relaunch", options=o)

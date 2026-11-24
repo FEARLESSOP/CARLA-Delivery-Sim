@@ -128,3 +128,9 @@ desktop.ini
 /CarlaUE4/Content/Japan/Maps/OitaKosen/OitaKosen.uexp
 # local safety copies / ローカルの安全用コピー
 /backup_*/
+# PasirRisTampines cooked map content (~4.6 GB, level file 877 MB > GitHub limit): rebuild with
+# PythonAPI/hil_sim/maps/make_osm_city.sh pasir_ris_tampines --lefthand --no-import + build_map.sh
+/CarlaUE4/Content/Singapore/Maps/PasirRisTampines/
+/CarlaUE4/Content/Singapore/Static/*/PasirRisTampines/
+# chat archive with personal data: never published
+/PythonAPI/hil_sim/docs/archive/antigravity_2026-11/CHAT_COMPLETE_ARCHIVE.md

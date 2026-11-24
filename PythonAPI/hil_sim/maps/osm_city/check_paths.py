@@ -76,7 +76,12 @@ def main():
         cross = raster_polys([wkt.loads(h) for h in A.get("crosswalk", [])])
         apron = raster_polys([wkt.loads(h) for h in A.get("sidewalk", [])])
     else:
-        cross = ndimage.binary_dilation(raster_polys([c["band"] for c in cr]), iterations=2)
+        # Singapore-style crossings (markings.py) carry no "band": from their kerb-to-kerb
+        # pieces and width / band の無い横断歩道（markings.py）は区間と幅から作る
+        from shapely.ops import unary_union
+        cross = ndimage.binary_dilation(raster_polys([
+            c["band"] if "band" in c else unary_union([g.buffer(c.get("width", 4.0) / 2, cap_style="flat")
+                                                       for g in c.get("segs", [])]) for c in cr]), iterations=2)
         apron = np.zeros_like(side)
     walk = side | cross | apron
     lab, n = ndimage.label(walk, structure=np.ones((3, 3)))

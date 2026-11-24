@@ -268,9 +268,13 @@ def merge_phases(root):
             j.remove(jc)
 
 
-def split(root, lanes_json):
+def split(root, lanes_json, drop_stubs=True):
     """Split the controllers of ``root`` (an xodr ElementTree root) in place.
     Returns {controller id: [[signal ids of phase 1], ...]} for those split.
+    drop_stubs=False keeps the stub-road lights: an xodr-only update of an imported map
+    must keep every signal the level's light actors carry (CARLA's TrafficLightManager
+    looks each one up with map::at and aborts on a missing id).
+    drop_stubs=False: 取込み済みの地図の xodr だけを更新する時は信号を消さない。
     xodr のコントローラを現示ごとに分ける（その場で変更）。"""
     yaw = approach_yaw(lanes_json)
     paths = Paths(lanes_json)
@@ -285,7 +289,7 @@ def split(root, lanes_json):
     # governed by the lights where traffic enters it
     # 交差点群内の短い連結路の信号は交差点内で車を止める（渋滞）: 削除し、流入部の信号で制御
     self_removed = []
-    for road in root.findall("road"):
+    for road in (root.findall("road") if drop_stubs else []):
         lk = road.find("link")
         pre = lk.find("predecessor") if lk is not None else None
         suc = lk.find("successor") if lk is not None else None

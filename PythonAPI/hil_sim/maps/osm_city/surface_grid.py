@@ -14,7 +14,18 @@ y north) and writes build/<Name>/surface_grid.npz:
   kind   uint8 [rows, cols]  what covers the cell (KINDS index; 0 = nothing)
   x0, y0, res               map-frame origin of cell (0, 0) (its south-west
                             corner) and the cell size; row = (y - y0) / res
+  over   float16 [rows, cols] (opt-in maps only) lowest z (map frame = CARLA
+         z, m) of the tree crowns and lamp heads over the cell, inf = none
 CARLA's frame is x east, y SOUTH: look a CARLA point up at (x, -y).
+
+Crowns (opt-in per map: maps.json "surface_grid": {"crowns": "overhead"}, or
+--crowns-overhead): maps whose trees carry their leaves as materials of
+Terrain_Trees (the Singapore maps) painted every crown as taken ground, so the
+grass verge under a roadside rain tree never counted as lawn. With the opt-in
+the crowns and lamp heads go to ``over`` instead: the ground under them keeps
+its own kind, and charge_sites checks the clearance under them (6.2 m over a
+station, the vehicle height over a waiting bay, 2.2 m over the footpath).
+Other maps are unchanged.
 
 地図の地表グリッド（芝だけの空き地か、道路・歩道・区画・コート等で塞がるか）。
 """
@@ -32,10 +43,14 @@ KINDS = ["none", "lawn", "lot", "court", "site", "walk", "kerb", "road", "markin
 FREE_MATS = ("grass", "grass_park")
 
 
-def kind_of(obj_kind, mat):
-    """KINDS name for a mesh object kind + material (None: ignore it)."""
+def kind_of(obj_kind, mat, crowns_over=False):
+    """KINDS name for a mesh object kind + material (None: ignore it;
+    "over": an overhead part, opt-in maps only)."""
     if any(s in obj_kind for s in ("Leaves", "JpPlates", "JpHokousha")):
         return None                           # crowns and small signs: the raycast sees them / 樹冠は光線で確認
+    if crowns_over and ((obj_kind == "Terrain_Trees" and mat.startswith("leaves"))
+                        or (obj_kind == "Terrain_Street" and mat == "lamp_head")):
+        return "over"                         # crown / lamp head over the ground / 地面の上の樹冠・灯具
     if obj_kind == "Road_Grass":
         return "lawn" if mat in FREE_MATS else "lot"
     if obj_kind == "Road_Road":
@@ -72,7 +87,48 @@ def objects(meshes_dir):
                 yield okind, mat, d[key], d[mat + "|I"]
 
 
-def build(bd, res=0.5):
+def crowns_opt_in(bd):
+    """maps.json "surface_grid": {"crowns": "overhead"} for this build's map."""
+    import json
+    name = os.path.basename(os.path.normpath(bd))
+    try:
+        maps = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                           "maps.json")))
+    except (OSError, ValueError):
+        return False
+    return any(isinstance(m, dict) and m.get("name") == name
+               and (m.get("surface_grid") or {}).get("crowns") == "overhead" for m in maps.values())
+
+
+def _samples(V, I, step=0.25):
+    """Points on every triangle: its edges every ``step`` m and, where it has
+    plan area, a barycentric lattice of the same spacing. / 三角形上の点。"""
+    A, B, Cc = V[I[:, 0]], V[I[:, 1]], V[I[:, 2]]
+    L = np.maximum.reduce([np.linalg.norm(A - B, axis=1), np.linalg.norm(B - Cc, axis=1),
+                           np.linalg.norm(Cc - A, axis=1)])
+    n = np.maximum(1, np.ceil(L / step)).astype(np.int64)
+    area = 0.5 * np.abs((B[:, 0] - A[:, 0]) * (Cc[:, 1] - A[:, 1]) - (Cc[:, 0] - A[:, 0]) * (B[:, 1] - A[:, 1]))
+    for nn in np.unique(n):
+        sel = n == nn
+        a, b, c = A[sel], B[sel], Cc[sel]
+        t = np.linspace(0.0, 1.0, nn + 1)[None, :, None]
+        for p, q in ((a, b), (b, c), (c, a)):
+            yield (p[:, None, :] * (1 - t) + q[:, None, :] * t).reshape(-1, 3)
+        flat = area[sel] > 0.02
+        if nn >= 2 and flat.any():
+            ii, jj = np.meshgrid(np.arange(nn + 1), np.arange(nn + 1), indexing="ij")
+            m = (ii + jj) <= nn
+            u, v = (ii[m] / nn)[None, :, None], (jj[m] / nn)[None, :, None]
+            af, bf, cf = a[flat], b[flat], c[flat]
+            chunk = max(1, 2000000 // int(m.sum()))
+            for k in range(0, len(af), chunk):
+                s = slice(k, k + chunk)
+                yield (af[s][:, None, :] * (1 - u - v) + bf[s][:, None, :] * u + cf[s][:, None, :] * v).reshape(-1, 3)
+
+
+def build(bd, res=0.5, crowns_over=None, out=None):
+    if crowns_over is None:
+        crowns_over = crowns_opt_in(bd)
     items = list(objects(os.path.join(bd, "meshes")))
     # the grid covers the road network + 40 m (the lawn skirt beyond the ring
     # cannot be reached) / 道路網 + 40 m の範囲（外周の芝は対象外）
@@ -87,9 +143,19 @@ def build(bd, res=0.5):
     order = {k: i for i, k in enumerate(KINDS)}
     groups = {}
     for okind, mat, V, I in items:
-        k = kind_of(okind, mat)
+        k = kind_of(okind, mat, crowns_over)
         if k is not None:
             groups.setdefault(k, []).append((V, I))
+    over = None
+    if crowns_over:
+        # lowest z of the crowns / lamp heads over each cell / 樹冠・灯具の最低高さ
+        over = np.full((rows, cols), np.inf, np.float16)
+        for V, I in groups.pop("over", ()):
+            for P in _samples(V.astype(np.float64), I):
+                c = ((P[:, 0] - x0) / res).astype(np.int64)
+                r = ((P[:, 1] - y0) / res).astype(np.int64)
+                ok = (r >= 0) & (r < rows) & (c >= 0) & (c < cols)
+                np.minimum.at(over, (r[ok], c[ok]), P[ok, 2].astype(np.float16))
     counts = {}
     for k in sorted(groups, key=lambda k: order[k]):          # later kinds paint over / 後の種類が上書き
         n = 0
@@ -117,8 +183,9 @@ def build(bd, res=0.5):
     grown[:, 1:] |= taken[:, :-1]
     grown[:, :-1] |= taken[:, 1:]
     free = ((kind == order["lawn"]) & ~grown).astype(np.uint8)
-    out = os.path.join(bd, "surface_grid.npz")
-    np.savez_compressed(out, free=free, kind=kind, x0=x0, y0=y0, res=res, kinds=np.array(KINDS))
+    out = out or os.path.join(bd, "surface_grid.npz")
+    extra = {"over": over} if over is not None else {}
+    np.savez_compressed(out, free=free, kind=kind, x0=x0, y0=y0, res=res, kinds=np.array(KINDS), **extra)
     return out, kind.shape, counts, float(free.mean())
 
 
@@ -126,8 +193,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("build_dir")
     ap.add_argument("--res", type=float, default=0.5)
+    ap.add_argument("--crowns-overhead", action="store_true", default=None,
+                    help="crowns/lamp heads as overhead clearance, not taken ground (else maps.json)")
+    ap.add_argument("--out", help="write here instead of build_dir/surface_grid.npz")
     a = ap.parse_args()
-    out, shape, counts, share = build(a.build_dir, a.res)
+    out, shape, counts, share = build(a.build_dir, a.res, a.crowns_overhead, a.out)
     print("surface grid %s: %d x %d cells of %.2f m, free (plain lawn) %.1f %%" % (
         out, shape[1], shape[0], a.res, 100 * share))
     print("  triangles per kind: " + ", ".join("%s %d" % kv for kv in sorted(counts.items())))

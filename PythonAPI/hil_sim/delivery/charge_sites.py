@@ -250,6 +250,10 @@ class SurfaceGrid(object):
         self.free, self.kind = d["free"], d["kind"]
         self.x0, self.y0, self.res = float(d["x0"]), float(d["y0"]), float(d["res"])
         self.kinds = [str(k) for k in d["kinds"]]
+        # opt-in maps (surface_grid.py crowns overhead): lowest z of the tree
+        # crowns / lamp heads over each cell; the ground under them keeps its kind
+        # 樹冠・灯具の最低高さ（対象の地図のみ）
+        self.over = d["over"] if "over" in d.files else None
 
     @classmethod
     def for_map(cls, map_name):
@@ -268,6 +272,17 @@ class SurfaceGrid(object):
             return None
         k = self.kinds[int(self.kind[r, c])]
         return "lawn edge" if k == "lawn" else k
+
+    def low_over(self, x, y, top):
+        """True when a crown or lamp head hangs lower than z ``top`` over the
+        cell (opt-in grids only). / 樹冠などが top より低いか。"""
+        if self.over is None:
+            return False
+        c = int((x - self.x0) / self.res)
+        r = int((-y - self.y0) / self.res)
+        if not (0 <= r < self.over.shape[0] and 0 <= c < self.over.shape[1]):
+            return False
+        return float(self.over[r, c]) < top
 
 
 class Finder(object):
@@ -417,12 +432,16 @@ class Finder(object):
             ux, uy = (bx - ex) / L, (by - ey) / L
             painted = total = 0
             if self.grid is not None:                  # from the lane centre / 車線中心から
+                top = wp.transform.location.z + 0.15 + self.veh_top
                 for i in range(int(L / step) + 1):
                     for j in range(m + 1):
                         o = -half_w + j * step
-                        k = self.grid.taken(ex + ux * i * step - uy * o, ey + uy * i * step + ux * o)
+                        px, py = ex + ux * i * step - uy * o, ey + uy * i * step + ux * o
+                        k = self.grid.taken(px, py)
                         total += 1
                         painted += k == "marking"
+                        if self.grid.low_over(px, py, top):
+                            return "Vegetation"        # a crown lower than the vehicle / 車より低い樹冠
                 if painted > 0.15 * total:
                     return "markings"
             start = wp.lane_width / 2.0 - 0.2          # rays from the lane edge (the lane is road) / 車線端から
@@ -447,6 +466,13 @@ class Finder(object):
             for px, py in self.posts:
                 if math.hypot(px - ex, py - ey) < self.turn_r:
                     return "Poles"
+            if self.grid is not None and self.grid.over is not None:
+                top = z + 0.15 + self.veh_top
+                for rr in (self.turn_r, self.turn_r * 0.6, 0.0):
+                    for k in range(24 if rr else 1):
+                        a = 2 * math.pi * k / 24
+                        if self.grid.low_over(ex + rr * math.cos(a), ey + rr * math.sin(a), top):
+                            return "Vegetation"
             for rr in (self.turn_r, self.turn_r * 0.6):
                 for k in range(24):
                     a = 2 * math.pi * k / 24
@@ -478,10 +504,13 @@ class Finder(object):
             if self._post_in(frame, -d + wp.lane_width / 2.0, bx, by - 1.15, by + 1.15, 0.3):
                 return "a lamp post or signal pole blocks the way in"
         if self.grid is not None:
+            top = wp.transform.location.z + 0.15 + CLEAR_H
             for x, y in frame.samples(lay, step=self.grid.res):     # every cell / 全セル
                 k = self.grid.taken(x, y)
                 if k is not None:
                     return TAKEN_WHY.get(k, "too close to a road, pavement or plot" if k == "lawn edge" else k)
+                if self.grid.low_over(x, y, top):
+                    return "trees hang over it"
         r = self._extras_grid(frame, wp)
         if r is not None:
             return r
@@ -576,11 +605,15 @@ class Finder(object):
             return "a pole"
         if self.grid is not None:
             nx, ny = max(1, int((x1 - x0) / 0.5)), max(1, int((y1 - y0) / 0.5))
+            top = wp.transform.location.z + 0.15 + self.veh_top
             for i in range(nx + 1):
                 for j in range(ny + 1):
-                    k = self.grid.taken(*frame.world(x0 + (x1 - x0) * i / nx, y0 + (y1 - y0) * j / ny))
+                    px, py = frame.world(x0 + (x1 - x0) * i / nx, y0 + (y1 - y0) * j / ny)
+                    k = self.grid.taken(px, py)
                     if k is not None and k not in allow:
                         return TAKEN_WHY.get(k, k)
+                    if self.grid.low_over(px, py, top):
+                        return "trees hang too low"
         if not rays:
             return None
         z = wp.transform.location.z
@@ -616,6 +649,8 @@ class Finder(object):
                     k = self.grid.taken(x, y)
                     if k is not None and k not in allow:
                         return TAKEN_WHY.get(k, k)
+                    if self.grid.low_over(x, y, z + 0.15 + 2.2):
+                        return "trees hang too low"
                 if rays and i % 2 == 0:
                     _, lab = self._raised(x, y, z, 2.2)
                     if lab is not None:

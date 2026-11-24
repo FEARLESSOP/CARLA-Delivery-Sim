@@ -102,7 +102,17 @@ class Launcher(object):
                 if busy:
                     self.stop()
             elif a == "launch" and busy:
-                log("already running: ignored a launch request")
+                # While the old session is still shutting down (up to 60 s) a
+                # Launch used to be ignored: the old session (its driving window
+                # included) stayed on screen and the new options (e.g. driving
+                # window off) were never used. Queue it until the old one exits.
+                # A launch while a session runs normally (double click) is ignored.
+                # 終了中の旧セッションがある間の起動依頼は無視せず、終了後に起動する。
+                if self.phase == "stopping":
+                    self.relaunch = req.get("options") or self.options
+                    log("still stopping: the launch request starts after the old session exits")
+                else:
+                    log("already running: ignored a launch request")
         if self.child is not None:
             rc = self.child.poll()
             if rc is None and self.phase == "stopping" and time.time() > self.stop_deadline:

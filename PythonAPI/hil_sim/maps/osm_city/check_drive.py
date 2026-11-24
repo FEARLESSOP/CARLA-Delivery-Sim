@@ -41,6 +41,11 @@ from scipy.spatial import cKDTree
 
 STEP, ABOVE, BELOW, TILT, R_MIN = 0.06, 0.08, 0.10, 0.12, 4.5
 SHEET_GAP = 0.25
+# flyover decks (flyover.py, flat maps): a deck more than OVERHEAD m over a lane is
+# a bridge above it, not its surface; under a deck the ground far below is not a
+# sheet / 橋面: 車線より OVERHEAD m 以上上なら頭上の橋（路面ではない）
+DECK = ("Road_RoadDeck",)
+OVERHEAD = 2.6
 GROUND = ("Road_Road", "Road_Curb", "Road_Sidewalk", "Road_Grass", "Terrain_Lots", "Terrain_Sites",
           "Terrain_Courts")
 NOT_OBSTACLE = ("Road_Road", "Road_Marking")      # the road itself and its paint / 路面と塗装
@@ -136,7 +141,8 @@ def main():
     meshes = load_meshes(os.path.join(bd, "meshes"))
     print("meshes:", {f: len(v) for f, v in meshes.items()})
     ground, gsrc = up_tris(meshes, GROUND)
-    print("ground triangles (up-facing):", len(ground))
+    deck, _ = up_tris(meshes, DECK)
+    print("ground triangles (up-facing):", len(ground), ("deck triangles: %d" % len(deck)) if len(deck) else "")
 
     # -- samples / サンプル点
     allp, owner = [], []
@@ -148,6 +154,18 @@ def main():
     P = np.concatenate(allp)
     print("lane samples:", len(P))
     zs = surface_z(ground, P)
+    if len(deck):
+        # decks: one within OVERHEAD m over the lane is the surface there, and the
+        # ground under it (inside an embankment, or far below a span) is no sheet;
+        # a deck higher up is a bridge overhead / 橋面: 車線から OVERHEAD m 以内なら路面
+        # （その下の地面は二重面としない）、それより上は頭上の橋
+        zd = surface_z(deck, P)
+        for i in range(len(P)):
+            near = [z for z in zd[i] if z <= P[i, 2] + OVERHEAD]
+            if near:
+                # another deck far below this one is a bridge under it, not a sheet
+                # はるか下の別の橋面は二重面としない
+                zs[i] = sorted(z for z in near if z >= P[i, 2] - OVERHEAD) or sorted(near)[-1:]
 
     rep = collections.defaultdict(list)
     top = np.full(len(P), np.nan)

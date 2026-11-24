@@ -19,7 +19,9 @@ On hilly maps (terrain_field.npz) every height is measured from the
 road surface / ground below the vertex (terrain.Drape), not from z = 0.
 Every triangle is tested whole (vertical faces by their base edge), not
 just its centre. With --site, only the area of that OSM-named site (+30 m)
-is checked and its own driveways and car-park aisles count as road. Exit status 1 if anything fails.
+is checked and its own driveways and car-park aisles count as road; NAME may
+also be a landmark module key with SITE_NAMES (e.g. dte: Downtown East + D'Resort) or with
+site_area(L, out) (prs11: no OSM area carries the name). Exit status 1 if anything fails.
 
 道路の上・中に建物や物体が無いか確認する（建物は高さに関係なく不可）。
 """
@@ -83,9 +85,35 @@ def main():
     # shop-front props (shopfront_jp.py) stand on footways and lots: never on the
     # carriageway, kerb, drives or cycleways below 4.5 m / 店先の小物: 車道・縁石・私道・自転車道に不可
     road_p = shapely.union_all([L.road_all.buffer(-0.02), L.driveways.buffer(-0.02), L.cycleways.buffer(-0.02)])
+    # flyovers (flat maps, flyover.py): their walls, parapets and piers are tested
+    # against the roads at grade, not the raised road's own flat footprint
+    # 立体交差の構造物は地上の道路に対して確かめる（持ち上げた道路の平面は除く）
+    road_fly = road
+    if meta.get("layer_elevation") and D is None:
+        import flyover
+        FO = flyover.Flyovers(L)
+        if FO.decks:
+            road_fly = road.difference(FO.footprint.buffer(0.3))
+            print(FO.summary())
     area = None
     if a.site:
         site = [p for p, t in L.osm.areas(lambda t: t.get("name") == a.site)]
+        if not site:
+            # a landmark module's key (e.g. dte): its SITE_NAMES areas joined
+            # 詳細モデルのキー（例: dte）: その SITE_NAMES の区画を合わせる
+            try:
+                import importlib
+                mod = importlib.import_module("landmarks." + a.site)
+                if hasattr(mod, "site_area"):
+                    # a site with no OSM area (prs11: the estate + the street) / OSM 区画の無い敷地
+                    site = [mod.site_area(L, a.out)]
+                else:
+                    names = mod.SITE_NAMES
+                    site = [shapely.union_all([p for p, t in L.osm.areas(lambda t: t.get("name") in names
+                                                                           and "building" not in t)])]
+                site = [s_ for s_ in site if not s_.is_empty]
+            except (ImportError, AttributeError):
+                site = []
         if not site:
             sys.exit("no OSM area named %r" % a.site)
         area = site[0].buffer(30.0)
@@ -100,7 +128,7 @@ def main():
     man = json.load(open(os.path.join(a.out, "meshes", "manifest.json")))
     fails = []
     for o in man["objects"]:
-        if o["kind"] in ("Road_Road", "Road_Marking", "Road_Curb"):
+        if o["kind"] in ("Road_Road", "Road_Marking", "Road_Curb", "Road_RoadDeck", "Road_MarkingDeck"):
             continue
         building = o["name"].startswith("SM_")
         shopfront = o.get("kind") == "jp_shopfront"
@@ -130,7 +158,8 @@ def main():
                 k = np.argsort(tri[flat][:, :, 2], axis=1)[:, :2]
                 e = np.take_along_axis(tri[flat][:, :, :2], k[:, :, None], axis=1)
                 polys_[flat] = shapely.linestrings(e)
-            hit = shapely.intersects(polys_, road_b if building else road_p if shopfront else road)
+            hit = shapely.intersects(polys_, road_b if building else road_p if shopfront else
+                                     road_fly if o.get("kind") == "Terrain_Flyover" else road)
             if hit.any():
                 pts = cen[sel][hit]
                 fails.append({"object": o["name"], "material": mat, "triangles": int(hit.sum()),

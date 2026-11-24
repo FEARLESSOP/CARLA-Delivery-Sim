@@ -46,9 +46,22 @@ LAMP_SLIDE = 15.0          # ... slid along the kerb up to this when blocked / �
 ISLAND_MIN_W = 4.0         # no lamps or trees on narrower islands / これより狭い島に街灯・樹木を置かない
 
 
+def tree_options(meta):
+    """maps.json "tree_detail" of this map ({} = the defaults below): "street_m"
+    verge tree spacing (9), "lawn_m2" / "lawn_spacing" one lawn tree per m2 and
+    the least distance (260 / 8), "forest_m2" / "forest_spacing" (50 / 5),
+    "edge_m2" beyond the ring (45; 0 = none: on a ring-on-land map the outside is
+    sea), "lod": true: low-poly crowns (Mesh.blob, 2 per tree; finer within
+    "near_m" (15) of the carriageway). Large maps' triangle budget (guide ch. 46).
+    地図ごとの樹木の密度と樹冠の細かさ（大きな地図の三角形予算）。"""
+    from buildings import map_options
+    return map_options(meta).get("tree_detail") or {}
+
+
 class Props(object):
     def __init__(self, L, crossings, seed=7, keepout=None):
         self.L = L
+        self.td = tree_options(getattr(L, "meta", None))
         self.crossings = crossings
         self.drape = None         # terrain.Drape on hilly maps (set by build.py) / 起伏のある地図のみ
         self.rng = random.Random(seed)
@@ -58,6 +71,7 @@ class Props(object):
         self.jtrees = False
         self.items = []           # (kind, data) / 設置物
         self.guard = guard_line(L)    # ring guardrail (None when off) / 外周ガードレール
+        self.keepout = keepout    # also tested by the island trees below / 島の樹木も確認
         self.no_trunk = unary_union([L.road_all, L.driveways, getattr(L, "reserved", Polygon()), L.parking, L.footpaths.buffer(0.3),
                                      L.cycleways.buffer(0.3), L.building_area.buffer(2.5), L.pools.buffer(1.0),
                                      L.pitches, L.playgrounds.buffer(0.5)] + ([keepout] if keepout is not None else [])
@@ -110,9 +124,10 @@ class Props(object):
             verge = Polygon()
         for p in polys(verge):
             for ring in [p.exterior] + list(p.interiors):
-                n = int(ring.length // 9.0)
+                sp = float(self.td.get("street_m", 9.0))
+                n = int(ring.length // sp)
                 for k in range(n):
-                    q = ring.interpolate(k * 9.0 + self.rng.uniform(-1, 1))
+                    q = ring.interpolate(k * sp + self.rng.uniform(-1, 1))
                     if not self.ok(q.x, q.y, 0.5):
                         continue
                     big = main_roads.distance(q) < 6.0
@@ -133,7 +148,12 @@ class Props(object):
                 for k in range(n):
                     pt = q.exterior.interpolate(k * 10.0)
                     if self.L.carriageway.distance(pt) > 1.2:
-                        self.add_tree(pt.x, pt.y, "palm" if self.rng.random() < 0.3 else "angsana", 1.0)
+                        kind = "palm" if self.rng.random() < 0.3 else "angsana"
+                        # not inside a landmark's keepout (the island inside a raised
+                        # hotel ramp loop put crowns in its lanes); the random stream is
+                        # spent as before / 詳細モデルの除外域には置かない（乱数は従来どおり消費）
+                        if self.keepout is None or not self.keepout.contains(pt):
+                            self.add_tree(pt.x, pt.y, kind, 1.0)
 
     def place_lawn_trees(self):
         L = self.L
@@ -142,10 +162,11 @@ class Props(object):
             if p.area < 40.0:
                 continue
             minx, miny, maxx, maxy = p.bounds
-            n = int(p.area / 260.0) + 1
+            n = int(p.area / float(self.td.get("lawn_m2", 260.0))) + 1
             for _ in range(n * 3):
                 x, y = self.rng.uniform(minx, maxx), self.rng.uniform(miny, maxy)
-                if not p.contains(Point(x, y)) or not self.ok(x, y, 1.0) or not self.far_enough(x, y, 8.0):
+                if not p.contains(Point(x, y)) or not self.ok(x, y, 1.0) or \
+                        not self.far_enough(x, y, float(self.td.get("lawn_spacing", 8.0))):
                     continue
                 kind = self.rng.choice(["rain", "angsana", "angsana", "palm", "frangipani"])
                 self.add_tree(x, y, kind, self.rng.uniform(0.7, 1.2))
@@ -154,17 +175,19 @@ class Props(object):
                     break
         for p in polys(L.forest):
             minx, miny, maxx, maxy = p.bounds
-            for _ in range(int(p.area / 50.0)):
+            for _ in range(int(p.area / float(self.td.get("forest_m2", 50.0)))):
                 x, y = self.rng.uniform(minx, maxx), self.rng.uniform(miny, maxy)
-                if p.contains(Point(x, y)) and self.ok(x, y) and self.far_enough(x, y, 5.0):
+                if p.contains(Point(x, y)) and self.ok(x, y) and \
+                        self.far_enough(x, y, float(self.td.get("forest_spacing", 5.0))):
                     self.add_tree(x, y, "angsana", self.rng.uniform(0.9, 1.3))
 
     def place_edge_trees(self):
         L = self.L
         out = L.bounds.difference(L.inside.buffer(1.0))
-        for p in polys(out):
+        per = float(self.td.get("edge_m2", 45.0))
+        for p in polys(out) if per > 0 else []:
             minx, miny, maxx, maxy = p.bounds
-            for _ in range(int(p.area / 45.0)):
+            for _ in range(int(p.area / per)):
                 x, y = self.rng.uniform(minx, maxx), self.rng.uniform(miny, maxy)
                 if p.contains(Point(x, y)) and self.ok(x, y) and self.far_enough(x, y, 5.5):
                     self.add_tree(x, y, self.rng.choice(["rain", "angsana", "angsana"]), self.rng.uniform(0.9, 1.4))
@@ -195,6 +218,8 @@ class Props(object):
                     q = ring.interpolate(k * 32.0 + 4.0)
                     if pits is not None and not pits.is_empty and pits.distance(q) < 1.0:
                         q = ring.interpolate((k * 32.0 + 5.8) % ring.length)      # past the tree pit / 植樹桝を避ける
+                    if L.meta.get("roadnet") and self.keepout is not None and self.keepout.contains(q):
+                        continue        # large maps: not beside / under a flyover deck / 立体交差の脇・下には置かない
                     on_path = L.footpaths.contains(q) and not (pave is not None and pave.contains(q))
                     if L.driveways.buffer(1.0).contains(q) or on_path or \
                             getattr(L, "reserved", Polygon()).buffer(1.0).contains(q):
@@ -274,6 +299,14 @@ class Props(object):
             if L.carriageway.distance(Point(c)) < 2.0 or L.building_area.distance(Point(c)) < 1.5:
                 continue
             ang = math.atan2(v[1], v[0])        # facing the road is -v / 道路を向く
+            if L.meta.get("roadnet"):
+                # large maps: the whole 7 x 2.4 m shelter clear of every carriageway (one
+                # stood over the next road; check_roads) / 屋根全体が車道に掛からないこと
+                cs, sn = math.cos(ang), math.sin(ang)
+                foot = Polygon([(c[0] + cs * a - sn * b, c[1] + sn * a + cs * b)
+                                for a, b in ((-1.2, -3.5), (1.2, -3.5), (1.2, 3.5), (-1.2, 3.5))])
+                if foot.buffer(0.3).intersects(L.carriageway):
+                    continue
             self.items.append(("shelter", (c[0], c[1], ang)))
 
     def place_linkways(self):
@@ -346,16 +379,23 @@ class Props(object):
             c, n = np.array(cr["c"]), np.array(cr["n"])
             for t in (cr["t0"] - 0.6, cr["t1"] + 0.6):
                 q = c + n * t
+                if self.L.meta.get("roadnet") and self.L.carriageway.distance(Point(q[0], q[1])) < 0.5:
+                    continue                # large maps: not in another carriageway / 別の車道には置かない
                 self.items.append(("beacon", (q[0], q[1])))
 
     # -- meshes / メッシュ
-    def tree_mesh(self, m, x, y, kind, s, overroad, lift=0.0):
+    def tree_mesh(self, m, x, y, kind, s, overroad, lift=0.0, near=True):
         rng = random.Random(int(x * 1000) ^ int(y * 1000))
+        # maps.json tree_detail: low-poly crowns (landmarks call this with self=None)
+        # 低ポリゴンの樹冠（詳細モデルは self=None で呼ぶ）
+        lod = bool((getattr(self, "td", None) or {}).get("lod"))
+        bseg = 5 if lod else 6
         if kind == "palm":
             h = 9.0 * s
-            m.cylinder("bark_palm", x, y, 0.1, h, 0.22 * s, seg=6, top=False, r1=0.17 * s)
-            for k in range(9):
-                a = 2 * math.pi * k / 9 + rng.random() * 0.3
+            m.cylinder("bark_palm", x, y, 0.1, h, 0.22 * s, seg=bseg, top=False, r1=0.17 * s)
+            nf = 9 if not lod or near else 6
+            for k in range(nf):
+                a = 2 * math.pi * k / nf + rng.random() * 0.3
                 tip = (x + math.cos(a) * 3.2 * s, y + math.sin(a) * 3.2 * s, h - 1.3 * s)
                 side = (-math.sin(a) * 0.5 * s, math.cos(a) * 0.5 * s)
                 mid = (x + math.cos(a) * 1.5 * s, y + math.sin(a) * 1.5 * s, h + 0.4 * s)
@@ -377,8 +417,19 @@ class Props(object):
             # (max(h0, 4.9 + lift) under-lifted big crowns) / 嵩上げは判定時の高さに加える
             h0 = max(h0, CLEAR_OVER_ROAD + 0.4) + lift        # crowns sag below h0 / 樹冠の下垂分
             R = min(R, 4.0)
-        m.cylinder("bark", x, y, 0.1, h0 + H * 0.3, 0.28 * s, seg=6, top=False, r1=0.18 * s)
+        m.cylinder("bark", x, y, 0.1, h0 + H * 0.3, 0.28 * s, seg=bseg, top=False, r1=0.18 * s)
         leaves = "leaves_" + ("rain" if kind == "rain" else "dark" if kind == "angsana" else "pale")
+        if lod:
+            # two non-degenerate blobs, the same reach (1.09 R) and lowest leaves as the
+            # three spheres; finer near the road / 2 個の塊（到達範囲・下端は従来どおり）、道路近くは細かく
+            seg, rings = (7, 4) if near else (6, 3)
+            for k in range(2):
+                a = math.pi * k + rng.random()
+                ox, oy = math.cos(a) * R * 0.31, math.sin(a) * R * 0.31
+                cz = h0 + H * (0.55 + 0.15 * rng.random())
+                j = lambda jj, kk, _r=rng: 0.85 + 0.3 * _r.random()
+                m.blob(leaves, x + ox, y + oy, cz, R * 0.68, R * 0.68, H * 0.5, seg=seg, rings=rings, jitter=j)
+            return
         for k in range(3):
             a = 2 * math.pi * k / 4 + rng.random()
             ox, oy = math.cos(a) * R * 0.38, math.sin(a) * R * 0.38
@@ -450,7 +501,7 @@ class Props(object):
                 if self.jtrees:
                     self.jt_mesh(m, leaves, x, y, kind, s, over, lift, dist)
                 else:
-                    self.tree_mesh(m, x, y, kind, s, over, lift)
+                    self.tree_mesh(m, x, y, kind, s, over, lift, near=dist < float(self.td.get("near_m", 15.0)))
         m.zoff = 0.0
         f = Mesh()
         for kind, d in self.items:
@@ -551,12 +602,31 @@ class Props(object):
         m.box("glass_rail", x + c * 1.0, y + s * 1.0, 0.4, 2.3, 0.05, 6.4, ang)
         m.box("paint_navy", x + c * 0.5, y + s * 0.5, 0.15, 0.55, 0.4, 3.5, ang)
 
+    def linkway_clear(self):
+        """Every vehicle way (carriageway + driveways / car-park aisles) + 0.3 m:
+        no linkway roof or post may stand there (rule 1; a roof's mitre corner
+        and its posts reached over an estate road's aisle, check_roads --site).
+        車道と構内車路 + 0.3 m: 屋根付き通路の屋根・柱を置かない範囲。"""
+        if getattr(self, "_lw_clear", None) is None:
+            self._lw_clear = make_valid(unary_union([self.L.road_all, self.L.driveways])).buffer(0.3)
+            shapely.prepare(self._lw_clear)
+        return self._lw_clear
+
     def m_linkway(self, m, line):
         roof = line.buffer(1.3, cap_style="flat", join_style="mitre")
+        # cut back only where it reaches a road: elsewhere the same mesh as before
+        # 道路に掛かる所だけ切る（他は従来と同じ）
+        clear = self.linkway_clear()
+        hit = roof.intersects(clear)
+        if hit:
+            roof = make_valid(roof.difference(clear))
+            roof = unary_union([p for p in polys(roof) if p.area > 1.0])
         m.flat("roof_linkway", roof, 2.75, 2.0)
         m.flat("roof_linkway", roof, 2.65, 2.0, up=False)
         for k in range(int(line.length // 4.0) + 1):
             q = line.interpolate(min(line.length, k * 4.0))
+            if hit and (clear.distance(q) < 0.15 or not roof.contains(q)):
+                continue
             m.box("metal_grey", q.x, q.y, 0.15, 2.65, 0.1, 0.1)
 
     def m_barrier(self, m, line):
